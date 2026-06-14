@@ -327,6 +327,8 @@ atari_st:
 	$(MAKE) -f misc/atari_st/Makefile
 ios:
 	$(MAKE) -f misc/ios/Makefile
+ios_modern:
+	$(MAKE) -f misc/ios_modern/Makefile
 android:
 	$(MAKE) -f misc/android/Makefile
 
