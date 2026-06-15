@@ -236,6 +236,14 @@ static cc_bool kb_active;
     return Window_Main.Is3D;
 }
 
+- (BOOL)prefersPointerLocked {
+    // Lock and hide the system pointer during 3D gameplay so an attached
+    //  trackpad / mouse drives the camera like a desktop FPS client.
+    // In menus the pointer is left free - iOS then synthesizes touch events
+    //  from it, so on-screen buttons can still be clicked normally.
+    return Window_Main.Is3D && Input.RawMode;
+}
+
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
     // recent iOS versions have a 'bottom home bar', which when swiped up,
     //  switches out of ClassiCube and to the app list menu
@@ -291,6 +299,8 @@ void Window_PreInit(void) {
     DisplayInfo.CursorVisible = true;
 }
 
+static void InitHIDInput(void);
+
 void Window_Init(void) {
     // keyboard now shifts the view up rather than resizing it
     Window_Main.SoftKeyboard = SOFT_KEYBOARD_SHIFT;
@@ -304,6 +314,9 @@ void Window_Init(void) {
     DisplayInfo.ScaleX = 1.0f;
     DisplayInfo.ScaleY = 1.0f;
     NSSetUncaughtExceptionHandler(LogUnhandledNSErrors);
+
+    // Start listening for an attached trackpad/mouse or hardware keyboard
+    InitHIDInput();
 }
 
 void Window_Free(void) { }
@@ -386,6 +399,221 @@ void Gamepads_Process(float delta) {
 
 
 /*########################################################################################################################*
+*--------------------------------------------------Hardware mouse & keyboard----------------------------------------------*
+*#########################################################################################################################*/
+// Modern iPads/iPhones can pair a trackpad, mouse or hardware keyboard (e.g. a
+//  Magic Keyboard or keyboard case). The GameController framework (iOS 14+)
+//  surfaces these as GCMouse / GCKeyboard, letting ClassiCube be played like a
+//  desktop client when such hardware is present.
+static cc_bool hw_keyboard;
+
+static void UpdatePointerLock(void) {
+    // Asks UIKit to re-evaluate -prefersPointerLocked on the view controller
+    [cc_controller setNeedsUpdateOfPrefersPointerLocked];
+}
+
+
+/*------------------------------------------------------------Mouse--------------------------------------------------------*/
+static void OnMouseMoved(float dx, float dy) {
+    // Only steer the camera while locked for gameplay. In menus the system
+    //  pointer is left free and UIKit turns its movement into touch events.
+    if (!Input.RawMode) return;
+    // GCMouse reports +Y as upwards; the camera expects +Y downwards (screen space)
+    Event_RaiseRawMove(&PointerEvents.RawMoved, dx, -dy);
+}
+
+static void HookMouse(GCMouse* mouse) {
+    GCMouseInput* input = mouse.mouseInput;
+    if (!input) return;
+    // Deliver handlers on the main thread, same as the game's event pump
+    mouse.handlerQueue = dispatch_get_main_queue();
+
+    input.mouseMovedHandler = ^(GCMouseInput* m, float dx, float dy) {
+        OnMouseMoved(dx, dy);
+    };
+    input.leftButton.pressedChangedHandler = ^(GCControllerButtonInput* b, float v, BOOL pressed) {
+        if (Input.RawMode) Input_Set(CCMOUSE_L, pressed);
+    };
+    input.rightButton.pressedChangedHandler = ^(GCControllerButtonInput* b, float v, BOOL pressed) {
+        if (Input.RawMode) Input_Set(CCMOUSE_R, pressed);
+    };
+    input.middleButton.pressedChangedHandler = ^(GCControllerButtonInput* b, float v, BOOL pressed) {
+        if (Input.RawMode) Input_Set(CCMOUSE_M, pressed);
+    };
+    // Scrolling is position independent, so allow it in menus too (zoom/hotbar)
+    input.scroll.yAxis.valueChangedHandler = ^(GCControllerAxisInput* a, float v) {
+        if (v) Mouse_ScrollVWheel(v);
+    };
+    input.scroll.xAxis.valueChangedHandler = ^(GCControllerAxisInput* a, float v) {
+        if (v) Mouse_ScrollHWheel(v);
+    };
+}
+
+
+/*----------------------------------------------------------Keyboard-------------------------------------------------------*/
+static int MapGCKeyCode(GCKeyCode code) {
+    if (code >= GCKeyCodeKeyA && code <= GCKeyCodeKeyZ)
+        return CCKEY_A  + (int)(code - GCKeyCodeKeyA);
+    if (code >= GCKeyCodeOne && code <= GCKeyCodeNine)
+        return CCKEY_1  + (int)(code - GCKeyCodeOne);
+    if (code >= GCKeyCodeF1  && code <= GCKeyCodeF12)
+        return CCKEY_F1 + (int)(code - GCKeyCodeF1);
+
+    switch (code) {
+        case GCKeyCodeZero:               return CCKEY_0;
+        case GCKeyCodeReturnOrEnter:      return CCKEY_ENTER;
+        case GCKeyCodeEscape:             return CCKEY_ESCAPE;
+        case GCKeyCodeDeleteOrBackspace:  return CCKEY_BACKSPACE;
+        case GCKeyCodeTab:                return CCKEY_TAB;
+        case GCKeyCodeSpacebar:           return CCKEY_SPACE;
+        case GCKeyCodeHyphen:             return CCKEY_MINUS;
+        case GCKeyCodeEqualSign:          return CCKEY_EQUALS;
+        case GCKeyCodeOpenBracket:        return CCKEY_LBRACKET;
+        case GCKeyCodeCloseBracket:       return CCKEY_RBRACKET;
+        case GCKeyCodeBackslash:          return CCKEY_BACKSLASH;
+        case GCKeyCodeSemicolon:          return CCKEY_SEMICOLON;
+        case GCKeyCodeQuote:              return CCKEY_QUOTE;
+        case GCKeyCodeGraveAccentAndTilde:return CCKEY_TILDE;
+        case GCKeyCodeComma:              return CCKEY_COMMA;
+        case GCKeyCodePeriod:             return CCKEY_PERIOD;
+        case GCKeyCodeSlash:              return CCKEY_SLASH;
+        case GCKeyCodeCapsLock:           return CCKEY_CAPSLOCK;
+
+        case GCKeyCodePrintScreen:        return CCKEY_PRINTSCREEN;
+        case GCKeyCodeScrollLock:         return CCKEY_SCROLLLOCK;
+        case GCKeyCodePause:              return CCKEY_PAUSE;
+        case GCKeyCodeInsert:             return CCKEY_INSERT;
+        case GCKeyCodeHome:               return CCKEY_HOME;
+        case GCKeyCodePageUp:             return CCKEY_PAGEUP;
+        case GCKeyCodeDeleteForward:      return CCKEY_DELETE;
+        case GCKeyCodeEnd:                return CCKEY_END;
+        case GCKeyCodePageDown:           return CCKEY_PAGEDOWN;
+
+        case GCKeyCodeRightArrow:         return CCKEY_RIGHT;
+        case GCKeyCodeLeftArrow:          return CCKEY_LEFT;
+        case GCKeyCodeDownArrow:          return CCKEY_DOWN;
+        case GCKeyCodeUpArrow:            return CCKEY_UP;
+
+        case GCKeyCodeKeypadNumLock:      return CCKEY_NUMLOCK;
+        case GCKeyCodeKeypadSlash:        return CCKEY_KP_DIVIDE;
+        case GCKeyCodeKeypadAsterisk:     return CCKEY_KP_MULTIPLY;
+        case GCKeyCodeKeypadHyphen:       return CCKEY_KP_MINUS;
+        case GCKeyCodeKeypadPlus:         return CCKEY_KP_PLUS;
+        case GCKeyCodeKeypadEnter:        return CCKEY_KP_ENTER;
+        case GCKeyCodeKeypad0:            return CCKEY_KP0;
+        case GCKeyCodeKeypad1:            return CCKEY_KP1;
+        case GCKeyCodeKeypad2:            return CCKEY_KP2;
+        case GCKeyCodeKeypad3:            return CCKEY_KP3;
+        case GCKeyCodeKeypad4:            return CCKEY_KP4;
+        case GCKeyCodeKeypad5:            return CCKEY_KP5;
+        case GCKeyCodeKeypad6:            return CCKEY_KP6;
+        case GCKeyCodeKeypad7:            return CCKEY_KP7;
+        case GCKeyCodeKeypad8:            return CCKEY_KP8;
+        case GCKeyCodeKeypad9:            return CCKEY_KP9;
+        case GCKeyCodeKeypadPeriod:       return CCKEY_KP_DECIMAL;
+
+        case GCKeyCodeLeftControl:        return CCKEY_LCTRL;
+        case GCKeyCodeLeftShift:          return CCKEY_LSHIFT;
+        case GCKeyCodeLeftAlt:            return CCKEY_LALT;
+        case GCKeyCodeLeftGUI:            return CCKEY_LWIN;
+        case GCKeyCodeRightControl:       return CCKEY_RCTRL;
+        case GCKeyCodeRightShift:         return CCKEY_RSHIFT;
+        case GCKeyCodeRightAlt:           return CCKEY_RALT;
+        case GCKeyCodeRightGUI:           return CCKEY_RWIN;
+    }
+    return INPUT_NONE;
+}
+
+// Translates a key into the character it types (US QWERTY layout)
+static int MapGCKeyChar(GCKeyCode code) {
+    static const char shiftedDigits[] = ")!@#$%^&*(";
+    cc_bool shift = Input_IsShiftPressed();
+
+    if (code >= GCKeyCodeKeyA && code <= GCKeyCodeKeyZ) {
+        int ch = 'a' + (int)(code - GCKeyCodeKeyA);
+        return shift ? (ch - 32) : ch; // uppercase when shifted
+    }
+    if (code >= GCKeyCodeOne && code <= GCKeyCodeNine) {
+        int d = (int)(code - GCKeyCodeOne) + 1;
+        return shift ? shiftedDigits[d] : ('0' + d);
+    }
+
+    switch (code) {
+        case GCKeyCodeZero:               return shift ? ')'  : '0';
+        case GCKeyCodeSpacebar:           return ' ';
+        case GCKeyCodeHyphen:             return shift ? '_'  : '-';
+        case GCKeyCodeEqualSign:          return shift ? '+'  : '=';
+        case GCKeyCodeOpenBracket:        return shift ? '{'  : '[';
+        case GCKeyCodeCloseBracket:       return shift ? '}'  : ']';
+        case GCKeyCodeBackslash:          return shift ? '|'  : '\\';
+        case GCKeyCodeSemicolon:          return shift ? ':'  : ';';
+        case GCKeyCodeQuote:              return shift ? '"'  : '\'';
+        case GCKeyCodeGraveAccentAndTilde:return shift ? '~'  : '`';
+        case GCKeyCodeComma:              return shift ? '<'  : ',';
+        case GCKeyCodePeriod:             return shift ? '>'  : '.';
+        case GCKeyCodeSlash:              return shift ? '?'  : '/';
+    }
+    return 0;
+}
+
+static void OnKeyChanged(GCKeyCode code, cc_bool pressed) {
+    int key = MapGCKeyCode(code);
+    if (key) Input_Set(key, pressed);
+
+    // Feed typed characters into text fields (chat etc.), desktop style.
+    //  Done after Input_Set so the shift state is up to date.
+    if (pressed) {
+        int ch = MapGCKeyChar(code);
+        if (ch) Event_RaiseInt(&InputEvents.Press, ch);
+    }
+}
+
+static void HookKeyboard(GCKeyboard* keyboard) {
+    GCKeyboardInput* input = keyboard.keyboardInput;
+    if (!input) return;
+    keyboard.handlerQueue = dispatch_get_main_queue();
+
+    input.keyChangedHandler = ^(GCKeyboardInput* kb, GCControllerButtonInput* key, GCKeyCode keyCode, BOOL pressed) {
+        OnKeyChanged(keyCode, pressed);
+    };
+}
+
+static void SetHardwareKeyboard(cc_bool connected) {
+    hw_keyboard = connected;
+    // With a physical keyboard the on-screen keyboard just gets in the way, so
+    //  switch to desktop style text entry (driven by the key/char events above)
+    Window_Main.SoftKeyboard = connected ? SOFT_KEYBOARD_NONE : SOFT_KEYBOARD_SHIFT;
+    // Release any keys that were held down when the keyboard was unplugged
+    if (!connected) Input_Clear();
+}
+
+
+/*-----------------------------------------------------------Setup---------------------------------------------------------*/
+static void InitHIDInput(void) {
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+
+    [nc addObserverForName:GCMouseDidConnectNotification object:nil queue:nil usingBlock:^(NSNotification* note) {
+        HookMouse((GCMouse*)note.object);
+    }];
+    [nc addObserverForName:GCKeyboardDidConnectNotification object:nil queue:nil usingBlock:^(NSNotification* note) {
+        HookKeyboard((GCKeyboard*)note.object);
+        SetHardwareKeyboard(true);
+    }];
+    [nc addObserverForName:GCKeyboardDidDisconnectNotification object:nil queue:nil usingBlock:^(NSNotification* note) {
+        // coalescedKeyboard is non-nil if another keyboard is still attached
+        SetHardwareKeyboard(GCKeyboard.coalescedKeyboard != nil);
+    }];
+
+    // Hook up any hardware that's already connected at launch
+    for (GCMouse* mouse in GCMouse.mice) HookMouse(mouse);
+    if (GCKeyboard.coalescedKeyboard) {
+        HookKeyboard(GCKeyboard.coalescedKeyboard);
+        SetHardwareKeyboard(true);
+    }
+}
+
+
+/*########################################################################################################################*
 *----------------------------------------------------Onscreen keyboard----------------------------------------------------*
 *#########################################################################################################################*/
 @interface CCKBController : NSObject<UITextFieldDelegate>
@@ -416,6 +644,10 @@ static UITextField* text_input;
 static CCKBController* kb_controller;
 
 void OnscreenKeyboard_Open(struct OpenKeyboardArgs* args) {
+    // A hardware keyboard enters text directly via key events, so there's no
+    //  need to show (or shift the view up for) the on-screen keyboard
+    if (hw_keyboard) return;
+
     if (!kb_controller) {
         kb_controller = [[CCKBController alloc] init];
     }
@@ -436,6 +668,7 @@ void OnscreenKeyboard_Open(struct OpenKeyboardArgs* args) {
 }
 
 void OnscreenKeyboard_SetText(const cc_string* text) {
+    if (hw_keyboard) return;
     NSString* str = ToNSString(text);
     NSString* cur = [text_input text];
 
@@ -444,6 +677,7 @@ void OnscreenKeyboard_SetText(const cc_string* text) {
 }
 
 void OnscreenKeyboard_Close(void) {
+    if (hw_keyboard) return;
     DisplayInfo.ShowingSoftKeyboard = false;
     [text_input resignFirstResponder];
 }
@@ -472,9 +706,11 @@ cc_result Window_ExitFullscreen(void) {
 }
 int Window_IsObscured(void) { return 0; }
 
-void Window_EnableRawMouse(void)  { DefaultEnableRawMouse(); }
+static void UpdatePointerLock(void);
+void Window_EnableRawMouse(void)  { DefaultEnableRawMouse();  UpdatePointerLock(); }
+// Raw movement deltas arrive asynchronously from GCMouse, nothing to poll here
 void Window_UpdateRawMouse(void)  { }
-void Window_DisableRawMouse(void) { DefaultDisableRawMouse(); }
+void Window_DisableRawMouse(void) { DefaultDisableRawMouse(); UpdatePointerLock(); }
 
 void Window_LockLandscapeOrientation(cc_bool lock) {
     landscape_locked = lock;
