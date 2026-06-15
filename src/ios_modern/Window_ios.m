@@ -459,68 +459,69 @@ static int MapGCKeyCode(GCKeyCode code) {
     if (code >= GCKeyCodeF1  && code <= GCKeyCodeF12)
         return CCKEY_F1 + (int)(code - GCKeyCodeF1);
 
-    switch (code) {
-        case GCKeyCodeZero:               return CCKEY_0;
-        case GCKeyCodeReturnOrEnter:      return CCKEY_ENTER;
-        case GCKeyCodeEscape:             return CCKEY_ESCAPE;
-        case GCKeyCodeDeleteOrBackspace:  return CCKEY_BACKSPACE;
-        case GCKeyCodeTab:                return CCKEY_TAB;
-        case GCKeyCodeSpacebar:           return CCKEY_SPACE;
-        case GCKeyCodeHyphen:             return CCKEY_MINUS;
-        case GCKeyCodeEqualSign:          return CCKEY_EQUALS;
-        case GCKeyCodeOpenBracket:        return CCKEY_LBRACKET;
-        case GCKeyCodeCloseBracket:       return CCKEY_RBRACKET;
-        case GCKeyCodeBackslash:          return CCKEY_BACKSLASH;
-        case GCKeyCodeSemicolon:          return CCKEY_SEMICOLON;
-        case GCKeyCodeQuote:              return CCKEY_QUOTE;
-        case GCKeyCodeGraveAccentAndTilde:return CCKEY_TILDE;
-        case GCKeyCodeComma:              return CCKEY_COMMA;
-        case GCKeyCodePeriod:             return CCKEY_PERIOD;
-        case GCKeyCodeSlash:              return CCKEY_SLASH;
-        case GCKeyCodeCapsLock:           return CCKEY_CAPSLOCK;
+    // GCKeyCode constants are 'extern const' globals rather than compile-time
+    //  constants, so they can't be used as switch labels - chain ifs instead
+    if (code == GCKeyCodeZero)                return CCKEY_0;
+    if (code == GCKeyCodeReturnOrEnter)       return CCKEY_ENTER;
+    if (code == GCKeyCodeEscape)              return CCKEY_ESCAPE;
+    if (code == GCKeyCodeDeleteOrBackspace)   return CCKEY_BACKSPACE;
+    if (code == GCKeyCodeTab)                 return CCKEY_TAB;
+    if (code == GCKeyCodeSpacebar)            return CCKEY_SPACE;
+    if (code == GCKeyCodeHyphen)              return CCKEY_MINUS;
+    if (code == GCKeyCodeEqualSign)           return CCKEY_EQUALS;
+    if (code == GCKeyCodeOpenBracket)         return CCKEY_LBRACKET;
+    if (code == GCKeyCodeCloseBracket)        return CCKEY_RBRACKET;
+    if (code == GCKeyCodeBackslash)           return CCKEY_BACKSLASH;
+    if (code == GCKeyCodeSemicolon)           return CCKEY_SEMICOLON;
+    if (code == GCKeyCodeQuote)               return CCKEY_QUOTE;
+    if (code == GCKeyCodeGraveAccentAndTilde) return CCKEY_TILDE;
+    if (code == GCKeyCodeComma)               return CCKEY_COMMA;
+    if (code == GCKeyCodePeriod)              return CCKEY_PERIOD;
+    if (code == GCKeyCodeSlash)               return CCKEY_SLASH;
+    if (code == GCKeyCodeCapsLock)            return CCKEY_CAPSLOCK;
 
-        case GCKeyCodePrintScreen:        return CCKEY_PRINTSCREEN;
-        case GCKeyCodeScrollLock:         return CCKEY_SCROLLLOCK;
-        case GCKeyCodePause:              return CCKEY_PAUSE;
-        case GCKeyCodeInsert:             return CCKEY_INSERT;
-        case GCKeyCodeHome:               return CCKEY_HOME;
-        case GCKeyCodePageUp:             return CCKEY_PAGEUP;
-        case GCKeyCodeDeleteForward:      return CCKEY_DELETE;
-        case GCKeyCodeEnd:                return CCKEY_END;
-        case GCKeyCodePageDown:           return CCKEY_PAGEDOWN;
+    if (code == GCKeyCodePrintScreen)         return CCKEY_PRINTSCREEN;
+    if (code == GCKeyCodeScrollLock)          return CCKEY_SCROLLLOCK;
+    if (code == GCKeyCodePause)               return CCKEY_PAUSE;
+    if (code == GCKeyCodeInsert)              return CCKEY_INSERT;
+    if (code == GCKeyCodeHome)                return CCKEY_HOME;
+    if (code == GCKeyCodePageUp)              return CCKEY_PAGEUP;
+    if (code == GCKeyCodeDeleteForward)       return CCKEY_DELETE;
+    if (code == GCKeyCodeEnd)                 return CCKEY_END;
+    if (code == GCKeyCodePageDown)            return CCKEY_PAGEDOWN;
 
-        case GCKeyCodeRightArrow:         return CCKEY_RIGHT;
-        case GCKeyCodeLeftArrow:          return CCKEY_LEFT;
-        case GCKeyCodeDownArrow:          return CCKEY_DOWN;
-        case GCKeyCodeUpArrow:            return CCKEY_UP;
+    if (code == GCKeyCodeRightArrow)          return CCKEY_RIGHT;
+    if (code == GCKeyCodeLeftArrow)           return CCKEY_LEFT;
+    if (code == GCKeyCodeDownArrow)           return CCKEY_DOWN;
+    if (code == GCKeyCodeUpArrow)             return CCKEY_UP;
 
-        case GCKeyCodeKeypadNumLock:      return CCKEY_NUMLOCK;
-        case GCKeyCodeKeypadSlash:        return CCKEY_KP_DIVIDE;
-        case GCKeyCodeKeypadAsterisk:     return CCKEY_KP_MULTIPLY;
-        case GCKeyCodeKeypadHyphen:       return CCKEY_KP_MINUS;
-        case GCKeyCodeKeypadPlus:         return CCKEY_KP_PLUS;
-        case GCKeyCodeKeypadEnter:        return CCKEY_KP_ENTER;
-        case GCKeyCodeKeypad0:            return CCKEY_KP0;
-        case GCKeyCodeKeypad1:            return CCKEY_KP1;
-        case GCKeyCodeKeypad2:            return CCKEY_KP2;
-        case GCKeyCodeKeypad3:            return CCKEY_KP3;
-        case GCKeyCodeKeypad4:            return CCKEY_KP4;
-        case GCKeyCodeKeypad5:            return CCKEY_KP5;
-        case GCKeyCodeKeypad6:            return CCKEY_KP6;
-        case GCKeyCodeKeypad7:            return CCKEY_KP7;
-        case GCKeyCodeKeypad8:            return CCKEY_KP8;
-        case GCKeyCodeKeypad9:            return CCKEY_KP9;
-        case GCKeyCodeKeypadPeriod:       return CCKEY_KP_DECIMAL;
+    if (code == GCKeyCodeKeypadNumLock)       return CCKEY_NUMLOCK;
+    if (code == GCKeyCodeKeypadSlash)         return CCKEY_KP_DIVIDE;
+    if (code == GCKeyCodeKeypadAsterisk)      return CCKEY_KP_MULTIPLY;
+    if (code == GCKeyCodeKeypadHyphen)        return CCKEY_KP_MINUS;
+    if (code == GCKeyCodeKeypadPlus)          return CCKEY_KP_PLUS;
+    if (code == GCKeyCodeKeypadEnter)         return CCKEY_KP_ENTER;
+    if (code == GCKeyCodeKeypad0)             return CCKEY_KP0;
+    if (code == GCKeyCodeKeypad1)             return CCKEY_KP1;
+    if (code == GCKeyCodeKeypad2)             return CCKEY_KP2;
+    if (code == GCKeyCodeKeypad3)             return CCKEY_KP3;
+    if (code == GCKeyCodeKeypad4)             return CCKEY_KP4;
+    if (code == GCKeyCodeKeypad5)             return CCKEY_KP5;
+    if (code == GCKeyCodeKeypad6)             return CCKEY_KP6;
+    if (code == GCKeyCodeKeypad7)             return CCKEY_KP7;
+    if (code == GCKeyCodeKeypad8)             return CCKEY_KP8;
+    if (code == GCKeyCodeKeypad9)             return CCKEY_KP9;
+    if (code == GCKeyCodeKeypadPeriod)        return CCKEY_KP_DECIMAL;
 
-        case GCKeyCodeLeftControl:        return CCKEY_LCTRL;
-        case GCKeyCodeLeftShift:          return CCKEY_LSHIFT;
-        case GCKeyCodeLeftAlt:            return CCKEY_LALT;
-        case GCKeyCodeLeftGUI:            return CCKEY_LWIN;
-        case GCKeyCodeRightControl:       return CCKEY_RCTRL;
-        case GCKeyCodeRightShift:         return CCKEY_RSHIFT;
-        case GCKeyCodeRightAlt:           return CCKEY_RALT;
-        case GCKeyCodeRightGUI:           return CCKEY_RWIN;
-    }
+    if (code == GCKeyCodeLeftControl)         return CCKEY_LCTRL;
+    if (code == GCKeyCodeLeftShift)           return CCKEY_LSHIFT;
+    if (code == GCKeyCodeLeftAlt)             return CCKEY_LALT;
+    if (code == GCKeyCodeLeftGUI)             return CCKEY_LWIN;
+    if (code == GCKeyCodeRightControl)        return CCKEY_RCTRL;
+    if (code == GCKeyCodeRightShift)          return CCKEY_RSHIFT;
+    if (code == GCKeyCodeRightAlt)            return CCKEY_RALT;
+    if (code == GCKeyCodeRightGUI)            return CCKEY_RWIN;
+
     return INPUT_NONE;
 }
 
@@ -538,21 +539,20 @@ static int MapGCKeyChar(GCKeyCode code) {
         return shift ? shiftedDigits[d] : ('0' + d);
     }
 
-    switch (code) {
-        case GCKeyCodeZero:               return shift ? ')'  : '0';
-        case GCKeyCodeSpacebar:           return ' ';
-        case GCKeyCodeHyphen:             return shift ? '_'  : '-';
-        case GCKeyCodeEqualSign:          return shift ? '+'  : '=';
-        case GCKeyCodeOpenBracket:        return shift ? '{'  : '[';
-        case GCKeyCodeCloseBracket:       return shift ? '}'  : ']';
-        case GCKeyCodeBackslash:          return shift ? '|'  : '\\';
-        case GCKeyCodeSemicolon:          return shift ? ':'  : ';';
-        case GCKeyCodeQuote:              return shift ? '"'  : '\'';
-        case GCKeyCodeGraveAccentAndTilde:return shift ? '~'  : '`';
-        case GCKeyCodeComma:              return shift ? '<'  : ',';
-        case GCKeyCodePeriod:             return shift ? '>'  : '.';
-        case GCKeyCodeSlash:              return shift ? '?'  : '/';
-    }
+    if (code == GCKeyCodeZero)                return shift ? ')'  : '0';
+    if (code == GCKeyCodeSpacebar)            return ' ';
+    if (code == GCKeyCodeHyphen)              return shift ? '_'  : '-';
+    if (code == GCKeyCodeEqualSign)           return shift ? '+'  : '=';
+    if (code == GCKeyCodeOpenBracket)         return shift ? '{'  : '[';
+    if (code == GCKeyCodeCloseBracket)        return shift ? '}'  : ']';
+    if (code == GCKeyCodeBackslash)           return shift ? '|'  : '\\';
+    if (code == GCKeyCodeSemicolon)           return shift ? ':'  : ';';
+    if (code == GCKeyCodeQuote)               return shift ? '"'  : '\'';
+    if (code == GCKeyCodeGraveAccentAndTilde) return shift ? '~'  : '`';
+    if (code == GCKeyCodeComma)               return shift ? '<'  : ',';
+    if (code == GCKeyCodePeriod)              return shift ? '>'  : '.';
+    if (code == GCKeyCodeSlash)               return shift ? '?'  : '/';
+
     return 0;
 }
 
