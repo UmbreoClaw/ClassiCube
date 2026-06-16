@@ -10,43 +10,54 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ## NEXT TASK (agreed — start here next session)
 
-**Build physical dropped-item entities + correct the drop table.**
+**Physical dropped-item entities + drop table correction: DONE this session.**
 
-This is the agreed next feature. The user explicitly chose to go ahead with it.
+Implemented in `src/SurvivalTest.c` (+ one hook in `src/Game.c`). Summary of what
+landed, so the next session knows where things stand:
 
-### Why
-Research confirmed c0.30-s used **physical item drops**: breaking a block spawned a
-collectable item on the ground (pulsing white, full-size block pixels) that the player
-walks over to pick up — it did **not** go straight into the inventory. Our current
-behaviour (drop goes directly to inventory via `SurvivalTest_AddBlock`) is therefore
-**unfaithful** and this is the fix.
+- **Dropped-item entity** (`struct DropItem`, fixed pool `st_drops[DROP_MAX=64]`).
+  Each wraps a plain `struct Entity` using the engine's existing `Models.Block`
+  model (the same "render entity as a floating block" model used elsewhere) —
+  this gave faithful **full-size block pixels** for free, no custom mesh needed.
+  Entities are **not** added to `Entities.List[]` (that array is player-shaped and
+  network-synced); drops are simulated/rendered entirely inside SurvivalTest.c via
+  manual calls to `Model_Render(Models.Block, &d->entity)`.
+- **Physics**: simple custom gravity integrator (`SurvivalTest_DropPhysics`,
+  `DROP_GRAVITY = 20 blocks/s²`, terminal velocity clamp), random scatter-pop
+  velocity on spawn (`SurvivalTest_SpawnDrop`), settles via friction once it lands
+  on a solid block top (`SurvivalTest_DropGroundY` samples `Blocks.Collide`/`MaxBB`).
+  No horizontal wall collision (acceptable simplification — items can clip slightly
+  into block faces, not noticeable in practice).
+- **Pulsing white look**: custom `DropItem_GetCol` VTABLE callback returns
+  `PackedCol_Scale(PACKEDCOL_WHITE, 0.7 + 0.3*sin(age*6))` instead of normal world
+  lighting, so drops visibly pulse regardless of ambient light — matches the
+  "items pulse white" research note.
+- **Pickup**: `SurvivalTest_DropTryPickup` does a simple squared-distance check
+  (`DROP_PICKUP_RADIUS = 1.0` block) against the player each tick once
+  `pickupDelay` (0.5s) has elapsed; calls the existing `SurvivalTest_AddBlock`.
+  Ticking happens inside the existing 20Hz `SurvivalTest_Tick` via
+  `SurvivalTest_TickDrops`, no second `ScheduledTask` needed.
+- **Wire-up**: `SurvivalTest_BlockChanged` now calls `SurvivalTest_SpawnDropsForBlock`
+  on mining (was: direct `SurvivalTest_AddBlock`). `AddBlock` itself is unchanged
+  and still used by the pickup path and by `SurvivalTest_TryEat`'s mushroom logic.
+  Rendering hooked in once: `Game.c`'s `Render3DFrame` calls
+  `SurvivalTest_RenderDrops(delta, t)` right after `Entities_RenderModels`.
+  `st_drops[]` is cleared in `SurvivalTest_ResetState` (new level / fresh start).
+- **Drop table corrected** (`SurvivalTest_SpawnDropsForBlock`): most blocks drop
+  themselves (removed the old stone→cobble and ore→ingot mappings); grass→dirt;
+  leaves→sapling only **1/10** of the time (9/10 nothing drops); logs→**3–5**
+  planks (`BLOCK_WOOD`, multiple drop entities spawned with individual scatter).
+- Verified: every `.c` file in `src/` (whole project, not just survival files)
+  compiles clean with `make PLAT=linux` (`-Werror`) — only the known link failure
+  from this container missing `-lXi`/`-lGL` remains, no new compiler warnings.
+  Not yet tested in a running game (no display in this container) — worth an
+  in-game pass next session: confirm visually the pulse/scatter/landing/pickup
+  feel right, and that performance is fine when many blocks are mined quickly.
 
-### Scope (introduces the world's first non-player entity)
-`EntityType` is currently only `{ NONE, PLAYER }` (see `src/Entity.h:43`).
-A dropped item is the first non-player world object. Implementation pieces:
-
-1. **Dropped-item entity**: position + velocity, gravity so it falls and settles,
-   a small random scatter-pop when spawned.
-2. **Rendering**: draw as a small pulsing-white block. Reuse `IsometricDrawer_*`
-   (already used by the hotbar / survival inventory) for the block picture.
-3. **Pickup detection**: per-tick proximity check vs the player; on pickup add to
-   inventory (reuse `SurvivalTest_AddBlock`). Add a short pickup delay (~0.5s) so a
-   block you place-then-break doesn't instantly fly back.
-4. **Wire-up**: change `SurvivalTest_BlockChanged` (in `src/SurvivalTest.c`) so mining
-   **spawns a drop entity** instead of calling `SurvivalTest_AddBlock` directly.
-   Keep `AddBlock` for the pickup path.
-
-Self-contained: no AI, no combat needed. It IS the entity/physics groundwork that a
-future mob system would reuse.
-
-### Drop TABLE corrections (do alongside drops)
-Current `SurvivalTest_DropFor()` in `src/SurvivalTest.c` is partly wrong for c0.30-s.
-Faithful 0.24-s rules (from wiki): **most blocks drop themselves**, exceptions only:
-- Leaves → sapling, **1/10 chance** (we currently give sapling 100%).
-- Grass → dirt. (correct already)
-- Logs → **3–5 planks**. (not handled yet)
-- **Stone → stone**, **ores → themselves** — our current stone→cobble and
-  ore→ingot mappings are NOT c0.30-s and should be removed.
+### Possible follow-ups (not done, not asked for yet)
+- No despawn timer for unpicked drops (original likely didn't have one either,
+  low priority).
+- `DROP_MAX = 64` pool: oldest-undropped silently skipped once full; fine for now.
 
 ### DON'T build: block-breaking time / hardness
 Research verdict: c0.30-s broke blocks **instantly** (one click). Per-block hardness,
@@ -70,8 +81,9 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
 - **Inventory**: real 36-slot model (`st_inv[]`), hotbar mirrored into engine inventory.
   Survival inventory screen (`SurvivalInvScreen`) — solid dark panel, bordered slots,
   separator line, "Inventory" title; click to pick/swap stacks.
-- **Block handling**: mining gives the (mapped) drop to inventory [TO BE REPLACED by
-  physical drops]; placing consumes one from the selected slot. Creative-safe:
+- **Block handling**: mining spawns physical dropped-item entity/entities on the
+  ground (faithful drop table, see below); walking near one picks it up into
+  inventory. Placing consumes one from the selected slot. Creative-safe:
   `SurvivalTest_CanPlace()` returns true when disabled.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.

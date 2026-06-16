@@ -52,5 +52,10 @@ cc_bool SurvivalTest_CanPlace(BlockID block);
 /* Returns true if something was eaten, so block placement should be skipped. */
 cc_bool SurvivalTest_TryEat(void);
 
+/* Renders all physical dropped-item entities in the 3D world. */
+/* No-op when survival mode is disabled. Call once per frame, alongside */
+/*  Entities_RenderModels (e.g. in Render3DFrame). */
+void SurvivalTest_RenderDrops(float delta, float t);
+
 CC_END_HEADER
 #endif

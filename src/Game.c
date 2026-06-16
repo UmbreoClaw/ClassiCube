@@ -503,6 +503,7 @@ static void Render3DFrame(float delta, float t) {
 	if (EnvRenderer_ShouldRenderSkybox()) EnvRenderer_RenderSkybox();
 	AxisLinesRenderer_Render();
 	Entities_RenderModels(delta, t);
+	SurvivalTest_RenderDrops(delta, t);
 	EntityNames_Render();
 
 	Particles_Render(t);

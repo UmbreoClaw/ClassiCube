@@ -12,6 +12,9 @@
 #include "Vectors.h"
 #include "ExtMath.h"
 #include "Screens.h"
+#include "Model.h"
+#include "Graphics.h"
+#include "Platform.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -48,6 +51,206 @@ struct SurvivalSlot { BlockID block; cc_int16 count; };
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
 static int st_invVersion;
+static RNGState st_dropRng;
+/* Defined later, in the Inventory section - forward declared so the */
+/*  dropped-item pickup logic below can hand picked-up blocks to it. */
+static void SurvivalTest_AddBlock(BlockID block);
+
+
+/*########################################################################################################################*
+*------------------------------------------------------Dropped items-------------------------------------------------------*
+*#########################################################################################################################*/
+/* Survival Test (since 0.24-s) drops physical items on the ground instead */
+/*  of putting mined blocks straight into the inventory - the player has */
+/*  to walk over them to collect them. */
+#define DROP_MAX           64
+#define DROP_GRAVITY        20.0f  /* blocks/sec^2 */
+#define DROP_TERMINAL_VEL   10.0f  /* blocks/sec   */
+#define DROP_PICKUP_DELAY    0.5f  /* seconds before a fresh drop can be collected */
+#define DROP_PICKUP_RADIUS   1.0f  /* blocks */
+
+struct DropItem {
+	struct Entity entity;
+	Vec3 velocity;
+	BlockID block;
+	float pickupDelay;
+	float age;       /* used to animate the white pulse */
+	cc_bool active;
+};
+static struct DropItem st_drops[DROP_MAX];
+/* The drop currently being rendered - lets DropItem_GetCol find its pulse phase. */
+static struct DropItem* st_renderingDrop;
+
+static PackedCol DropItem_GetCol(struct Entity* e) {
+	float pulse = st_renderingDrop ? st_renderingDrop->age : 0.0f;
+	/* Survival Test items pulse white rather than using normal world lighting */
+	return PackedCol_Scale(PACKEDCOL_WHITE, 0.7f + 0.3f * Math_SinF(pulse * 6.0f));
+}
+
+static void DropItem_Despawn(struct Entity* e) { }
+static void DropItem_Tick(struct Entity* e, float delta) { }
+static void DropItem_SetLocation(struct Entity* e, struct LocationUpdate* update) { }
+static void DropItem_RenderModel(struct Entity* e, float delta, float t) { }
+static cc_bool DropItem_ShouldRenderName(struct Entity* e) { return false; }
+
+static const struct EntityVTABLE dropItem_VTABLE = {
+	DropItem_Tick, DropItem_Despawn, DropItem_SetLocation, DropItem_GetCol,
+	DropItem_RenderModel, DropItem_ShouldRenderName
+};
+
+static int SurvivalTest_FindFreeDropSlot(void) {
+	int i;
+	for (i = 0; i < DROP_MAX; i++) {
+		if (!st_drops[i].active) return i;
+	}
+	return -1;
+}
+
+/* Spawns one physical item drop at the centre of the given block coords, */
+/*  with a small random scatter-pop velocity (matches Survival Test's look). */
+static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
+	struct DropItem* d;
+	struct Entity* e;
+	float ang, speed;
+	int slot = SurvivalTest_FindFreeDropSlot();
+	if (slot < 0) return; /* drop limit reached - oldest drops simply aren't replaced */
+
+	d = &st_drops[slot];
+	e = &d->entity;
+	Mem_Set(e, 0, sizeof(struct Entity));
+
+	e->VTABLE     = &dropItem_VTABLE;
+	e->Model      = Models.Block;
+	e->ModelBlock = block;
+	Vec3_Set(e->ModelScale, 1, 1, 1);
+	e->Flags = ENTITY_FLAG_HAS_MODELVB;
+
+	e->Position.x = coords.x + 0.5f;
+	e->Position.y = coords.y + 0.3f;
+	e->Position.z = coords.z + 0.5f;
+	Entity_UpdateModelBounds(e);
+
+	ang   = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
+	speed = 0.6f + Random_Float(&st_dropRng) * 0.6f;
+	d->velocity.x = Math_CosF(ang) * speed;
+	d->velocity.z = Math_SinF(ang) * speed;
+	d->velocity.y = 2.5f + Random_Float(&st_dropRng) * 1.0f;
+
+	d->block       = block;
+	d->pickupDelay = DROP_PICKUP_DELAY;
+	d->age         = 0.0f;
+	d->active      = true;
+}
+
+/* Decides what physically drops when a block is mined (Survival Test rules). */
+static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
+	BlockID dropBlock = oldBlock;
+	int count = 1, i;
+
+	switch (oldBlock) {
+	case BLOCK_GRASS:
+		dropBlock = BLOCK_DIRT;
+		break;
+	case BLOCK_LEAVES:
+		/* Leaves only drop a sapling 1/10 of the time, otherwise nothing */
+		if (Random_Next(&st_dropRng, 10) != 0) return;
+		dropBlock = BLOCK_SAPLING;
+		break;
+	case BLOCK_LOG:
+		dropBlock = BLOCK_WOOD;
+		count     = 3 + Random_Next(&st_dropRng, 3); /* 3-5 planks */
+		break;
+	default:
+		break; /* most blocks drop themselves */
+	}
+
+	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, dropBlock); }
+}
+
+static float SurvivalTest_DropGroundY(int x, int y, int z) {
+	BlockID b;
+	if (!World_Contains(x, y, z)) return -100000.0f;
+
+	b = World_GetBlock(x, y, z);
+	if (Blocks.Collide[b] != COLLIDE_SOLID) return -100000.0f;
+	return (float)y + Blocks.MaxBB[b].y;
+}
+
+static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
+	struct Entity* e = &d->entity;
+	float groundY;
+	int x, y, z;
+
+	d->velocity.y -= DROP_GRAVITY * delta;
+	if (d->velocity.y < -DROP_TERMINAL_VEL) d->velocity.y = -DROP_TERMINAL_VEL;
+
+	e->Position.x += d->velocity.x * delta;
+	e->Position.y += d->velocity.y * delta;
+	e->Position.z += d->velocity.z * delta;
+
+	x = Math_Floor(e->Position.x);
+	z = Math_Floor(e->Position.z);
+	y = Math_Floor(e->Position.y - 0.01f);
+	groundY = SurvivalTest_DropGroundY(x, y, z);
+
+	if (groundY > -1000.0f && e->Position.y <= groundY) {
+		e->Position.y = groundY;
+		d->velocity.y = 0.0f;
+		d->velocity.x *= 0.7f;
+		d->velocity.z *= 0.7f;
+		if (Math_AbsF(d->velocity.x) < 0.01f) d->velocity.x = 0.0f;
+		if (Math_AbsF(d->velocity.z) < 0.01f) d->velocity.z = 0.0f;
+	}
+}
+
+static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
+	Vec3 diff;
+	float distSq;
+	if (d->pickupDelay > 0.0f) return;
+
+	diff.x = d->entity.Position.x - pe->Position.x;
+	diff.y = d->entity.Position.y - pe->Position.y;
+	diff.z = d->entity.Position.z - pe->Position.z;
+	distSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+	if (distSq > DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS) return;
+
+	SurvivalTest_AddBlock(d->block);
+	d->active = false;
+}
+
+static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
+	struct DropItem* d;
+	int i;
+
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active) continue;
+
+		d->age += delta;
+		SurvivalTest_DropPhysics(d, delta);
+
+		if (d->pickupDelay > 0.0f) {
+			d->pickupDelay -= delta;
+		} else {
+			SurvivalTest_DropTryPickup(d, pe);
+		}
+	}
+}
+
+void SurvivalTest_RenderDrops(float delta, float t) {
+	int i;
+	if (!SurvivalTest_Enabled) return;
+
+	Gfx_SetAlphaTest(true);
+	for (i = 0; i < DROP_MAX; i++) {
+		if (!st_drops[i].active) continue;
+
+		st_renderingDrop = &st_drops[i];
+		Model_Render(Models.Block, &st_drops[i].entity);
+	}
+	st_renderingDrop = NULL;
+	Gfx_SetAlphaTest(false);
+}
 
 
 /*########################################################################################################################*
@@ -88,18 +291,6 @@ void SurvivalTest_Heal(int amount) {
 /*########################################################################################################################*
 *------------------------------------------------------Inventory----------------------------------------------------------*
 *#########################################################################################################################*/
-/* Maps a mined block to the block that drops from it (Survival Test rules). */
-static BlockID SurvivalTest_DropFor(BlockID block) {
-	switch (block) {
-	case BLOCK_STONE:    return BLOCK_COBBLE;  /* stone yields cobblestone */
-	case BLOCK_GRASS:    return BLOCK_DIRT;    /* grass yields dirt */
-	case BLOCK_LEAVES:   return BLOCK_SAPLING; /* leaves yield saplings */
-	case BLOCK_GOLD_ORE: return BLOCK_GOLD;    /* ore yields processed block */
-	case BLOCK_IRON_ORE: return BLOCK_IRON;
-	default:             return block;
-	}
-}
-
 BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].block; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
@@ -193,8 +384,8 @@ static void SurvivalTest_BlockChanged(void* obj,
 	if (!SurvivalTest_Enabled) return;
 
 	if (block == BLOCK_AIR) {
-		/* Block was mined - give the player its drop */
-		SurvivalTest_AddBlock(SurvivalTest_DropFor(oldBlock));
+		/* Block was mined - spawn its physical drop(s) on the ground */
+		SurvivalTest_SpawnDropsForBlock(coords, oldBlock);
 	} else {
 		/* Block was placed - consume one from the selected hotbar slot */
 		SurvivalTest_ConsumeSelected();
@@ -305,6 +496,8 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		st_drownTimer = 0.0f;
 	}
 
+	/* Dropped items --------------------------------------------------------- */
+	SurvivalTest_TickDrops(e, delta);
 }
 
 
@@ -325,12 +518,16 @@ static void SurvivalTest_ResetState(void) {
 		st_inv[i].block = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
+	for (i = 0; i < DROP_MAX; i++) {
+		st_drops[i].active = false;
+	}
 }
 
 static void SurvivalTest_Init(void) {
 	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false);
 	if (!SurvivalTest_Enabled) return;
 
+	Random_SeedFromCurrentTime(&st_dropRng);
 	SurvivalTest_ResetState();
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
