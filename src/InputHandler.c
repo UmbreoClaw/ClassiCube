@@ -25,6 +25,7 @@
 #include "Protocol.h"
 #include "AxisLinesRenderer.h"
 #include "Picking.h"
+#include "SurvivalTest.h"
 
 static cc_bool input_buttonsDown[3];
 static int input_pickingId = -1;
@@ -434,6 +435,9 @@ static void InputHandler_PlaceBlock(void) {
 
 	/* undeletable gas blocks can't be replaced with other blocks */
 	if (Blocks.Collide[old] == COLLIDE_NONE && !Blocks.CanDelete[old]) return;
+
+	/* In survival, can only place blocks the player actually has */
+	if (!SurvivalTest_CanPlace(block)) return;
 
 	if (!CheckIsFree(block)) return;
 

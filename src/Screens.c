@@ -378,21 +378,23 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 }
 
 /* UV coordinates for hearts in icons.png (256 wide, top 64 pixels used) */
-/* Empty heart background: 9x9 at pixel (16,0)  */
+/* Empty heart background: 9x9 at pixel (16,0) */
 #define HEART_BG_U1  (16/256.0f)
 #define HEART_BG_U2  (25/256.0f)
-#define HEART_BG_V1  (0/64.0f)
-#define HEART_BG_V2  (9/64.0f)
 /* Full heart: 9x9 at pixel (52,0) */
-#define HEART_FG_U1  (52/256.0f)
-#define HEART_FG_U2  (61/256.0f)
-#define HEART_FG_V1  (0/64.0f)
-#define HEART_FG_V2  (9/64.0f)
+#define HEART_FULL_U1  (52/256.0f)
+#define HEART_FULL_U2  (61/256.0f)
+/* Half heart: 9x9 at pixel (61,0) */
+#define HEART_HALF_U1  (61/256.0f)
+#define HEART_HALF_U2  (70/256.0f)
+#define HEART_V1  (0/64.0f)
+#define HEART_V2  (9/64.0f)
 
 static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
 	struct Texture tex;
 	struct VertexTextured* cur = dst;
-	int hearts, i, x, y, heartSize;
+	int fullHearts, i, x, y, heartSize;
+	cc_bool hasHalf;
 	float scale;
 
 	if (!SurvivalTest_Enabled) return 0;
@@ -407,17 +409,25 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	tex.ID = Gui.IconsTex;
 
 	/* Draw 10 empty heart backgrounds */
-	Tex_SetUV(tex, HEART_BG_U1, HEART_BG_V1, HEART_BG_U2, HEART_BG_V2);
+	Tex_SetUV(tex, HEART_BG_U1, HEART_V1, HEART_BG_U2, HEART_V2);
 	for (i = 0; i < 10; i++) {
 		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 
-	/* Draw filled hearts according to current health */
-	hearts = SurvivalTest_Health / 2;
-	Tex_SetUV(tex, HEART_FG_U1, HEART_FG_V1, HEART_FG_U2, HEART_FG_V2);
-	for (i = 0; i < hearts; i++) {
+	/* Draw filled hearts according to current health (2 HP per heart) */
+	fullHearts = SurvivalTest_Health / 2;
+	hasHalf    = (SurvivalTest_Health & 1) != 0;
+
+	Tex_SetUV(tex, HEART_FULL_U1, HEART_V1, HEART_FULL_U2, HEART_V2);
+	for (i = 0; i < fullHearts; i++) {
 		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	if (hasHalf) {
+		Tex_SetUV(tex, HEART_HALF_U1, HEART_V1, HEART_HALF_U2, HEART_V2);
+		Tex_SetRect(tex, x + fullHearts * heartSize, y, heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 
