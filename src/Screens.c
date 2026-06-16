@@ -2121,6 +2121,7 @@ static struct SurvivalInvScreen {
 	int  countVertCount;
 	struct FontDesc  font;
 	struct TextAtlas countAtlas;
+	struct Texture   titleTex;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
 /* Returns the pixel origin (top-left corner) of slot index. */
@@ -2200,30 +2201,47 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 static void SurvivalInvScreen_Render(void* screen, float delta) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	int i, slotX, slotY, totalW, totalH, gap;
-	PackedCol bgTop    = PackedCol_Make( 34,  34,  34, 200);
-	PackedCol bgBot    = PackedCol_Make( 57,  57, 100, 230);
-	PackedCol slotCol  = PackedCol_Make( 80,  80,  80, 160);
-	PackedCol heldCol  = PackedCol_Make(200, 200,  60, 220);
-	PackedCol hotbarSep = PackedCol_Make(120, 120, 120, 180);
-	(void)hotbarSep;
+	int padding, panelX, panelY, panelW, panelH, sepY;
+
+	/* Classic stone-grey palette, fully opaque */
+	PackedCol panelBorder = PackedCol_Make( 22,  22,  22, 255);
+	PackedCol panelBg     = PackedCol_Make( 50,  50,  50, 255);
+	PackedCol slotBorder  = PackedCol_Make( 64,  64,  64, 255);
+	PackedCol slotFill    = PackedCol_Make( 30,  30,  30, 255);
+	PackedCol heldFill    = PackedCol_Make(140, 140,  35, 230);
+	PackedCol sepCol      = PackedCol_Make( 22,  22,  22, 255);
 
 	gap    = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
 	totalW = SURVIVAL_HOTBAR_SLOTS * s->slotSize;
 	totalH = SURVINV_STORAGE_ROWS  * s->slotSize + gap + s->slotSize;
 
-	/* Outer dark panel */
-	Gfx_Draw2DGradient(s->gridX - 4, s->gridY - 4,
-	                   totalW + 8, totalH + 8, bgTop, bgBot);
+	padding = 4;
+	panelX  = s->gridX - padding;
+	panelY  = s->gridY - padding;
+	panelW  = totalW   + padding * 2;
+	panelH  = totalH   + padding * 2;
 
-	/* Individual slot backgrounds */
+	/* Panel: 2-px dark outer border then fill */
+	Gfx_Draw2DFlat(panelX - 2, panelY - 2, panelW + 4, panelH + 4, panelBorder);
+	Gfx_Draw2DFlat(panelX,     panelY,     panelW,     panelH,     panelBg);
+
+	/* Thin line between storage rows and hotbar row */
+	sepY = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap / 2 - 1;
+	Gfx_Draw2DFlat(s->gridX, sepY, totalW, 2, sepCol);
+
+	/* Slot backgrounds: 1-px border then darker fill */
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
-		if (i == s->heldSlot)
-			Gfx_Draw2DFlat(slotX + 1, slotY + 1,
-			               s->slotSize - 2, s->slotSize - 2, heldCol);
-		else
-			Gfx_Draw2DFlat(slotX + 1, slotY + 1,
-			               s->slotSize - 2, s->slotSize - 2, slotCol);
+		Gfx_Draw2DFlat(slotX,     slotY,     s->slotSize,     s->slotSize,     slotBorder);
+		Gfx_Draw2DFlat(slotX + 1, slotY + 1, s->slotSize - 2, s->slotSize - 2,
+		               i == s->heldSlot ? heldFill : slotFill);
+	}
+
+	/* "Inventory" title above the panel */
+	if (s->titleTex.ID) {
+		s->titleTex.x = panelX + (panelW - s->titleTex.width)  / 2;
+		s->titleTex.y = panelY - s->titleTex.height - 4;
+		Texture_Render(&s->titleTex);
 	}
 
 	/* Rebuild mesh whenever inventory has changed */
@@ -2267,18 +2285,24 @@ static void SurvivalInvScreen_ContextLost(void* screen) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	Font_Free(&s->font);
 	TextAtlas_Free(&s->countAtlas);
+	Gfx_DeleteTexture(&s->titleTex.ID);
 	Screen_ContextLost(screen);
 }
 
 static void SurvivalInvScreen_ContextRecreated(void* screen) {
 	static const cc_string digits = String_FromConst("0123456789");
 	static const cc_string empty  = String_FromConst("");
+	static const cc_string title  = String_FromConst("Inventory");
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	struct DrawTextArgs args;
 
 	Screen_UpdateVb(s);
 	Font_Make(&s->font, 14, FONT_FLAGS_PADDING);
 	Font_SetPadding(&s->font, 1);
 	TextAtlas_Make(&s->countAtlas, &digits, &s->font, &empty);
+
+	DrawTextArgs_Make(&args, &title, &s->font, true);
+	Drawer2D_MakeTextTexture(&s->titleTex, &args);
 	s->dirty = true;
 }
 

@@ -350,10 +350,24 @@ static void SurvivalTest_OnNewMap(void) {
 	SurvivalTest_SyncHotbar();
 }
 
+static void SurvivalTest_OnNewMapLoaded(void) {
+	struct LocalPlayer* p;
+	if (!SurvivalTest_Enabled) return;
+
+	p = Entities.CurPlayer;
+	if (!p) return;
+
+	/* Classic 0.30-s had no fly, noclip, or speed hacks */
+	p->Hacks.CanFly    = false;
+	p->Hacks.CanNoclip = false;
+	p->Hacks.CanSpeed  = false;
+	HacksComp_Update(&p->Hacks);
+}
+
 struct IGameComponent SurvivalTest_Component = {
-	SurvivalTest_Init,     /* Init           */
-	SurvivalTest_Free,     /* Free           */
-	NULL,                  /* Reset          */
-	SurvivalTest_OnNewMap, /* OnNewMap       */
-	NULL                   /* OnNewMapLoaded */
+	SurvivalTest_Init,          /* Init           */
+	SurvivalTest_Free,          /* Free           */
+	NULL,                       /* Reset          */
+	SurvivalTest_OnNewMap,      /* OnNewMap       */
+	SurvivalTest_OnNewMapLoaded /* OnNewMapLoaded */
 };
