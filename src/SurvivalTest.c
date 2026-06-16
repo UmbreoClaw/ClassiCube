@@ -40,10 +40,8 @@ static float st_airTimer;
 static float st_invincTimer;
 static float st_lavaTimer;
 static float st_drownTimer;
-static float st_fallDistance;
-static float st_prevY;
-static cc_bool st_prevYValid;
-static cc_bool st_wasOnGround;
+static float st_fallPeakY;    /* highest Y reached during the current fall */
+static cc_bool st_falling;    /* whether a fall is currently being tracked */
 static cc_bool st_isDead;
 static float st_respawnTimer;
 
@@ -207,38 +205,37 @@ static void SurvivalTest_DoRespawn(void) {
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 	st_airTimer     = AIR_SUPPLY_SECS;
 	st_isDead       = false;
-	st_fallDistance = 0.0f;
-	st_prevYValid   = false;
+	st_falling      = false;
 	st_invincTimer  = 1.0f; /* brief grace period after respawning */
 	st_lavaTimer    = 0.0f;
 	st_drownTimer   = 0.0f;
-	st_wasOnGround  = false;
 }
 
 static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_bool onGround) {
 	float y = e->Position.y;
 
-	/* Track fall distance from actual vertical movement (robust regardless */
-	/*  of physics internals or scheduled task ordering) */
-	if (st_prevYValid && !onGround && !p->Hacks.Flying && !p->Hacks.Noclip) {
-		float dy = st_prevY - y; /* positive while descending */
-		if (dy > 0.0f) {
-			st_fallDistance += dy;
-		} else {
-			st_fallDistance = 0.0f; /* rising (e.g. jump) resets the fall */
+	/* Flying/noclip never accumulate fall damage */
+	if (onGround || p->Hacks.Flying || p->Hacks.Noclip) {
+		/* Just landed: deal damage from the full drop (peak Y minus the */
+		/*  actual landing Y, so the final tick of the fall is included) */
+		if (st_falling && onGround) {
+			float dist = st_fallPeakY - y;
+			if (dist > FALL_SAFE_BLOCKS) {
+				/* Survival Test: ~1 HP per block past the 3-block safe drop */
+				int damage = (int)dist - (int)FALL_SAFE_BLOCKS;
+				SurvivalTest_Hurt(damage);
+			}
 		}
+		st_falling = false;
+	} else {
+		/* Airborne: begin tracking, and keep the highest point reached so */
+		/*  that the fall is measured from the apex (matches Survival Test) */
+		if (!st_falling) {
+			st_falling   = true;
+			st_fallPeakY = y;
+		}
+		if (y > st_fallPeakY) st_fallPeakY = y;
 	}
-
-	/* Landing on the ground applies accumulated fall damage */
-	if (onGround && !st_wasOnGround && st_fallDistance > FALL_SAFE_BLOCKS) {
-		float excess = st_fallDistance - FALL_SAFE_BLOCKS;
-		int   damage = (int)(excess + 0.5f); /* ~1 HP per excess block */
-		SurvivalTest_Hurt(damage);
-	}
-	if (onGround) st_fallDistance = 0.0f;
-
-	st_prevY      = y;
-	st_prevYValid = true;
 }
 
 static void SurvivalTest_Tick(struct ScheduledTask* task) {
@@ -270,9 +267,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	headInWater = SurvivalTest_IsHeadInWater(e);
 
 	/* Fall damage -------------------------------------------------------- */
+	/* Touching liquid breaks the fall (water/lava cushions the landing) */
+	if (inWater || inLava) st_falling = false;
 	SurvivalTest_UpdateFall(e, p, onGround);
-	/* Landing in liquid breaks the fall */
-	if (inWater || inLava) st_fallDistance = 0.0f;
 
 	/* Lava damage -------------------------------------------------------- */
 	if (inLava) {
@@ -303,7 +300,6 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		st_drownTimer = 0.0f;
 	}
 
-	st_wasOnGround = onGround;
 }
 
 
@@ -312,9 +308,7 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 *#########################################################################################################################*/
 static void SurvivalTest_ResetState(void) {
 	int i;
-	st_fallDistance = 0.0f;
-	st_prevYValid   = false;
-	st_wasOnGround  = false;
+	st_falling      = false;
 	st_lavaTimer    = 0.0f;
 	st_drownTimer   = 0.0f;
 	st_isDead       = false;

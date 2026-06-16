@@ -365,6 +365,11 @@ static void HUDScreen_Update(void* screen, float delta) {
 		s->lastHealth = SurvivalTest_Health;
 		s->dirty      = true;
 	}
+	/* Survival Test: the heart bar jitters while at 2 hearts (4 HP) or less, */
+	/*  so keep rebuilding the HUD each frame to animate the shake */
+	if (SurvivalTest_Enabled && SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) {
+		s->dirty = true;
+	}
 
 	if (SurvivalTest_Enabled && SurvivalTest_InvVersion() != s->lastInvVersion) {
 		s->lastInvVersion = SurvivalTest_InvVersion();
@@ -415,6 +420,14 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	/* Position hearts above the hotbar, centred on it */
 	x = s->hotbar.x + s->hotbar.width / 2 - (10 * heartSize) / 2;
 	y = s->hotbar.y - heartSize - (int)(2.0f * scale);
+
+	/* At 2 hearts (4 HP) or less the bar shakes, as it did in Survival Test */
+	if (SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) {
+		static RNGState shakeRng;
+		static cc_bool  shakeInit;
+		if (!shakeInit) { Random_SeedFromCurrentTime(&shakeRng); shakeInit = true; }
+		y += Random_Next(&shakeRng, 2);
+	}
 
 	tex.ID = Gui.IconsTex;
 
