@@ -19,6 +19,8 @@ Eg. the webclient 'main' function loads IndexedDB, and when that has asynchronou
 #include "Server.h"
 #include "Options.h"
 #include "main.h"
+#include "LocalServer.h"
+#include "LANDiscovery.h"
 
 /*########################################################################################################################*
 *-------------------------------------------------Complex argument parsing------------------------------------------------*
@@ -229,6 +231,15 @@ cc_string args[GAME_MAX_CMDARGS];
 		return ARG_RESULT_RUN_GAME;
 	}
 	
+	/* [user] --local-server [classic|flat] - host a local LAN game via MCGalaxy */
+	if (argsCount >= 2 && String_CaselessEqualsConst(&args[1], "--local-server")) {
+		String_Copy(&Game_Username, &args[0]);
+		LocalServer_Requested = true;
+		LocalServer_WorldType = (argsCount >= 3 && String_CaselessEqualsConst(&args[2], "flat"))
+		                        ? LOCAL_WORLD_FLAT : LOCAL_WORLD_CLASSIC;
+		return ARG_RESULT_RUN_GAME;
+	}
+
 	/* 2 to 3 arguments - unsupported at present */
 	if (argsCount < 4) {
 		WarnMissingArgs(argsCount, args);
@@ -242,13 +253,28 @@ cc_string args[GAME_MAX_CMDARGS];
 }
 
 static int RunProgram(int argc, char** argv) {
+	cc_result res;
 	switch (ProcessProgramArgs(argc, argv))
 	{
 	case ARG_RESULT_RUN_LAUNCHER:
 		RunLauncher();
 		return 0;
 	case ARG_RESULT_RUN_GAME:
+		if (LocalServer_Requested) {
+			res = LocalServer_Start(&Game_Username, LocalServer_WorldType);
+			if (res) {
+				Logger_SysWarn(res, "starting local MCGalaxy server");
+			} else {
+				static const cc_string localhost = String_FromConst("127.0.0.1");
+				static const cc_string motd      = String_FromConst("LAN Game");
+				String_Copy(&Server.Address, &localhost);
+				Server.Port = LOCAL_SERVER_PORT;
+				LANDiscovery_StartBroadcast(LOCAL_SERVER_PORT, &motd);
+			}
+		}
 		RunGame();
+		LANDiscovery_StopBroadcast();
+		if (LocalServer_Requested) LocalServer_Stop();
 		return 0;
 	default:
 		return 1;

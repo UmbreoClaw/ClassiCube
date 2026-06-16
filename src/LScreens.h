@@ -44,6 +44,7 @@ void LScreen_AddWidget(void* screen, void* widget);
 void ChooseModeScreen_SetActive(cc_bool firstTime);
 void ColoursScreen_SetActive(void);
 void DirectConnectScreen_SetActive(void);
+void HostGameScreen_SetActive(void);
 void MFAScreen_SetActive(void);
 void MainScreen_SetActive(void);
 void CheckResourcesScreen_SetActive(void);

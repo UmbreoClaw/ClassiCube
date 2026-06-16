@@ -4,6 +4,7 @@
 #include "LWidgets.h"
 #include "LWeb.h"
 #include "Launcher.h"
+#include "LocalServer.h"
 #include "Gui.h"
 #include "Drawer2D.h"
 #include "ExtMath.h"
@@ -176,6 +177,7 @@ static void SwitchToMain(void* w)          { MainScreen_SetActive(); }
 static void SwitchToSettings(void* w)      { SettingsScreen_SetActive(); }
 static void SwitchToThemes(void* w)        { ThemesScreen_SetActive(); }
 static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
+static void SwitchToHostGame(void* w);     /* forward declaration */
 
 
 /*########################################################################################################################*
@@ -706,14 +708,14 @@ static void SwitchToSplitScreen(void* w) { SplitScreen_SetActive(); }
 *#########################################################################################################################*/
 static struct MainScreen {
 	LScreen_Layout
-	struct LButton btnLogin, btnResume, btnDirect, btnSPlayer, btnSplit;
+	struct LButton btnLogin, btnResume, btnDirect, btnSPlayer, btnHostGame, btnSplit;
 	struct LButton btnRegister, btnOptions, btnUpdates;
 	struct LInput iptUsername, iptPassword;
 	struct LLabel lblStatus, lblUpdate;
 	cc_bool signingIn;
 } MainScreen CC_BIG_VAR;
 
-#define MAINSCREEN_MAX_WIDGETS 12
+#define MAINSCREEN_MAX_WIDGETS 13
 static struct LWidget* main_widgets[MAINSCREEN_MAX_WIDGETS];
 
 LAYOUTS main_iptUsername[] = { { ANCHOR_CENTRE_MIN, -140 }, { ANCHOR_CENTRE, -120 } };
@@ -724,8 +726,9 @@ LAYOUTS main_lblStatus[] = { { ANCHOR_CENTRE,   0 }, { ANCHOR_CENTRE,  20 } };
 
 LAYOUTS main_btnResume[]  = { { ANCHOR_CENTRE, 90 }, { ANCHOR_CENTRE, -25 } };
 LAYOUTS main_btnDirect[]  = { { ANCHOR_CENTRE,  0 }, { ANCHOR_CENTRE,  60 } };
-LAYOUTS main_btnSPlayer[] = { { ANCHOR_CENTRE,  0 }, { ANCHOR_CENTRE, 110 } };
-LAYOUTS main_btnSplit[]   = { { ANCHOR_CENTRE,  0 }, { ANCHOR_CENTRE, 160 } };
+LAYOUTS main_btnSPlayer[]  = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 110 } };
+LAYOUTS main_btnHostGame[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 160 } };
+LAYOUTS main_btnSplit[]    = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 210 } };
 
 LAYOUTS main_btnRegister[] = { { ANCHOR_MIN,    6 }, { ANCHOR_MAX,  6 } };
 LAYOUTS main_btnOptions[]  = { { ANCHOR_CENTRE, 0 }, { ANCHOR_MAX,  6 } };
@@ -871,6 +874,12 @@ static void MainScreen_Activated(struct LScreen* s_) {
 #endif
 	LButton_Add(s, &s->btnSPlayer, 200, 35, "Singleplayer",
 				MainScreen_Singleplayer, main_btnSPlayer);
+#ifdef CC_BUILD_NETWORKING
+	if (!Platform_IsSingleProcess()) {
+		LButton_Add(s, &s->btnHostGame, 200, 35, "Host LAN Game",
+					SwitchToHostGame, main_btnHostGame);
+	}
+#endif
 #ifdef CC_BUILD_SPLITSCREEN
 	LButton_Add(s, &s->btnSplit,   200, 35, "Splitscreen (WIP)", 
 				SwitchToSplitScreen,     main_btnSplit);
@@ -1011,6 +1020,97 @@ static void MainScreen_Tick(struct LScreen* s_) {
 	MainScreen_TickFetchServers(s);
 #endif
 }
+
+/*########################################################################################################################*
+*------------------------------------------------------HostGameScreen-----------------------------------------------------*
+*#########################################################################################################################*/
+static struct HostGameScreen {
+	LScreen_Layout
+	struct LButton btnClassic, btnFlat, btnHost, btnBack;
+	struct LLabel  lblTitle, lblStatus;
+	int worldType;
+} HostGameScreen CC_BIG_VAR;
+
+#define HOSTGAME_SCREEN_MAX_WIDGETS 6
+static struct LWidget* hostGame_widgets[HOSTGAME_SCREEN_MAX_WIDGETS];
+
+LAYOUTS hg_lblTitle[]  = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, -100 } };
+LAYOUTS hg_btnClassic[] = { { ANCHOR_CENTRE, -80 }, { ANCHOR_CENTRE, -30 } };
+LAYOUTS hg_btnFlat[]    = { { ANCHOR_CENTRE,  80 }, { ANCHOR_CENTRE, -30 } };
+LAYOUTS hg_btnHost[]   = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  40 } };
+LAYOUTS hg_btnBack[]   = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE,  90 } };
+LAYOUTS hg_lblStatus[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 140 } };
+
+static void HostGame_SelectClassic(void* w) {
+	struct HostGameScreen* s = &HostGameScreen;
+	s->worldType = LOCAL_WORLD_CLASSIC;
+	LLabel_SetConst(&s->lblStatus, "&eWorld type: Classic");
+}
+
+static void HostGame_SelectFlat(void* w) {
+	struct HostGameScreen* s = &HostGameScreen;
+	s->worldType = LOCAL_WORLD_FLAT;
+	LLabel_SetConst(&s->lblStatus, "&eWorld type: Flat");
+}
+
+static void HostGame_StartHosting(void* w) {
+	static const cc_string defUser      = String_FromConst(DEFAULT_USERNAME);
+	static const cc_string localArg     = String_FromConst("--local-server");
+	static const cc_string classicArg   = String_FromConst("classic");
+	static const cc_string flatArg      = String_FromConst("flat");
+	struct HostGameScreen* s = &HostGameScreen;
+	const cc_string* user    = &MainScreen.iptUsername.text;
+	cc_string args[3];
+	cc_result res;
+
+	if (!user->length) user = &defUser;
+	Options_SaveIfChanged();
+
+	args[0] = *user;
+	args[1] = localArg;
+	args[2] = s->worldType == LOCAL_WORLD_FLAT ? flatArg : classicArg;
+
+	res = Process_StartGame2(args, 3);
+	if (res) {
+		Logger_SysWarn(res, "starting local game");
+		LLabel_SetConst(&s->lblStatus, "&cFailed to launch game");
+		return;
+	}
+	Launcher_ShouldStop = Platform_IsSingleProcess() || Options_GetBool(LOPT_AUTO_CLOSE, false);
+}
+
+static void HostGameScreen_Activated(struct LScreen* s_) {
+	struct HostGameScreen* s = (struct HostGameScreen*)s_;
+	LLabel_Add(s,  &s->lblTitle,   "Choose world type", hg_lblTitle);
+	LButton_Add(s, &s->btnClassic, 130, 35, "Classic",  HostGame_SelectClassic, hg_btnClassic);
+	LButton_Add(s, &s->btnFlat,    130, 35, "Flat",     HostGame_SelectFlat,    hg_btnFlat);
+	LButton_Add(s, &s->btnHost,    200, 35, "Start Hosting", HostGame_StartHosting, hg_btnHost);
+	LButton_Add(s, &s->btnBack,     80, 35, "Back",     SwitchToMain,           hg_btnBack);
+	LLabel_Add(s,  &s->lblStatus,  "&eWorld type: Classic", hg_lblStatus);
+}
+
+static void HostGameScreen_Load(struct LScreen* s_) {
+	struct HostGameScreen* s = (struct HostGameScreen*)s_;
+	s->worldType = LOCAL_WORLD_CLASSIC;
+}
+
+void HostGameScreen_SetActive(void) {
+	struct HostGameScreen* s = &HostGameScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = hostGame_widgets;
+	s->maxWidgets = Array_Elems(hostGame_widgets);
+
+	s->Activated  = HostGameScreen_Activated;
+	s->LoadState  = HostGameScreen_Load;
+	s->title      = "Host LAN Game";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+static void SwitchToHostGame(void* w) { HostGameScreen_SetActive(); }
+
 
 void MainScreen_SetActive(void) {
 	struct MainScreen* s = &MainScreen;
