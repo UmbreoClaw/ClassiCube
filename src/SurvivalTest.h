@@ -41,6 +41,9 @@ int SurvivalTest_HotbarCount(int slot);
 /* Lets the HUD cheaply detect when it needs to redraw stack counts. */
 int SurvivalTest_InvVersion(void);
 
+/* Swaps the contents of two inventory slots (no-op when survival is disabled). */
+void SurvivalTest_SwapSlots(int a, int b);
+
 /* Whether the player is allowed to place their currently selected block. */
 /* Returns true (always allowed) when survival mode is disabled. */
 cc_bool SurvivalTest_CanPlace(BlockID block);

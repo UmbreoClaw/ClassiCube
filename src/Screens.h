@@ -28,6 +28,8 @@ void Screen_NullUpdate(void* screen, float delta);
 
 void InventoryScreen_Show(void);
 void InventoryScreen_Hide(void);
+/* Opens the survival inventory screen (only meaningful when SurvivalTest_Enabled). */
+void SurvivalInvScreen_Show(void);
 void HUDScreen_Show(void);
 void LoadingScreen_Show(const cc_string* title, const cc_string* message);
 void GeneratingScreen_Show(void);

@@ -1,8 +1,8 @@
-name: Survival branch CI (compile check)
+name: Survival branch CI (compile check + artifacts)
 # Lightweight compile-only verification for the survival test branch.
 # Cross-compiles the Windows builds with mingw (as the main Windows workflow
 # does) using -Werror, so any compilation regression fails the check.
-# Intentionally has no secrets, artifact upload, or notification steps.
+# Artifacts are uploaded so the branch can be tested without a local toolchain.
 on:
   push:
     branches:
@@ -41,6 +41,16 @@ jobs:
           i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
           i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
 
+      - name: Upload 32-bit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-SurvivalTest-Win32
+          path: |
+            cc-w32-d3d9.exe
+            cc-w32-ogl.exe
+            cc-w32-d3d11.exe
+          retention-days: 14
+
 #============================================
 # ============== 64 BIT WINDOWS =============
 # ===========================================
@@ -66,3 +76,13 @@ jobs:
           x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d9.exe  ${{ env.LIBS }}
           x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
           x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
+
+      - name: Upload 64-bit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-SurvivalTest-Win64
+          path: |
+            cc-w64-d3d9.exe
+            cc-w64-ogl.exe
+            cc-w64-d3d11.exe
+          retention-days: 14

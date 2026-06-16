@@ -25,6 +25,7 @@
 #include "InputHandler.h"
 #include "Protocol.h"
 #include "SurvivalTest.h"
+#include "IsometricDrawer.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
 #define CHAT_MAX_BOTTOMRIGHT Array_Elems(Chat_BottomRight)
@@ -1394,7 +1395,7 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 	} else if (key == CCKEY_SLASH) {
 		ChatScreen_OpenInput(&slash);
 	} else if (InputBind_Claims(BIND_INVENTORY, key, device)) {
-		InventoryScreen_Show();
+		SurvivalInvScreen_Show();
 	} else {
 		return false;
 	}
@@ -2087,6 +2088,268 @@ void InventoryScreen_Hide(void) {
 	struct InventoryScreen* s = &InventoryScreen;
 	Gui_Remove((struct Screen*)s);
 	CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------SurvivalInvScreen----------------------------------------------------*
+*#########################################################################################################################*/
+/* 36-slot grid (3 storage rows + 1 hotbar row) for Classic 0.30 Survival Test.  */
+/* Click a slot to pick it up; click another slot to swap/place; click outside  */
+/* or press the inventory key to close. Storage rows are slots 9-35; hotbar 0-8. */
+
+/* Base slot size (pixels) before display scaling. */
+#define SURVINV_SLOT_BASE     36
+/* Number of rows above the hotbar (storage rows). */
+#define SURVINV_STORAGE_ROWS  3
+/* Pixel gap (base, before scaling) between the storage grid and the hotbar row. */
+#define SURVINV_HOTBAR_GAP    8
+/* Vertex budget: all 36 slots + 1 extra slot for the held-item cursor overlay. */
+#define SURVINV_MAX_ISO_VERTS  ((SURVIVAL_INV_SLOTS + 1) * ISOMETRICDRAWER_MAXVERTICES)
+/* Two digits at most per slot, four vertices per digit. */
+#define SURVINV_MAX_COUNT_VERTS (SURVIVAL_INV_SLOTS * 2 * 4)
+#define SURVINV_TOTAL_VERTS     (SURVINV_MAX_ISO_VERTS + SURVINV_MAX_COUNT_VERTS)
+
+static struct SurvivalInvScreen {
+	Screen_Body
+	int  isoState[SURVINV_MAX_ISO_VERTS / 4];
+	int  isoVertCount;
+	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
+	int  lastInvVersion;
+	int  gridX, gridY;   /* pixel origin of the top-left storage slot */
+	int  slotSize;        /* current pixel size per slot */
+	int  countVertCount;
+	struct FontDesc  font;
+	struct TextAtlas countAtlas;
+} SurvivalInvScreen_Instance CC_BIG_VAR;
+
+/* Returns the pixel origin (top-left corner) of slot index. */
+static void SurvivalInv_SlotXY(struct SurvivalInvScreen* s, int slot, int* ox, int* oy) {
+	int col, row, gap;
+	gap = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
+	if (slot < SURVIVAL_HOTBAR_SLOTS) {
+		/* Hotbar row sits below the storage rows with a small gap */
+		col  = slot;
+		*ox  = s->gridX + col * s->slotSize;
+		*oy  = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap;
+	} else {
+		/* Storage rows: slot 9 = row 0 col 0, slot 35 = row 2 col 8 */
+		int st = slot - SURVIVAL_HOTBAR_SLOTS;
+		col = st % SURVIVAL_HOTBAR_SLOTS;
+		row = st / SURVIVAL_HOTBAR_SLOTS;
+		*ox = s->gridX + col * s->slotSize;
+		*oy = s->gridY + row * s->slotSize;
+	}
+}
+
+/* Returns the slot index under screen coordinates (mx, my), or -1. */
+static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
+	int i, x, y;
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		SurvivalInv_SlotXY(s, i, &x, &y);
+		if (mx >= x && mx < x + s->slotSize &&
+		    my >= y && my < y + s->slotSize) return i;
+	}
+	return -1;
+}
+
+static void SurvivalInvScreen_BuildMesh(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	struct VertexTextured* data;
+	struct VertexTextured* countDst;
+	struct VertexTextured* cur;
+	int i, slotX, slotY, count;
+	BlockID block;
+	float halfSize;
+
+	data     = Screen_LockVb(s);
+	halfSize = s->slotSize * 0.5f;
+
+	/* ISO block pictures for all occupied slots */
+	IsometricDrawer_BeginBatch(data, s->isoState);
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		block = SurvivalTest_SlotBlock(i);
+		if (block == BLOCK_AIR) continue;
+		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
+		IsometricDrawer_AddBatch(block, halfSize,
+			slotX + s->slotSize / 2, slotY + s->slotSize / 2);
+	}
+	s->isoVertCount = IsometricDrawer_EndBatch();
+
+	/* Stack-count digit overlay for slots with count > 1 */
+	countDst = data + SURVINV_MAX_ISO_VERTS;
+	cur = countDst;
+	if (s->countAtlas.tex.ID) {
+		int savedY = s->countAtlas.tex.y;
+		for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+			count = SurvivalTest_SlotCount(i);
+			if (count <= 1) continue;
+			SurvivalInv_SlotXY(s, i, &slotX, &slotY);
+			s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
+			s->countAtlas.curX  = slotX + 2;
+			TextAtlas_AddInt(&s->countAtlas, count, &cur);
+		}
+		s->countAtlas.tex.y = savedY;
+	}
+	s->countVertCount = (int)(cur - countDst);
+	s->lastInvVersion = SurvivalTest_InvVersion();
+
+	Gfx_UnlockDynamicVb(s->vb);
+}
+
+static void SurvivalInvScreen_Render(void* screen, float delta) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	int i, slotX, slotY, totalW, totalH, gap;
+	PackedCol bgTop    = PackedCol_Make( 34,  34,  34, 200);
+	PackedCol bgBot    = PackedCol_Make( 57,  57, 100, 230);
+	PackedCol slotCol  = PackedCol_Make( 80,  80,  80, 160);
+	PackedCol heldCol  = PackedCol_Make(200, 200,  60, 220);
+	PackedCol hotbarSep = PackedCol_Make(120, 120, 120, 180);
+	(void)hotbarSep;
+
+	gap    = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
+	totalW = SURVIVAL_HOTBAR_SLOTS * s->slotSize;
+	totalH = SURVINV_STORAGE_ROWS  * s->slotSize + gap + s->slotSize;
+
+	/* Outer dark panel */
+	Gfx_Draw2DGradient(s->gridX - 4, s->gridY - 4,
+	                   totalW + 8, totalH + 8, bgTop, bgBot);
+
+	/* Individual slot backgrounds */
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
+		if (i == s->heldSlot)
+			Gfx_Draw2DFlat(slotX + 1, slotY + 1,
+			               s->slotSize - 2, s->slotSize - 2, heldCol);
+		else
+			Gfx_Draw2DFlat(slotX + 1, slotY + 1,
+			               s->slotSize - 2, s->slotSize - 2, slotCol);
+	}
+
+	/* Rebuild mesh whenever inventory has changed */
+	if (SurvivalTest_InvVersion() != s->lastInvVersion) s->dirty = true;
+	if (s->dirty) { SurvivalInvScreen_BuildMesh(screen); s->dirty = false; }
+
+	/* ISO block pictures */
+	if (s->isoVertCount > 0) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindDynamicVb(s->vb);
+		IsometricDrawer_Render(s->isoVertCount, 0, s->isoState);
+	}
+
+	/* Stack-count text overlay */
+	if (s->countVertCount > 0 && s->countAtlas.tex.ID) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(s->countAtlas.tex.ID);
+		Gfx_BindDynamicVb(s->vb);
+		Gfx_DrawVb_IndexedTris_Range(s->countVertCount,
+		                             SURVINV_MAX_ISO_VERTS, DRAW_HINT_RECT);
+	}
+}
+
+static void SurvivalInvScreen_Init(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->widgets     = NULL;
+	s->numWidgets  = 0;
+	s->maxWidgets  = 0;
+	s->heldSlot    = -1;
+	s->maxVertices = SURVINV_TOTAL_VERTS;
+	/* Force an initial mesh build */
+	s->lastInvVersion = SurvivalTest_InvVersion() - 1;
+}
+
+static void SurvivalInvScreen_Free(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->heldSlot = -1;
+}
+
+static void SurvivalInvScreen_ContextLost(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	Font_Free(&s->font);
+	TextAtlas_Free(&s->countAtlas);
+	Screen_ContextLost(screen);
+}
+
+static void SurvivalInvScreen_ContextRecreated(void* screen) {
+	static const cc_string digits = String_FromConst("0123456789");
+	static const cc_string empty  = String_FromConst("");
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+
+	Screen_UpdateVb(s);
+	Font_Make(&s->font, 14, FONT_FLAGS_PADDING);
+	Font_SetPadding(&s->font, 1);
+	TextAtlas_Make(&s->countAtlas, &digits, &s->font, &empty);
+	s->dirty = true;
+}
+
+static void SurvivalInvScreen_Layout(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	int totalW, totalH, gap;
+
+	s->slotSize = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale()));
+	if (s->slotSize < 16) s->slotSize = 16; /* minimum usable size */
+
+	gap    = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
+	totalW = SURVIVAL_HOTBAR_SLOTS * s->slotSize;
+	totalH = SURVINV_STORAGE_ROWS  * s->slotSize + gap + s->slotSize;
+
+	s->gridX = (Window_Main.Width  - totalW) / 2;
+	s->gridY = (Window_Main.Height - totalH) / 2;
+	s->dirty = true;
+}
+
+static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
+		s->heldSlot = -1;
+		Gui_Remove((struct Screen*)s);
+	}
+	return true;
+}
+
+static int SurvivalInvScreen_PointerDown(void* screen, int id, int x, int y) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	int hit = SurvivalInv_HitSlot(s, x, y);
+
+	if (hit < 0) {
+		/* Clicked outside the grid - deselect and close */
+		s->heldSlot = -1;
+		Gui_Remove((struct Screen*)s);
+		return TOUCH_TYPE_GUI;
+	}
+
+	if (s->heldSlot < 0) {
+		/* Nothing held: pick up the slot if it has something */
+		if (SurvivalTest_SlotBlock(hit) != BLOCK_AIR)
+			s->heldSlot = hit;
+	} else if (s->heldSlot == hit) {
+		/* Clicked the same slot again: deselect */
+		s->heldSlot = -1;
+	} else {
+		/* Different slot: swap the two stacks */
+		SurvivalTest_SwapSlots(s->heldSlot, hit);
+		s->heldSlot = -1;
+		s->dirty    = true;
+	}
+	return TOUCH_TYPE_GUI;
+}
+
+static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
+	SurvivalInvScreen_Init,        Screen_NullUpdate,           SurvivalInvScreen_Free,
+	SurvivalInvScreen_Render,      SurvivalInvScreen_BuildMesh,
+	SurvivalInvScreen_KeyDown,     Screen_InputUp,              Screen_FKeyPress, Screen_FText,
+	SurvivalInvScreen_PointerDown, Screen_PointerUp,            Screen_FPointer,  Screen_FMouseScroll,
+	SurvivalInvScreen_Layout,      SurvivalInvScreen_ContextLost, SurvivalInvScreen_ContextRecreated,
+	NULL
+};
+
+void SurvivalInvScreen_Show(void) {
+	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
+	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
+	s->grabsInput = true;
+	s->closable   = true;
+	s->VTABLE     = &SurvivalInvScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_INVENTORY);
 }
 
 

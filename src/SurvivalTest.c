@@ -120,6 +120,16 @@ static void SurvivalTest_SyncHotbar(void) {
 	st_invVersion++;
 }
 
+void SurvivalTest_SwapSlots(int a, int b) {
+	struct SurvivalSlot tmp;
+	if (!SurvivalTest_Enabled) return;
+	if (a == b) return;
+	tmp       = st_inv[a];
+	st_inv[a] = st_inv[b];
+	st_inv[b] = tmp;
+	SurvivalTest_SyncHotbar();
+}
+
 /* Adds one of the given block: stacks onto an existing matching slot if */
 /*  possible, otherwise fills the first empty slot (hotbar slots first). */
 static void SurvivalTest_AddBlock(BlockID block) {
