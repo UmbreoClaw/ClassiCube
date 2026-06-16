@@ -24,6 +24,7 @@
 #include "Options.h"
 #include "InputHandler.h"
 #include "Protocol.h"
+#include "SurvivalTest.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
 #define CHAT_MAX_BOTTOMRIGHT Array_Elems(Chat_BottomRight)
@@ -79,13 +80,17 @@ static struct HUDScreen {
 	int lastFov;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
+	int heartCount;  /* number of heart vertices built last frame */
+	int lastHealth;  /* SurvivalTest_Health value from last rebuild */
 } HUDScreen_Instance CC_BIG_VAR;
 
 /* Each integer can be at most 10 digits + minus prefix */
 #define POSITION_VAL_CHARS 11
 /* [PREFIX] [(] [X] [,] [Y] [,] [Z] [)] */
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4)
+/* 10 heart backgrounds + up to 10 filled hearts = 20 quads = 80 vertices */
+#define SURVIVAL_HEARTS_MAX_VERTICES 80
+#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -350,6 +355,11 @@ static void HUDScreen_Update(void* screen, float delta) {
 	if (pos.x != s->lastX || pos.y != s->lastY || pos.z != s->lastZ) {
 		s->dirty = true;
 	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_Health != s->lastHealth) {
+		s->lastHealth = SurvivalTest_Health;
+		s->dirty      = true;
+	}
 }
 
 #define CH_EXTENT 16
@@ -367,6 +377,53 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, ptr);
 }
 
+/* UV coordinates for hearts in icons.png (256 wide, top 64 pixels used) */
+/* Empty heart background: 9x9 at pixel (16,0)  */
+#define HEART_BG_U1  (16/256.0f)
+#define HEART_BG_U2  (25/256.0f)
+#define HEART_BG_V1  (0/64.0f)
+#define HEART_BG_V2  (9/64.0f)
+/* Full heart: 9x9 at pixel (52,0) */
+#define HEART_FG_U1  (52/256.0f)
+#define HEART_FG_U2  (61/256.0f)
+#define HEART_FG_V1  (0/64.0f)
+#define HEART_FG_V2  (9/64.0f)
+
+static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct Texture tex;
+	struct VertexTextured* cur = dst;
+	int hearts, i, x, y, heartSize;
+	float scale;
+
+	if (!SurvivalTest_Enabled) return 0;
+
+	scale     = Gui_GetHotbarScale();
+	heartSize = (int)(9.0f * scale);
+
+	/* Position hearts above the hotbar, centred on it */
+	x = s->hotbar.x + s->hotbar.width / 2 - (10 * heartSize) / 2;
+	y = s->hotbar.y - heartSize - (int)(2.0f * scale);
+
+	tex.ID = Gui.IconsTex;
+
+	/* Draw 10 empty heart backgrounds */
+	Tex_SetUV(tex, HEART_BG_U1, HEART_BG_V1, HEART_BG_U2, HEART_BG_V2);
+	for (i = 0; i < 10; i++) {
+		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	/* Draw filled hearts according to current health */
+	hearts = SurvivalTest_Health / 2;
+	Tex_SetUV(tex, HEART_FG_U1, HEART_FG_V1, HEART_FG_U2, HEART_FG_V2);
+	for (i = 0; i < hearts; i++) {
+		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	return (int)(cur - dst);
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct VertexTextured* data;
@@ -380,8 +437,12 @@ static void HUDScreen_BuildMesh(void* screen) {
 	Widget_BuildMesh(&s->line2,  ptr);
 	Widget_BuildMesh(&s->hotbar, ptr);
 
-	if (!Game_ClassicMode) 
+	if (!Game_ClassicMode)
 		HUDScreen_BuildPosition(s, data);
+
+	/* data now points to offset (12 + HOTBAR_MAX_VERTICES) in the VB */
+	/* Position data occupies up to POSITION_HUD_CHARS * 4 vertices after that */
+	s->heartCount = HUDScreen_BuildHeartsMesh(s, data + POSITION_HUD_CHARS * 4);
 	Gfx_UnlockDynamicVb(s->vb);
 }
 
@@ -412,6 +473,15 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+		}
+
+		/* Draw survival health hearts above the hotbar */
+		if (SurvivalTest_Enabled && s->heartCount > 0 && Gui.IconsTex) {
+			Gfx_BindTexture(Gui.IconsTex);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->heartCount,
+				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4,
+				DRAW_HINT_SPRITE);
 		}
 	}
 

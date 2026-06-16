@@ -84,6 +84,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_RAW_INPUT "win-raw-input"
 #define OPT_DPI_SCALING "win-dpi-scaling"
 #define OPT_GAME_VERSION "game-version"
+#define OPT_SURVIVAL_MODE "survival-mode"
 #define OPT_INV_SCROLLBAR_SCALE "inv-scrollbar-scale"
 #define OPT_ANAGLYPH3D "anaglyph-3d"
 
