@@ -1,0 +1,68 @@
+name: Survival branch CI (compile check)
+# Lightweight compile-only verification for the survival test branch.
+# Cross-compiles the Windows builds with mingw (as the main Windows workflow
+# does) using -Werror, so any compilation regression fails the check.
+# Intentionally has no secrets, artifact upload, or notification steps.
+on:
+  push:
+    branches:
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-survival-ci
+  cancel-in-progress: true
+
+jobs:
+#============================================
+# ============== 32 BIT WINDOWS =============
+# ===========================================
+  build-win32:
+    name: Windows 32-bit (mingw)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mingw
+        shell: bash
+        run: sudo apt-get -y install gcc-mingw-w64-i686
+
+      - name: Compile 32 bit Windows builds
+        shell: bash
+        env:
+          LIBS: "-lwinmm -limagehlp"
+          SRCS: "src/*.c third_party/bearssl/*.c"
+          COMMON_FLAGS: "-O1 -fno-stack-protector -fno-math-errno -Qn -Werror"
+          WIN32_FLAGS:  "-mwindows -nostartfiles -Wl,-e_main_real -DCC_NOMAIN"
+        run: |
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-d3d9.exe  ${{ env.LIBS }}
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
+
+#============================================
+# ============== 64 BIT WINDOWS =============
+# ===========================================
+  build-win64:
+    name: Windows 64-bit (mingw)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mingw
+        shell: bash
+        run: sudo apt-get -y install gcc-mingw-w64-x86-64
+
+      - name: Compile 64 bit Windows builds
+        shell: bash
+        env:
+          LIBS: "-lwinmm -limagehlp"
+          SRCS: "src/*.c third_party/bearssl/*.c"
+          COMMON_FLAGS: "-O1 -fno-stack-protector -fno-math-errno -Qn -Werror"
+          WIN64_FLAGS:  "-mwindows -nostartfiles -Wl,-emain_real -DCC_NOMAIN"
+        run: |
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d9.exe  ${{ env.LIBS }}
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
