@@ -48,5 +48,9 @@ void SurvivalTest_SwapSlots(int a, int b);
 /* Returns true (always allowed) when survival mode is disabled. */
 cc_bool SurvivalTest_CanPlace(BlockID block);
 
+/* Attempts to eat the currently selected hotbar item (mushrooms). */
+/* Returns true if something was eaten, so block placement should be skipped. */
+cc_bool SurvivalTest_TryEat(void);
+
 CC_END_HEADER
 #endif

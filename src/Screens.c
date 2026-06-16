@@ -2391,6 +2391,95 @@ void SurvivalInvScreen_Show(void) {
 
 
 /*########################################################################################################################*
+*------------------------------------------------------GameOverScreen-----------------------------------------------------*
+*#########################################################################################################################*/
+/* Shown when the player dies in Survival Test. Faithful to Classic 0.30-s: */
+/* there is no respawn - the world is over, and the only way forward is to  */
+/* generate a fresh level (or quit the game).                               */
+static struct GameOverScreen {
+	Screen_Body
+	struct FontDesc titleFont, messageFont;
+	struct TextWidget title, message;
+	struct ButtonWidget gen, quit;
+	struct Widget* __widgets[4];
+} GameOverScreen CC_BIG_VAR;
+
+static void GameOverScreen_Layout(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -60);
+	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -20);
+	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  40);
+	Widget_SetLocation(&s->quit,    ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  90);
+}
+
+static void GameOverScreen_ContextLost(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	Font_Free(&s->titleFont);
+	Font_Free(&s->messageFont);
+	Screen_ContextLost(screen);
+}
+
+static void GameOverScreen_ContextRecreated(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	Screen_UpdateVb(screen);
+
+	Gui_MakeTitleFont(&s->titleFont);
+	Gui_MakeBodyFont(&s->messageFont);
+	TextWidget_SetConst(&s->title,   "Game over!",         &s->titleFont);
+	TextWidget_SetConst(&s->message, "You ran out of health", &s->messageFont);
+	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->titleFont);
+	ButtonWidget_SetConst(&s->quit, "Quit game",             &s->titleFont);
+}
+
+static void GameOverScreen_OnGen(void* screen, void* w) {
+	Gui_Remove((struct Screen*)&GameOverScreen);
+	GenLevelScreen_Show();
+}
+
+static void GameOverScreen_OnQuit(void* screen, void* w) {
+	Window_RequestClose();
+}
+
+static void GameOverScreen_Init(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	s->widgets     = s->__widgets;
+	s->numWidgets  = 0;
+	s->maxWidgets  = Array_Elems(s->__widgets);
+
+	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->message);
+	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
+	ButtonWidget_Add(s, &s->quit, 400, GameOverScreen_OnQuit);
+
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+}
+
+static void GameOverScreen_Render(void* screen, float delta) {
+	PackedCol top    = PackedCol_Make(32, 32, 32, 200);
+	PackedCol bottom = PackedCol_Make(16, 16, 16, 220);
+	Gfx_Draw2DGradient(0, 0, Window_UI.Width, Window_UI.Height, top, bottom);
+
+	Screen_Render2Widgets(screen, delta);
+}
+
+static const struct ScreenVTABLE GameOverScreen_VTABLE = {
+	GameOverScreen_Init,   Screen_NullUpdate, Screen_NullFunc,
+	GameOverScreen_Render, Screen_BuildMesh,
+	Menu_InputDown,        Screen_InputUp,    Screen_TKeyPress, Screen_TText,
+	Menu_PointerDown,      Screen_PointerUp,  Menu_PointerMove, Screen_TMouseScroll,
+	GameOverScreen_Layout, GameOverScreen_ContextLost, GameOverScreen_ContextRecreated
+};
+
+void GameOverScreen_Show(void) {
+	struct GameOverScreen* s = &GameOverScreen;
+	s->grabsInput  = true;
+	s->blocksWorld = true;
+	s->VTABLE      = &GameOverScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_DISCONNECT);
+}
+
+
+/*########################################################################################################################*
 *------------------------------------------------------LoadingScreen------------------------------------------------------*
 *#########################################################################################################################*/
 static struct LoadingScreen {

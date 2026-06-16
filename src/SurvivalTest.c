@@ -11,6 +11,7 @@
 #include "Options.h"
 #include "Vectors.h"
 #include "ExtMath.h"
+#include "Screens.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -33,8 +34,6 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 #define AIR_SUPPLY_SECS    15.0f
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
-/* Seconds to wait before respawning after death */
-#define RESPAWN_DELAY_SECS 2.5f
 
 static float st_airTimer;
 static float st_invincTimer;
@@ -43,7 +42,6 @@ static float st_drownTimer;
 static float st_fallPeakY;    /* highest Y reached during the current fall */
 static cc_bool st_falling;    /* whether a fall is currently being tracked */
 static cc_bool st_isDead;
-static float st_respawnTimer;
 
 /* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
 struct SurvivalSlot { BlockID block; cc_int16 count; };
@@ -55,22 +53,27 @@ static int st_invVersion;
 /*########################################################################################################################*
 *----------------------------------------------------Health & damage------------------------------------------------------*
 *#########################################################################################################################*/
-void SurvivalTest_Hurt(int damage) {
+/* Applies damage. When ignoreInvinc is set the invincibility window is */
+/*  bypassed and not refreshed (used for self-inflicted poison damage). */
+static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc) {
 	if (!SurvivalTest_Enabled) return;
 	if (st_isDead)             return;
-	if (st_invincTimer > 0.0f) return;
 	if (damage <= 0)           return;
+	if (!ignoreInvinc && st_invincTimer > 0.0f) return;
 
 	SurvivalTest_Health -= damage;
-	st_invincTimer = INVINCIBILITY_SECS;
+	if (!ignoreInvinc) st_invincTimer = INVINCIBILITY_SECS;
 
 	if (SurvivalTest_Health <= 0) {
 		SurvivalTest_Health = 0;
-		st_isDead       = true;
-		st_respawnTimer = RESPAWN_DELAY_SECS;
-		Chat_AddRaw("&cYou died! Respawning...");
+		st_isDead = true;
+		/* Classic 0.30-s had no respawn: death ends the world. The Game */
+		/*  Over screen offers generating a fresh level or quitting. */
+		GameOverScreen_Show();
 	}
 }
+
+void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, false); }
 
 void SurvivalTest_Heal(int amount) {
 	if (!SurvivalTest_Enabled) return;
@@ -163,6 +166,28 @@ static void SurvivalTest_ConsumeSelected(void) {
 	SurvivalTest_SyncHotbar();
 }
 
+cc_bool SurvivalTest_TryEat(void) {
+	int slot;
+	BlockID block;
+	if (!SurvivalTest_Enabled) return false;
+
+	slot  = Inventory.SelectedIndex;
+	if (st_inv[slot].count <= 0) return false;
+	block = st_inv[slot].block;
+
+	/* Survival Test: mushrooms are food, eaten with right-click */
+	if (block == BLOCK_BROWN_SHROOM) {
+		SurvivalTest_Heal(5);            /* brown mushroom restores 5 HP */
+	} else if (block == BLOCK_RED_SHROOM) {
+		SurvivalTest_Damage(3, true);    /* red mushroom is poisonous: -3 HP */
+	} else {
+		return false;                    /* not food - let normal placement run */
+	}
+
+	SurvivalTest_ConsumeSelected();
+	return true;
+}
+
 static void SurvivalTest_BlockChanged(void* obj,
 									  IVec3 coords, BlockID oldBlock, BlockID block) {
 	if (!SurvivalTest_Enabled) return;
@@ -193,22 +218,6 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e) {
 
 	b = World_GetBlock(x, y, z);
 	return Blocks.Collide[b] == COLLIDE_WATER;
-}
-
-static void SurvivalTest_DoRespawn(void) {
-	struct LocationUpdate update;
-	struct LocalPlayer* p = Entities.CurPlayer;
-
-	LocalPlayer_CalcDefaultSpawn(p, &update);
-	LocalPlayers_MoveToSpawn(&update);
-
-	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
-	st_airTimer     = AIR_SUPPLY_SECS;
-	st_isDead       = false;
-	st_falling      = false;
-	st_invincTimer  = 1.0f; /* brief grace period after respawning */
-	st_lavaTimer    = 0.0f;
-	st_drownTimer   = 0.0f;
 }
 
 static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_bool onGround) {
@@ -249,12 +258,8 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	if (!p) return;
 	e = &p->Base;
 
-	/* Death & respawn countdown */
-	if (st_isDead) {
-		st_respawnTimer -= delta;
-		if (st_respawnTimer <= 0.0f) SurvivalTest_DoRespawn();
-		return;
-	}
+	/* While dead the Game Over screen is up and the world is frozen */
+	if (st_isDead) return;
 
 	if (st_invincTimer > 0.0f) {
 		st_invincTimer -= delta;
@@ -313,7 +318,6 @@ static void SurvivalTest_ResetState(void) {
 	st_drownTimer   = 0.0f;
 	st_isDead       = false;
 	st_invincTimer  = 0.0f;
-	st_respawnTimer = 0.0f;
 	st_airTimer     = AIR_SUPPLY_SECS;
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 

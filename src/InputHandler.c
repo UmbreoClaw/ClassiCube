@@ -422,6 +422,11 @@ static void InputHandler_DeleteBlock(void) {
 static void InputHandler_PlaceBlock(void) {
 	IVec3 pos;
 	BlockID old, block;
+
+	/* In survival, right-clicking a mushroom eats it instead of placing a */
+	/*  block - works even when not aiming at a placeable surface */
+	if (SurvivalTest_TryEat()) return;
+
 	pos = Game_SelectedPos.translatedPos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
 
