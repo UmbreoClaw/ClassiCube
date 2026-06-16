@@ -47,8 +47,11 @@ static cc_bool st_wasOnGround;
 static cc_bool st_isDead;
 static float st_respawnTimer;
 
-/* Per-block-type counts of what the player is currently holding */
-static cc_uint8 st_counts[BLOCK_COUNT];
+/* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
+struct SurvivalSlot { BlockID block; cc_int16 count; };
+static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
+/* Bumped on every inventory change so the HUD knows to redraw counts. */
+static int st_invVersion;
 
 
 /*########################################################################################################################*
@@ -96,45 +99,60 @@ static BlockID SurvivalTest_DropFor(BlockID block) {
 	}
 }
 
-int SurvivalTest_BlockCount(BlockID block) {
-	return st_counts[block];
-}
+BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].block; }
+int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
+int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
+int     SurvivalTest_InvVersion(void) { return st_invVersion; }
 
 cc_bool SurvivalTest_CanPlace(BlockID block) {
 	if (!SurvivalTest_Enabled) return true;
-	return st_counts[block] > 0;
+	/* Placement always uses the selected hotbar slot */
+	return st_inv[Inventory.SelectedIndex].count > 0;
 }
 
-/* Adds one of the given block to the player's holdings, placing it in an */
-/*  empty hotbar slot if it isn't already present. */
+/* Mirrors the hotbar slots into the engine's inventory table so that the */
+/*  hotbar widget and held block renderer reflect the survival inventory. */
+static void SurvivalTest_SyncHotbar(void) {
+	int i;
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		Inventory_Set(i, st_inv[i].block);
+	}
+	st_invVersion++;
+}
+
+/* Adds one of the given block: stacks onto an existing matching slot if */
+/*  possible, otherwise fills the first empty slot (hotbar slots first). */
 static void SurvivalTest_AddBlock(BlockID block) {
 	int i;
 	if (block == BLOCK_AIR) return;
 
-	if (st_counts[block] < SURVIVAL_STACK_MAX) st_counts[block]++;
-
-	/* Already shown in the hotbar? */
-	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
-		if (Inventory_Get(i) == block) return;
+	/* Prefer topping up an existing, non-full stack of this block */
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		if (st_inv[i].block == block && st_inv[i].count < SURVIVAL_STACK_MAX) {
+			st_inv[i].count++;
+			SurvivalTest_SyncHotbar();
+			return;
+		}
 	}
-	/* Otherwise drop it into the first empty hotbar slot */
-	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
-		if (Inventory_Get(i) != BLOCK_AIR) continue;
-		Inventory_Set(i, block);
+	/* Otherwise place it into the first empty slot */
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		if (st_inv[i].block != BLOCK_AIR) continue;
+		st_inv[i].block = block;
+		st_inv[i].count = 1;
+		SurvivalTest_SyncHotbar();
 		return;
 	}
-	/* Hotbar full - block is still counted, just not displayed */
+	/* Inventory full - drop is discarded */
 }
 
-/* Removes one of the given block, clearing its hotbar slot when it runs out. */
-static void SurvivalTest_Consume(BlockID block) {
-	int i;
-	if (st_counts[block] > 0) st_counts[block]--;
-	if (st_counts[block] > 0) return;
+/* Consumes one block from the currently selected hotbar slot. */
+static void SurvivalTest_ConsumeSelected(void) {
+	int slot = Inventory.SelectedIndex;
+	if (st_inv[slot].count <= 0) return;
 
-	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
-		if (Inventory_Get(i) == block) Inventory_Set(i, BLOCK_AIR);
-	}
+	st_inv[slot].count--;
+	if (st_inv[slot].count == 0) st_inv[slot].block = BLOCK_AIR;
+	SurvivalTest_SyncHotbar();
 }
 
 static void SurvivalTest_BlockChanged(void* obj,
@@ -145,8 +163,8 @@ static void SurvivalTest_BlockChanged(void* obj,
 		/* Block was mined - give the player its drop */
 		SurvivalTest_AddBlock(SurvivalTest_DropFor(oldBlock));
 	} else {
-		/* Block was placed - consume one from the player's holdings */
-		SurvivalTest_Consume(block);
+		/* Block was placed - consume one from the selected hotbar slot */
+		SurvivalTest_ConsumeSelected();
 	}
 }
 
@@ -295,14 +313,9 @@ static void SurvivalTest_ResetState(void) {
 	st_airTimer     = AIR_SUPPLY_SECS;
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
-	for (i = 0; i < BLOCK_COUNT; i++) st_counts[i] = 0;
-}
-
-/* Clears the hotbar so the player starts empty and must gather blocks. */
-static void SurvivalTest_ClearHotbar(void) {
-	int i;
-	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
-		Inventory_Set(i, BLOCK_AIR);
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		st_inv[i].block = BLOCK_AIR;
+		st_inv[i].count = 0;
 	}
 }
 
@@ -322,8 +335,9 @@ static void SurvivalTest_Free(void) {
 
 static void SurvivalTest_OnNewMap(void) {
 	if (!SurvivalTest_Enabled) return;
+	/* Start empty - the player must gather blocks by mining */
 	SurvivalTest_ResetState();
-	SurvivalTest_ClearHotbar();
+	SurvivalTest_SyncHotbar();
 }
 
 struct IGameComponent SurvivalTest_Component = {

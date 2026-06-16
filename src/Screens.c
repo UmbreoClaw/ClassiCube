@@ -80,8 +80,10 @@ static struct HUDScreen {
 	int lastFov;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
-	int heartCount;  /* number of heart vertices built last frame */
-	int lastHealth;  /* SurvivalTest_Health value from last rebuild */
+	int heartCount;     /* number of heart vertices built last frame */
+	int countVertices;  /* number of stack-count vertices built last frame */
+	int lastHealth;     /* SurvivalTest_Health value from last rebuild */
+	int lastInvVersion; /* SurvivalTest_InvVersion() from last rebuild */
 } HUDScreen_Instance CC_BIG_VAR;
 
 /* Each integer can be at most 10 digits + minus prefix */
@@ -90,7 +92,9 @@ static struct HUDScreen {
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
 /* 10 heart backgrounds + up to 10 filled hearts = 20 quads = 80 vertices */
 #define SURVIVAL_HEARTS_MAX_VERTICES 80
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES)
+/* Up to 2 digits per hotbar slot for stack counts (4 vertices per digit) */
+#define SURVIVAL_COUNTS_MAX_VERTICES (SURVIVAL_HOTBAR_SLOTS * 2 * 4)
+#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -360,6 +364,11 @@ static void HUDScreen_Update(void* screen, float delta) {
 		s->lastHealth = SurvivalTest_Health;
 		s->dirty      = true;
 	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_InvVersion() != s->lastInvVersion) {
+		s->lastInvVersion = SurvivalTest_InvVersion();
+		s->dirty          = true;
+	}
 }
 
 #define CH_EXTENT 16
@@ -434,10 +443,40 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	return (int)(cur - dst);
 }
 
+/* Builds the stack-count digits drawn over each hotbar slot. Uses the same */
+/*  digit atlas as the position display. Counts of 1 are left implicit. */
+static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct TextAtlas* atlas = &s->posAtlas;
+	struct HotbarWidget* w  = &s->hotbar;
+	struct VertexTextured* cur = dst;
+	int i, count, slotX, savedY;
+
+	if (!SurvivalTest_Enabled) return 0;
+	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
+
+	/* All counts sit along the bottom edge of the hotbar */
+	savedY       = atlas->tex.y;
+	atlas->tex.y = w->y + w->height - atlas->tex.height;
+
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		count = SurvivalTest_HotbarCount(i);
+		if (count <= 1) continue;
+
+		slotX        = (int)(w->x + w->slotXOffset + w->slotWidth * i);
+		atlas->curX  = slotX;
+		TextAtlas_AddInt(atlas, count, &cur);
+	}
+
+	atlas->tex.y = savedY;
+	return (int)(cur - dst);
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct VertexTextured* data;
 	struct VertexTextured** ptr;
+	struct VertexTextured* heartsDst;
+	struct VertexTextured* countsDst;
 
 	data = Screen_LockVb(s);
 	ptr  = &data;
@@ -450,9 +489,13 @@ static void HUDScreen_BuildMesh(void* screen) {
 	if (!Game_ClassicMode)
 		HUDScreen_BuildPosition(s, data);
 
-	/* data now points to offset (12 + HOTBAR_MAX_VERTICES) in the VB */
-	/* Position data occupies up to POSITION_HUD_CHARS * 4 vertices after that */
-	s->heartCount = HUDScreen_BuildHeartsMesh(s, data + POSITION_HUD_CHARS * 4);
+	/* data now points to offset (12 + HOTBAR_MAX_VERTICES) in the VB. */
+	/* The position display occupies POSITION_HUD_CHARS * 4 vertices after */
+	/*  that, then hearts, then hotbar stack counts. */
+	heartsDst     = data + POSITION_HUD_CHARS * 4;
+	countsDst     = heartsDst + SURVIVAL_HEARTS_MAX_VERTICES;
+	s->heartCount    = HUDScreen_BuildHeartsMesh(s, heartsDst);
+	s->countVertices = HUDScreen_BuildCountsMesh(s, countsDst);
 	Gfx_UnlockDynamicVb(s->vb);
 }
 
@@ -492,6 +535,15 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_DrawVb_IndexedTris_Range(s->heartCount,
 				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4,
 				DRAW_HINT_SPRITE);
+		}
+
+		/* Draw survival hotbar stack counts (digit atlas) */
+		if (SurvivalTest_Enabled && s->countVertices > 0 && s->posAtlas.tex.ID) {
+			Gfx_BindTexture(s->posAtlas.tex.ID);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->countVertices,
+				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES,
+				DRAW_HINT_RECT);
 		}
 	}
 

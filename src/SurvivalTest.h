@@ -18,17 +18,30 @@ extern cc_bool SurvivalTest_Enabled;
 extern int SurvivalTest_Health;
 /* Maximum health points (10 hearts * 2 HP). */
 #define SURVIVAL_MAX_HEALTH 20
-/* Maximum number of a single block type the player can hold. */
+/* Maximum number of a single block type a single inventory slot can hold. */
 #define SURVIVAL_STACK_MAX 99
+
+/* Total inventory slots (4 rows of 9, bottom row is the hotbar). */
+#define SURVIVAL_INV_SLOTS    36
+/* Number of inventory slots that make up the hotbar. */
+#define SURVIVAL_HOTBAR_SLOTS 9
 
 /* Applies damage to the player (respects invincibility frames). */
 void SurvivalTest_Hurt(int damage);
 /* Restores health to the player (capped at SURVIVAL_MAX_HEALTH). */
 void SurvivalTest_Heal(int amount);
 
-/* Returns how many of the given block the player is currently holding. */
-int SurvivalTest_BlockCount(BlockID block);
-/* Whether the player is allowed to place the given block. */
+/* Gets the block held in the given inventory slot (0 to SURVIVAL_INV_SLOTS-1). */
+BlockID SurvivalTest_SlotBlock(int slot);
+/* Gets how many blocks are stacked in the given inventory slot. */
+int SurvivalTest_SlotCount(int slot);
+/* Gets the stack count in the given hotbar slot (0 to SURVIVAL_HOTBAR_SLOTS-1). */
+int SurvivalTest_HotbarCount(int slot);
+/* A counter that increments whenever inventory contents change. */
+/* Lets the HUD cheaply detect when it needs to redraw stack counts. */
+int SurvivalTest_InvVersion(void);
+
+/* Whether the player is allowed to place their currently selected block. */
 /* Returns true (always allowed) when survival mode is disabled. */
 cc_bool SurvivalTest_CanPlace(BlockID block);
 
