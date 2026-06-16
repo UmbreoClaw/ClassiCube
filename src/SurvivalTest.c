@@ -15,6 +15,7 @@
 #include "Model.h"
 #include "Graphics.h"
 #include "Platform.h"
+#include "Lighting.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -68,23 +69,40 @@ static void SurvivalTest_AddBlock(BlockID block);
 #define DROP_TERMINAL_VEL   10.0f  /* blocks/sec   */
 #define DROP_PICKUP_DELAY    0.5f  /* seconds before a fresh drop can be collected */
 #define DROP_PICKUP_RADIUS   1.0f  /* blocks */
+/* Survival Test items spin about Y at 3 degrees/tick = 60 deg/sec (20 TPS) */
+#define DROP_SPIN_DEG_PER_SEC 60.0f
+/* The spin angle also drives the bob and white-glow pulse, exactly as the */
+/*  original Item.render did (var3 advances the spin, sin(var3/10) the rest) */
 
 struct DropItem {
 	struct Entity entity;
 	Vec3 velocity;
 	BlockID block;
 	float pickupDelay;
-	float age;       /* used to animate the white pulse */
+	float age;       /* seconds alive - drives spin/bob/glow */
+	float rot0;      /* random initial spin angle (degrees) */
 	cc_bool active;
 };
 static struct DropItem st_drops[DROP_MAX];
-/* The drop currently being rendered - lets DropItem_GetCol find its pulse phase. */
-static struct DropItem* st_renderingDrop;
+
+/* Vertex buffer for the additive white-glow overlay (one cube per drop) */
+#define GLOW_VERTICES_PER_DROP 24
+#define GLOW_MAX_VERTICES (DROP_MAX * GLOW_VERTICES_PER_DROP)
+static GfxResourceID st_glowVB;
+
+/* Computes the spin/bob/glow animation phase for a drop. var3 is the running */
+/*  spin angle in degrees; sin(var3/10) (matching the original) drives bob+glow. */
+static float DropItem_Phase(struct DropItem* d) {
+	return d->rot0 + d->age * DROP_SPIN_DEG_PER_SEC;
+}
 
 static PackedCol DropItem_GetCol(struct Entity* e) {
-	float pulse = st_renderingDrop ? st_renderingDrop->age : 0.0f;
-	/* Survival Test items pulse white rather than using normal world lighting */
-	return PackedCol_Scale(PACKEDCOL_WHITE, 0.7f + 0.3f * Math_SinF(pulse * 6.0f));
+	/* Drops are lit by the world like in Survival Test (darker in shade); */
+	/*  the white pulse is a separate additive pass, not a tint here. */
+	int x = Math_Floor(e->Position.x);
+	int y = Math_Floor(e->Position.y);
+	int z = Math_Floor(e->Position.z);
+	return Lighting.Color(x, y, z);
 }
 
 static void DropItem_Despawn(struct Entity* e) { }
@@ -139,6 +157,7 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	d->block       = block;
 	d->pickupDelay = DROP_PICKUP_DELAY;
 	d->age         = 0.0f;
+	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
 	d->active      = true;
 }
 
@@ -237,19 +256,109 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 	}
 }
 
-void SurvivalTest_RenderDrops(float delta, float t) {
+/* Pass 1: the lit, textured block - spinning about Y and bobbing up/down. */
+static void SurvivalTest_RenderDropBlocks(void) {
+	struct DropItem* d;
+	struct Entity* e;
+	float var3, savedY;
 	int i;
-	if (!SurvivalTest_Enabled) return;
 
 	Gfx_SetAlphaTest(true);
 	for (i = 0; i < DROP_MAX; i++) {
-		if (!st_drops[i].active) continue;
+		d = &st_drops[i];
+		if (!d->active) continue;
+		e = &d->entity;
 
-		st_renderingDrop = &st_drops[i];
-		Model_Render(Models.Block, &st_drops[i].entity);
+		var3      = DropItem_Phase(d);
+		e->RotY   = var3;                                   /* spin about Y */
+		savedY    = e->Position.y;
+		e->Position.y += Math_SinF(var3 / 10.0f) * 0.1f + 0.1f; /* bob */
+
+		Model_Render(Models.Block, e);
+		e->Position.y = savedY;
 	}
-	st_renderingDrop = NULL;
 	Gfx_SetAlphaTest(false);
+}
+
+/* Appends a white cube (24 verts) at the drop's bounds to the glow mesh. */
+static void SurvivalTest_BuildGlowCube(struct DropItem* d, float renderY,
+									   PackedCol col, struct VertexColoured** ptr) {
+	struct Entity* e = &d->entity;
+	struct VertexColoured* v = *ptr;
+	/* Inflate slightly so the white shell sits just outside the block faces */
+	/*  (avoids z-fighting with the textured block drawn in pass 1). */
+	const float pad = 0.03f;
+	float x1 = e->Position.x + e->ModelAABB.Min.x - pad;
+	float x2 = e->Position.x + e->ModelAABB.Max.x + pad;
+	float y1 = renderY       + e->ModelAABB.Min.y - pad;
+	float y2 = renderY       + e->ModelAABB.Max.y + pad;
+	float z1 = e->Position.z + e->ModelAABB.Min.z - pad;
+	float z2 = e->Position.z + e->ModelAABB.Max.z + pad;
+
+	#define GLOW_V(vx, vy, vz) v->x = (vx); v->y = (vy); v->z = (vz); v->Col = col; v++;
+	GLOW_V(x1,y1,z1) GLOW_V(x2,y1,z1) GLOW_V(x2,y1,z2) GLOW_V(x1,y1,z2) /* bottom */
+	GLOW_V(x1,y2,z1) GLOW_V(x1,y2,z2) GLOW_V(x2,y2,z2) GLOW_V(x2,y2,z1) /* top    */
+	GLOW_V(x1,y1,z1) GLOW_V(x1,y2,z1) GLOW_V(x2,y2,z1) GLOW_V(x2,y1,z1) /* zmin   */
+	GLOW_V(x1,y1,z2) GLOW_V(x2,y1,z2) GLOW_V(x2,y2,z2) GLOW_V(x1,y2,z2) /* zmax   */
+	GLOW_V(x1,y1,z1) GLOW_V(x1,y1,z2) GLOW_V(x1,y2,z2) GLOW_V(x1,y2,z1) /* xmin   */
+	GLOW_V(x2,y1,z1) GLOW_V(x2,y2,z1) GLOW_V(x2,y2,z2) GLOW_V(x2,y1,z2) /* xmax   */
+	#undef GLOW_V
+	*ptr = v;
+}
+
+/* Pass 2: the pulsing white glow. Survival Test redrew the item in solid */
+/*  white with additive blending, the alpha following (sin(var3/10)*0.5+0.5)^4 */
+/*  so the glint is a brief, sharp white flash about once a second. We use a */
+/*  white alpha-blended cube (the engine has no additive blend exposed). */
+static void SurvivalTest_RenderDropGlow(void) {
+	struct DropItem* d;
+	struct VertexColoured* ptr;
+	struct VertexColoured* start;
+	PackedCol col;
+	float var3, s, a, renderY;
+	int i, count, alpha;
+
+	if (!st_glowVB) {
+		st_glowVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
+		if (!st_glowVB) return;
+	}
+
+	ptr   = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB,
+						VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
+	start = ptr;
+
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active) continue;
+
+		var3 = DropItem_Phase(d);
+		s    = Math_SinF(var3 / 10.0f) * 0.5f + 0.5f; /* 0..1 */
+		s    = s * s * s * s;                         /* bias toward dim (^4) */
+		a    = s * 0.4f;                              /* peak ~40% white */
+		alpha = (int)(a * 255.0f);
+		if (alpha < 2) continue;                      /* skip near-invisible */
+
+		col     = PackedCol_Make(255, 255, 255, alpha);
+		renderY = d->entity.Position.y + Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
+		SurvivalTest_BuildGlowCube(d, renderY, col, &ptr);
+	}
+
+	count = (int)(ptr - start);
+	Gfx_UnlockDynamicVb(st_glowVB);
+	if (!count) return;
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetDepthWrite(false);
+	Gfx_DrawVb_IndexedTris(count);
+	Gfx_SetDepthWrite(true);
+	Gfx_SetAlphaBlending(false);
+}
+
+void SurvivalTest_RenderDrops(float delta, float t) {
+	if (!SurvivalTest_Enabled) return;
+	SurvivalTest_RenderDropBlocks();
+	SurvivalTest_RenderDropGlow();
 }
 
 
@@ -523,6 +632,12 @@ static void SurvivalTest_ResetState(void) {
 	}
 }
 
+/* The glow vertex buffer is a GPU resource and must be dropped/recreated */
+/*  whenever the graphics context is lost (it is rebuilt lazily on render). */
+static void SurvivalTest_OnContextLost(void* obj) {
+	Gfx_DeleteDynamicVb(&st_glowVB);
+}
+
 static void SurvivalTest_Init(void) {
 	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false);
 	if (!SurvivalTest_Enabled) return;
@@ -531,11 +646,14 @@ static void SurvivalTest_Init(void) {
 	SurvivalTest_ResetState();
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
+	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 }
 
 static void SurvivalTest_Free(void) {
 	if (!SurvivalTest_Enabled) return;
 	Event_Unregister_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
+	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
+	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {

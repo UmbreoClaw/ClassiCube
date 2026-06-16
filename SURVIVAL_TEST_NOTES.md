@@ -85,6 +85,13 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   ground (faithful drop table, see below); walking near one picks it up into
   inventory. Placing consumes one from the selected slot. Creative-safe:
   `SurvivalTest_CanPlace()` returns true when disabled.
+- **Drop visuals**: drops **spin** (3°/tick), **bob** (~1 Hz), are **world-lit**, and
+  have a **pulsing white glow** (additive-style white alpha-blended cube overlay,
+  alpha = (sin(var3/10)*0.5+0.5)^4 * 0.4, peaking ~1×/sec) — all in `SurvivalTest.c`
+  (`SurvivalTest_RenderDropBlocks` / `_RenderDropGlow`). Still rendered at FULL block
+  size pending the size decision (see research note). Glow uses a `VERTEX_FORMAT_COLOURED`
+  dynamic VB (`st_glowVB`), recreated on `GfxEvents.ContextLost`.
+- **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
 - **Mushrooms**: right-click to eat — brown +5 HP, red −3 HP poison (`SurvivalTest_TryEat`).
@@ -129,13 +136,43 @@ per-version pages.
 
 ### Mining & drops
 - **Instant breaking** (no hardness/cracks — those are Indev).
-- **Physical item drops** (added in 0.24-s; 0.30 keeps them). Items pulse white,
-  full-block-pixel size; picked up by walking over them.
+- **Physical item drops** (added in 0.24-s; 0.30 keeps them).
 - Drop rules: most blocks drop themselves; **leaves→sapling (1/10)**, **grass→dirt**,
   **logs→3–5 planks**.
 
+### Item-drop visuals — from the DECOMPILED `Item.render()` (authoritative)
+Cross-checked across three independent decompilations (zhuowei/OpenClassic,
+good2000mo/OpenClassic, ManiaDevelopment/MCraft-Client 0.30-s). The real method:
+```
+var5 = level.getBrightness(x,y,z);          // world lighting (1.0 sky / 0.6 shade)
+var3 = rot + (tickCount+partial)*3.0;       // spin angle, 3 deg/tick = 60 deg/s
+glColor4f(var5,var5,var5,1);                // base = world lit
+bob  = sin(var3/10)*0.1 + 0.1;              // render-Y bob, ~1 Hz, range 0..0.2
+glTranslatef(.., y+bob, ..); glRotatef(var3,0,1,0);
+model.render();                             // PASS 1: lit textured block
+g = (sin(var3/10)*0.5+0.5);  g = g*g*g*g;   // glow curve, ^4 -> brief sharp peak
+glColor4f(1,1,1, g*0.4);                    // white, max 40% alpha
+glDisable(TEXTURE_2D); glBlendFunc(SRC_ALPHA, ONE);  // ADDITIVE solid white
+model.render();                             // PASS 2: white glow overlay
+```
+- **Spin: YES**, 3°/tick (60°/s), random initial angle. (Indev 0.31 changelog
+  "items don't spin/glow anymore" confirms ST did both.)
+- **Glow: additive solid-white second pass**, alpha = (sin(var3/10)*0.5+0.5)^4 * 0.4,
+  ~1 Hz, brief sharp peak. NOT a texture dim/brighten — a real white flash.
+- **Bob: YES**, sin(var3/10)*0.1+0.1, phase-locked to spin/glow (~1 Hz).
+- **Size: small center-cropped cube** (terrain.png middle 8 of 16 px), NOT a full
+  block. Full-size / uniformly "shrunken down blocks" is the *Indev 0.31* lineage.
+  ⚠️ Current ClassiCube uses a FULL `Models.Block` — biggest remaining divergence;
+  awaiting user's call (they liked the full-size look) before changing.
+- **No shadow** (entity shadow stub is empty in this engine era).
+- **Pickup: 3-tick (~0.15s) fly-to-player animation** (eased t², toward player feet),
+  still spinning/glowing during flight, then removed. (Not yet implemented — current
+  pickup is instant.)
+- **Despawn: age >= 6000 ticks (5 min)**. (Not yet implemented.)
+
 Sources: minecraft.wiki — Survival Test, Classic 0.24/0.27/0.30 SURVIVAL_TEST,
-Item (entity), Breaking, Damage, Pig, Skeleton, Indev 0.31.
+Item (entity), Breaking, Damage, Pig, Skeleton, Indev 0.31; decompiled `Item.java`
+(zhuowei/OpenClassic, good2000mo/OpenClassic, ManiaDevelopment/MCraft-Client).
 
 ---
 

@@ -417,8 +417,9 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	scale     = Gui_GetHotbarScale();
 	heartSize = (int)(9.0f * scale);
 
-	/* Position hearts above the hotbar, centred on it */
-	x = s->hotbar.x + s->hotbar.width / 2 - (10 * heartSize) / 2;
+	/* Survival Test draws the heart row flush with the hotbar's left edge */
+	/*  (not centred), so the bar grows rightwards from the first slot. */
+	x = s->hotbar.x;
 	y = s->hotbar.y - heartSize - (int)(2.0f * scale);
 
 	/* At 2 hearts (4 HP) or less the bar shakes, as it did in Survival Test */
