@@ -59,10 +59,17 @@ landed, so the next session knows where things stand:
   low priority).
 - `DROP_MAX = 64` pool: oldest-undropped silently skipped once full; fine for now.
 
-### DON'T build: block-breaking time / hardness
-Research verdict: c0.30-s broke blocks **instantly** (one click). Per-block hardness,
-hold-to-break, and the cracking overlay are **Indev** features (Feb 2010), not Survival
-Test. Instant breaking (ClassiCube's current behaviour) is already faithful. Skip it.
+### Block-breaking time (CLARIFIED — c0.30-s DID have a break timer)
+Correction (per user, 2026-06): Survival Test blocks did **not** break instantly —
+there was a **hold-to-break timer**, but it was a **single uniform duration for every
+block** (no per-block hardness — dirt, stone, etc. all took the same time). What is
+specifically *Indev* (Feb 2010) is **per-block hardness** (different blocks taking
+different times). The cracking/destroy-stage overlay also belongs to that later lineage.
+
+So a **uniform break time** is faithful to c0.30-s and is currently a **divergence**:
+ClassiCube breaks instantly (creative behaviour). Building a single fixed hold-to-break
+timer (same for all blocks, no crack overlay needed) would be the faithful fix.
+Not yet implemented — not started without an explicit go-ahead.
 
 ---
 
@@ -85,12 +92,16 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   ground (faithful drop table, see below); walking near one picks it up into
   inventory. Placing consumes one from the selected slot. Creative-safe:
   `SurvivalTest_CanPlace()` returns true when disabled.
-- **Drop visuals**: drops **spin** (3°/tick), **bob** (~1 Hz), are **world-lit**, and
-  have a **pulsing white glow** (additive-style white alpha-blended cube overlay,
-  alpha = (sin(var3/10)*0.5+0.5)^4 * 0.4, peaking ~1×/sec) — all in `SurvivalTest.c`
-  (`SurvivalTest_RenderDropBlocks` / `_RenderDropGlow`). Still rendered at FULL block
-  size pending the size decision (see research note). Glow uses a `VERTEX_FORMAT_COLOURED`
-  dynamic VB (`st_glowVB`), recreated on `GfxEvents.ContextLost`.
+- **Drop visuals**: drops render as a **small 0.25-block cube** (matching the
+  decompiled `ItemModel` — see research note), textured with only the **middle 50%**
+  (texels 4..12 of 16) of the block's tile on **every face**. They **spin** (3°/tick),
+  **bob** (~1 Hz), are **world-lit**, and have a **pulsing white glow** (additive-style
+  white alpha-blended shell, alpha = (sin(var3/10)*0.5+0.5)^4 * 0.4, peaking ~1×/sec).
+  All in `SurvivalTest.c`: the textured cube is built by hand in `DropItem_BuildItemCube`
+  (rotated XZ corners via `DropItem_RotatedCorners`, UV cropped from `Atlas1D_TexRec`,
+  drawn per-1D-atlas like the terrain particles into `st_itemVB`); the glow shell is
+  `SurvivalTest_BuildGlowCube` into `st_glowVB`. Both dynamic VBs are recreated on
+  `GfxEvents.ContextLost`. (Switched from the earlier full-size `Models.Block` approach.)
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
@@ -135,7 +146,9 @@ per-version pages.
 - Mob drops are **physical**: skeleton 4–9 arrows, pig/sheep mushrooms.
 
 ### Mining & drops
-- **Instant breaking** (no hardness/cracks — those are Indev).
+- **Uniform hold-to-break timer** — every block takes the *same* time to break;
+  **per-block hardness** and the crack overlay are Indev, not Survival Test.
+  (ClassiCube currently breaks instantly = a divergence; see the break-time section above.)
 - **Physical item drops** (added in 0.24-s; 0.30 keeps them).
 - Drop rules: most blocks drop themselves; **leaves→sapling (1/10)**, **grass→dirt**,
   **logs→3–5 planks**.
@@ -162,8 +175,10 @@ model.render();                             // PASS 2: white glow overlay
 - **Bob: YES**, sin(var3/10)*0.1+0.1, phase-locked to spin/glow (~1 Hz).
 - **Size: small center-cropped cube** (terrain.png middle 8 of 16 px), NOT a full
   block. Full-size / uniformly "shrunken down blocks" is the *Indev 0.31* lineage.
-  ⚠️ Current ClassiCube uses a FULL `Models.Block` — biggest remaining divergence;
-  awaiting user's call (they liked the full-size look) before changing.
+  Decompiled `ItemModel`: a cube of model-units -2..2 rendered at 1/16 scale =
+  a **0.25-block cube**, with UV cropped to u/v 0.25..0.75 on all 6 faces.
+  ✅ IMPLEMENTED (user chose fidelity over the full-size look they'd first liked) —
+  `DropItem_BuildItemCube` builds exactly this (`DROP_ITEM_HALF = 0.125`).
 - **No shadow** (entity shadow stub is empty in this engine era).
 - **Pickup: 3-tick (~0.15s) fly-to-player animation** (eased t², toward player feet),
   still spinning/glowing during flight, then removed. (Not yet implemented — current

@@ -12,10 +12,10 @@
 #include "Vectors.h"
 #include "ExtMath.h"
 #include "Screens.h"
-#include "Model.h"
 #include "Graphics.h"
 #include "Platform.h"
 #include "Lighting.h"
+#include "TexturePack.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -74,8 +74,15 @@ static void SurvivalTest_AddBlock(BlockID block);
 /* The spin angle also drives the bob and white-glow pulse, exactly as the */
 /*  original Item.render did (var3 advances the spin, sin(var3/10) the rest) */
 
+/* Survival Test's ItemModel is a separate, small hardcoded cube (-2..2 in */
+/*  1/16-scale model units = a 0.25-block cube), textured with only the */
+/*  middle 50% of the block's tile (u/v 0.25..0.75) on every face - NOT a */
+/*  full-size block. (Decompiled ItemModel.java, confirmed across multiple */
+/*  independent Survival Test source ports.) */
+#define DROP_ITEM_HALF 0.125f
+
 struct DropItem {
-	struct Entity entity;
+	Vec3 position;
 	Vec3 velocity;
 	BlockID block;
 	float pickupDelay;
@@ -85,7 +92,13 @@ struct DropItem {
 };
 static struct DropItem st_drops[DROP_MAX];
 
-/* Vertex buffer for the additive white-glow overlay (one cube per drop) */
+/* Vertex buffers: the textured item cube, and the additive white-glow shell */
+#define ITEM_VERTICES_PER_DROP 24
+#define ITEM_MAX_VERTICES (DROP_MAX * ITEM_VERTICES_PER_DROP)
+static GfxResourceID st_itemVB;
+static cc_uint16 item_1DCount[ATLAS1D_MAX_ATLASES];
+static cc_uint16 item_1DIndices[ATLAS1D_MAX_ATLASES];
+
 #define GLOW_VERTICES_PER_DROP 24
 #define GLOW_MAX_VERTICES (DROP_MAX * GLOW_VERTICES_PER_DROP)
 static GfxResourceID st_glowVB;
@@ -96,25 +109,80 @@ static float DropItem_Phase(struct DropItem* d) {
 	return d->rot0 + d->age * DROP_SPIN_DEG_PER_SEC;
 }
 
-static PackedCol DropItem_GetCol(struct Entity* e) {
-	/* Drops are lit by the world like in Survival Test (darker in shade); */
-	/*  the white pulse is a separate additive pass, not a tint here. */
-	int x = Math_Floor(e->Position.x);
-	int y = Math_Floor(e->Position.y);
-	int z = Math_Floor(e->Position.z);
+/* Drops are lit by the world like in Survival Test (darker in shade); */
+/*  the white pulse is a separate additive pass, not a tint here. */
+static PackedCol DropItem_WorldColor(Vec3* pos) {
+	int x = Math_Floor(pos->x);
+	int y = Math_Floor(pos->y);
+	int z = Math_Floor(pos->z);
 	return Lighting.Color(x, y, z);
 }
 
-static void DropItem_Despawn(struct Entity* e) { }
-static void DropItem_Tick(struct Entity* e, float delta) { }
-static void DropItem_SetLocation(struct Entity* e, struct LocationUpdate* update) { }
-static void DropItem_RenderModel(struct Entity* e, float delta, float t) { }
-static cc_bool DropItem_ShouldRenderName(struct Entity* e) { return false; }
+/* Computes the 4 rotated XZ corners (A=--, B=+-, C=++, D=-+) of a square of */
+/*  the given half-size, centred at (cx,cz) and spun by the drop's current */
+/*  spin angle - shared by both the item cube and its glow shell so they */
+/*  always line up with each other. */
+static void DropItem_RotatedCorners(float half, float cx, float cz, float angleRad,
+									 Vec3* a, Vec3* b, Vec3* c, Vec3* d) {
+	float cosA = Math_CosF(angleRad), sinA = Math_SinF(angleRad);
+	a->x = cx + (-half) * cosA - (-half) * sinA; a->z = cz + (-half) * sinA + (-half) * cosA;
+	b->x = cx + ( half) * cosA - (-half) * sinA; b->z = cz + ( half) * sinA + (-half) * cosA;
+	c->x = cx + ( half) * cosA - ( half) * sinA; c->z = cz + ( half) * sinA + ( half) * cosA;
+	d->x = cx + (-half) * cosA - ( half) * sinA; d->z = cz + (-half) * sinA + ( half) * cosA;
+}
 
-static const struct EntityVTABLE dropItem_VTABLE = {
-	DropItem_Tick, DropItem_Despawn, DropItem_SetLocation, DropItem_GetCol,
-	DropItem_RenderModel, DropItem_ShouldRenderName
-};
+/* Appends the 6-face, 24-vertex textured cube for one drop (cropped to the */
+/*  given UV rect on every face, matching the decompiled ItemModel exactly). */
+static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol col,
+									struct VertexTextured** vertices) {
+	struct VertexTextured* v = *vertices;
+	float var3   = DropItem_Phase(d);
+	float bob    = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
+	float yLo    = d->position.y + bob;
+	float yHi    = yLo + DROP_ITEM_HALF * 2.0f;
+	float u1 = rec.u1, v1 = rec.v1, u2 = rec.u2, v2 = rec.v2;
+	Vec3 a, b, c, e;
+
+	DropItem_RotatedCorners(DROP_ITEM_HALF, d->position.x, d->position.z,
+							 var3 * MATH_DEG2RAD, &a, &b, &c, &e);
+
+	#define ITEM_V(p, py, uu, vv) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v->U = (uu); v->V = (vv); v++;
+	ITEM_V(a,yLo, u1,v1) ITEM_V(b,yLo, u2,v1) ITEM_V(c,yLo, u2,v2) ITEM_V(e,yLo, u1,v2) /* bottom */
+	ITEM_V(a,yHi, u1,v1) ITEM_V(e,yHi, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(b,yHi, u1,v2) /* top    */
+	ITEM_V(a,yLo, u1,v1) ITEM_V(a,yHi, u2,v1) ITEM_V(b,yHi, u2,v2) ITEM_V(b,yLo, u1,v2) /* side AB */
+	ITEM_V(e,yLo, u1,v1) ITEM_V(c,yLo, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(e,yHi, u1,v2) /* side DC */
+	ITEM_V(a,yLo, u1,v1) ITEM_V(e,yLo, u2,v1) ITEM_V(e,yHi, u2,v2) ITEM_V(a,yHi, u1,v2) /* side AD */
+	ITEM_V(b,yLo, u1,v1) ITEM_V(b,yHi, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(c,yLo, u1,v2) /* side BC */
+	#undef ITEM_V
+	*vertices = v;
+}
+
+/* Appends a white cube (24 verts), slightly inflated, around one drop's */
+/*  bounds - same rotation/bob as the item cube so the glow always lines up. */
+static void SurvivalTest_BuildGlowCube(struct DropItem* d, PackedCol col, struct VertexColoured** vertices) {
+	struct VertexColoured* v = *vertices;
+	float var3   = DropItem_Phase(d);
+	float bob    = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
+	/* Inflate slightly so the white shell sits just outside the item cube */
+	/*  (avoids z-fighting with the textured cube drawn in the first pass). */
+	const float pad = 0.015f;
+	float yLo = d->position.y + bob - pad;
+	float yHi = yLo + (DROP_ITEM_HALF + pad) * 2.0f;
+	Vec3 a, b, c, e;
+
+	DropItem_RotatedCorners(DROP_ITEM_HALF + pad, d->position.x, d->position.z,
+							 var3 * MATH_DEG2RAD, &a, &b, &c, &e);
+
+	#define GLOW_V(p, py) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v++;
+	GLOW_V(a,yLo) GLOW_V(b,yLo) GLOW_V(c,yLo) GLOW_V(e,yLo) /* bottom */
+	GLOW_V(a,yHi) GLOW_V(e,yHi) GLOW_V(c,yHi) GLOW_V(b,yHi) /* top    */
+	GLOW_V(a,yLo) GLOW_V(a,yHi) GLOW_V(b,yHi) GLOW_V(b,yLo) /* side AB */
+	GLOW_V(e,yLo) GLOW_V(c,yLo) GLOW_V(c,yHi) GLOW_V(e,yHi) /* side DC */
+	GLOW_V(a,yLo) GLOW_V(e,yLo) GLOW_V(e,yHi) GLOW_V(a,yHi) /* side AD */
+	GLOW_V(b,yLo) GLOW_V(b,yHi) GLOW_V(c,yHi) GLOW_V(c,yLo) /* side BC */
+	#undef GLOW_V
+	*vertices = v;
+}
 
 static int SurvivalTest_FindFreeDropSlot(void) {
 	int i;
@@ -128,25 +196,16 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 /*  with a small random scatter-pop velocity (matches Survival Test's look). */
 static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	struct DropItem* d;
-	struct Entity* e;
 	float ang, speed;
 	int slot = SurvivalTest_FindFreeDropSlot();
 	if (slot < 0) return; /* drop limit reached - oldest drops simply aren't replaced */
 
 	d = &st_drops[slot];
-	e = &d->entity;
-	Mem_Set(e, 0, sizeof(struct Entity));
+	Mem_Set(d, 0, sizeof(struct DropItem));
 
-	e->VTABLE     = &dropItem_VTABLE;
-	e->Model      = Models.Block;
-	e->ModelBlock = block;
-	Vec3_Set(e->ModelScale, 1, 1, 1);
-	e->Flags = ENTITY_FLAG_HAS_MODELVB;
-
-	e->Position.x = coords.x + 0.5f;
-	e->Position.y = coords.y + 0.3f;
-	e->Position.z = coords.z + 0.5f;
-	Entity_UpdateModelBounds(e);
+	d->position.x = coords.x + 0.5f;
+	d->position.y = coords.y + 0.3f;
+	d->position.z = coords.z + 0.5f;
 
 	ang   = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
 	speed = 0.6f + Random_Float(&st_dropRng) * 0.6f;
@@ -196,24 +255,23 @@ static float SurvivalTest_DropGroundY(int x, int y, int z) {
 }
 
 static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
-	struct Entity* e = &d->entity;
 	float groundY;
 	int x, y, z;
 
 	d->velocity.y -= DROP_GRAVITY * delta;
 	if (d->velocity.y < -DROP_TERMINAL_VEL) d->velocity.y = -DROP_TERMINAL_VEL;
 
-	e->Position.x += d->velocity.x * delta;
-	e->Position.y += d->velocity.y * delta;
-	e->Position.z += d->velocity.z * delta;
+	d->position.x += d->velocity.x * delta;
+	d->position.y += d->velocity.y * delta;
+	d->position.z += d->velocity.z * delta;
 
-	x = Math_Floor(e->Position.x);
-	z = Math_Floor(e->Position.z);
-	y = Math_Floor(e->Position.y - 0.01f);
+	x = Math_Floor(d->position.x);
+	z = Math_Floor(d->position.z);
+	y = Math_Floor(d->position.y - 0.01f);
 	groundY = SurvivalTest_DropGroundY(x, y, z);
 
-	if (groundY > -1000.0f && e->Position.y <= groundY) {
-		e->Position.y = groundY;
+	if (groundY > -1000.0f && d->position.y <= groundY) {
+		d->position.y = groundY;
 		d->velocity.y = 0.0f;
 		d->velocity.x *= 0.7f;
 		d->velocity.z *= 0.7f;
@@ -227,9 +285,9 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	float distSq;
 	if (d->pickupDelay > 0.0f) return;
 
-	diff.x = d->entity.Position.x - pe->Position.x;
-	diff.y = d->entity.Position.y - pe->Position.y;
-	diff.z = d->entity.Position.z - pe->Position.z;
+	diff.x = d->position.x - pe->Position.x;
+	diff.y = d->position.y - pe->Position.y;
+	diff.z = d->position.z - pe->Position.z;
 	distSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
 	if (distSq > DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS) return;
 
@@ -256,54 +314,79 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 	}
 }
 
-/* Pass 1: the lit, textured block - spinning about Y and bobbing up/down. */
+/* Updates how many vertices belong to each 1D atlas, for batching draws */
+/*  (each drop's tile can land in a different 1D atlas / GL texture). */
+static void SurvivalTest_UpdateItem1DCounts(void) {
+	int i, index;
+	for (i = 0; i < Atlas1D.Count; i++) { item_1DCount[i] = 0; item_1DIndices[i] = 0; }
+
+	for (i = 0; i < DROP_MAX; i++) {
+		if (!st_drops[i].active) continue;
+		index = Atlas1D_Index(Block_Tex(st_drops[i].block, FACE_XMIN));
+		item_1DCount[index] += ITEM_VERTICES_PER_DROP;
+	}
+	for (i = 1; i < Atlas1D.Count; i++) {
+		item_1DIndices[i] = item_1DIndices[i - 1] + item_1DCount[i - 1];
+	}
+}
+
+/* Pass 1: the lit, textured item cube - cropped to the middle 50% of the */
+/*  block's tile on every face, spinning about Y and bobbing up/down. */
 static void SurvivalTest_RenderDropBlocks(void) {
 	struct DropItem* d;
-	struct Entity* e;
-	float var3, savedY;
-	int i;
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	TextureLoc loc;
+	TextureRec base, rec;
+	PackedCol col;
+	float du, dv;
+	int i, index, texIndex, offset;
+	cc_bool any = false;
 
-	Gfx_SetAlphaTest(true);
+	for (i = 0; i < DROP_MAX; i++) { if (st_drops[i].active) { any = true; break; } }
+	if (!any) return;
+
+	if (!st_itemVB) {
+		st_itemVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
+		if (!st_itemVB) return;
+	}
+
+	SurvivalTest_UpdateItem1DCounts();
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB, VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
+
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
 		if (!d->active) continue;
-		e = &d->entity;
 
-		var3      = DropItem_Phase(d);
-		e->RotY   = var3;                                   /* spin about Y */
-		savedY    = e->Position.y;
-		e->Position.y += Math_SinF(var3 / 10.0f) * 0.1f + 0.1f; /* bob */
+		loc   = Block_Tex(d->block, FACE_XMIN);
+		index = Atlas1D_Index(loc);
+		ptr   = data + item_1DIndices[index];
 
-		Model_Render(Models.Block, e);
-		e->Position.y = savedY;
+		/* Crop to the middle 50% (texels 4..12 of 16) of the tile, on every face */
+		base = Atlas1D_TexRec(loc, 1, &texIndex);
+		du = (base.u2 - base.u1) * 0.25f;
+		dv = (base.v2 - base.v1) * 0.25f;
+		rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
+		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
+
+		col = DropItem_WorldColor(&d->position);
+		DropItem_BuildItemCube(d, rec, col, &ptr);
+		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
+	}
+	Gfx_UnlockDynamicVb(st_itemVB);
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetAlphaTest(true);
+	offset = 0;
+	for (i = 0; i < Atlas1D.Count; i++) {
+		int vCount = item_1DCount[i];
+		if (!vCount) continue;
+
+		Atlas1D_Bind(i);
+		Gfx_DrawVb_IndexedTris_Range(vCount, offset, DRAW_HINT_NONE);
+		offset += vCount;
 	}
 	Gfx_SetAlphaTest(false);
-}
-
-/* Appends a white cube (24 verts) at the drop's bounds to the glow mesh. */
-static void SurvivalTest_BuildGlowCube(struct DropItem* d, float renderY,
-									   PackedCol col, struct VertexColoured** ptr) {
-	struct Entity* e = &d->entity;
-	struct VertexColoured* v = *ptr;
-	/* Inflate slightly so the white shell sits just outside the block faces */
-	/*  (avoids z-fighting with the textured block drawn in pass 1). */
-	const float pad = 0.03f;
-	float x1 = e->Position.x + e->ModelAABB.Min.x - pad;
-	float x2 = e->Position.x + e->ModelAABB.Max.x + pad;
-	float y1 = renderY       + e->ModelAABB.Min.y - pad;
-	float y2 = renderY       + e->ModelAABB.Max.y + pad;
-	float z1 = e->Position.z + e->ModelAABB.Min.z - pad;
-	float z2 = e->Position.z + e->ModelAABB.Max.z + pad;
-
-	#define GLOW_V(vx, vy, vz) v->x = (vx); v->y = (vy); v->z = (vz); v->Col = col; v++;
-	GLOW_V(x1,y1,z1) GLOW_V(x2,y1,z1) GLOW_V(x2,y1,z2) GLOW_V(x1,y1,z2) /* bottom */
-	GLOW_V(x1,y2,z1) GLOW_V(x1,y2,z2) GLOW_V(x2,y2,z2) GLOW_V(x2,y2,z1) /* top    */
-	GLOW_V(x1,y1,z1) GLOW_V(x1,y2,z1) GLOW_V(x2,y2,z1) GLOW_V(x2,y1,z1) /* zmin   */
-	GLOW_V(x1,y1,z2) GLOW_V(x2,y1,z2) GLOW_V(x2,y2,z2) GLOW_V(x1,y2,z2) /* zmax   */
-	GLOW_V(x1,y1,z1) GLOW_V(x1,y1,z2) GLOW_V(x1,y2,z2) GLOW_V(x1,y2,z1) /* xmin   */
-	GLOW_V(x2,y1,z1) GLOW_V(x2,y2,z1) GLOW_V(x2,y2,z2) GLOW_V(x2,y1,z2) /* xmax   */
-	#undef GLOW_V
-	*ptr = v;
 }
 
 /* Pass 2: the pulsing white glow. Survival Test redrew the item in solid */
@@ -315,7 +398,7 @@ static void SurvivalTest_RenderDropGlow(void) {
 	struct VertexColoured* ptr;
 	struct VertexColoured* start;
 	PackedCol col;
-	float var3, s, a, renderY;
+	float var3, s, a;
 	int i, count, alpha;
 
 	if (!st_glowVB) {
@@ -338,9 +421,8 @@ static void SurvivalTest_RenderDropGlow(void) {
 		alpha = (int)(a * 255.0f);
 		if (alpha < 2) continue;                      /* skip near-invisible */
 
-		col     = PackedCol_Make(255, 255, 255, alpha);
-		renderY = d->entity.Position.y + Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
-		SurvivalTest_BuildGlowCube(d, renderY, col, &ptr);
+		col = PackedCol_Make(255, 255, 255, alpha);
+		SurvivalTest_BuildGlowCube(d, col, &ptr);
 	}
 
 	count = (int)(ptr - start);
@@ -632,9 +714,10 @@ static void SurvivalTest_ResetState(void) {
 	}
 }
 
-/* The glow vertex buffer is a GPU resource and must be dropped/recreated */
-/*  whenever the graphics context is lost (it is rebuilt lazily on render). */
+/* The vertex buffers are GPU resources and must be dropped/recreated */
+/*  whenever the graphics context is lost (they are rebuilt lazily on render). */
 static void SurvivalTest_OnContextLost(void* obj) {
+	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
@@ -653,6 +736,7 @@ static void SurvivalTest_Free(void) {
 	if (!SurvivalTest_Enabled) return;
 	Event_Unregister_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
+	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
