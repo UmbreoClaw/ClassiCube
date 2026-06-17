@@ -207,9 +207,9 @@ model.render();                             // PASS 2: white glow overlay
   (blob-of-the-texture's-center-pixels), NOT a flower-shaped sprite. So the current
   ClassiCube behaviour (drops always use `DropItem_BuildItemCube`, never a sprite
   quad) is period-accurate, even though it looks rougher for plants than a cross
-  sprite would. **Not changed** pending explicit user sign-off on this tradeoff (see
-  ask in chat) — a sprite-quad path was prototyped and reverted as a non-source
-  deviation.
+  sprite would. **Confirmed keep-as-is** — user chose fidelity over a nicer-looking
+  but non-source cross-sprite deviation, after being told this matches the
+  decompiled source exactly.
 - **No shadow** (entity shadow stub is empty in this engine era).
 - **Pickup: 3-tick (~0.15s) fly-to-player animation** (eased t², toward player feet),
   still spinning/glowing during flight, then removed. (Not yet implemented — current
