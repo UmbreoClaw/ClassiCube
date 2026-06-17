@@ -381,11 +381,13 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	}
 
 	SurvivalTest_UpdateItem1DCounts();
-	data     = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB,  VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
-	glowData = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB, VERTEX_FORMAT_COLOURED,  GLOW_MAX_VERTICES);
-	glowPtr  = glowData;
-	glowCount = 0;
 
+	/* PASS 1 - the lit textured item cubes. NOTE: only ONE dynamic VB may be */
+	/*  locked at a time (the backend hands out a single shared scratch buffer */
+	/*  and the unlock uploads it), so the item VB must be fully locked, built, */
+	/*  unlocked and drawn before the glow VB is touched. The unlock also binds */
+	/*  its VB, so each pass's draw reads from the right buffer. */
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB, VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
 		if (!d->active) continue;
@@ -404,15 +406,8 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		col = DropItem_WorldColor(&d->position);
 		DropItem_BuildItemCube(d, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
-
-		/* White glow shell - alpha-blended over the item, independent of how */
-		/*  bright its lit colour already is (so it still reads in daylight) */
-		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d)));
-		DropItem_BuildGlowCube(d, glowCol, &glowPtr);
-		glowCount += GLOW_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_itemVB);
-	Gfx_UnlockDynamicVb(st_glowVB);
 
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_SetAlphaTest(true);
@@ -426,6 +421,21 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		offset += vCount;
 	}
 	Gfx_SetAlphaTest(false);
+
+	/* PASS 2 - the white glow shell, drawn over the items with alpha blending */
+	/*  and face culling (so only front faces blend, no boxy double-blend). */
+	glowData = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB, VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
+	glowPtr  = glowData;
+	glowCount = 0;
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active) continue;
+
+		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d)));
+		DropItem_BuildGlowCube(d, glowCol, &glowPtr);
+		glowCount += GLOW_VERTICES_PER_DROP;
+	}
+	Gfx_UnlockDynamicVb(st_glowVB);
 
 	if (glowCount > 0) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
