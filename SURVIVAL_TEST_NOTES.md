@@ -101,12 +101,20 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   drawn per-1D-atlas like the terrain particles into the single dynamic VB `st_itemVB`,
   recreated on `GfxEvents.ContextLost`). (Switched from the earlier full-size
   `Models.Block` approach.)
-  - **Glint = single-pass colour lerp toward white** (`DropItem_GlowAmount`,
-    `PackedCol_Lerp(litCol, WHITE, (sin(var3/10)*0.5+0.5)^4 * 0.5)`). The original did
-    an *additive* second white pass; the engine exposes no additive blend, and the
-    earlier attempt (a separate alpha-blended white *shell* cube) read as a boxy
-    translucent overlay + double-blended its faces — visible artifact. The lerp is a
-    clean approximation: no overlay, no z-fighting, flashes the item itself.
+  - **Glint = a second translucent white "shell" pass**, `DropItem_BuildGlowCube`,
+    same geometry as the item cube but `VERTEX_FORMAT_COLOURED` (flat colour, no
+    texture), alpha = `(sin(var3/10)*0.5+0.5)^4 * 0.4` (`DropItem_GlowAmount`) —
+    matches the decompiled curve and 0.4 max alpha exactly. Drawn with
+    `Gfx_SetFaceCulling(true)` + `Gfx_SetAlphaBlending(true)` + `Gfx_SetDepthWrite(false)`.
+    Two earlier attempts both failed: (1) the first shell attempt had no face culling,
+    so its own back faces blended in too, doubling up into a boxy/flashing artifact;
+    (2) lerping the item's *own* lit colour toward white was a no-op in full daylight,
+    since `Lighting.Color` is already pure white there — the glint was invisible
+    outdoors, exactly where it was tested. Face culling works because the hand-built
+    cube's vertex winding is consistent (verified: `cross(p1-p0, p2-p1)` gives the
+    correct outward normal for all 6 faces), so culling back faces leaves exactly the
+    visible front shell, matching the original's literal two-pass solid+glow render
+    (confirmed via decompiled `Item.render()` calling `model.render()` twice).
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
 - **HUD stack counts**: digits drawn at the natural font size (like the inventory
   screen) but anchored to each slot's block-icon **bottom-right**
@@ -188,6 +196,20 @@ model.render();                             // PASS 2: white glow overlay
   a **0.25-block cube**, with UV cropped to u/v 0.25..0.75 on all 6 faces.
   ✅ IMPLEMENTED (user chose fidelity over the full-size look they'd first liked) —
   `DropItem_BuildItemCube` builds exactly this (`DROP_ITEM_HALF = 0.125`).
+- **Same generic cube for every block, no sprite exception** — confirmed by reading
+  `Item.initModels()`: it builds one `ItemModel` per block ID unconditionally
+  (`models[id] = new ItemModel(block.textureId)`), and `render()` always calls
+  `models[resource].render()`. `ItemModel`'s constructor only special-cases UV
+  nudges for wool/cobblestone colour variants — never sprite/cross blocks. Roses,
+  dandelions, saplings and both mushrooms all predate c0.30 (added Classic 0.0.20a,
+  June 2009), so this isn't a "didn't exist yet" gap — dropped flowers/saplings/
+  mushrooms in real Survival Test really did look like the generic cropped cube
+  (blob-of-the-texture's-center-pixels), NOT a flower-shaped sprite. So the current
+  ClassiCube behaviour (drops always use `DropItem_BuildItemCube`, never a sprite
+  quad) is period-accurate, even though it looks rougher for plants than a cross
+  sprite would. **Not changed** pending explicit user sign-off on this tradeoff (see
+  ask in chat) — a sprite-quad path was prototyped and reverted as a non-source
+  deviation.
 - **No shadow** (entity shadow stub is empty in this engine era).
 - **Pickup: 3-tick (~0.15s) fly-to-player animation** (eased t², toward player feet),
   still spinning/glowing during flight, then removed. (Not yet implemented — current

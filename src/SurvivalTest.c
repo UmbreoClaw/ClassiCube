@@ -99,6 +99,13 @@ static GfxResourceID st_itemVB;
 static cc_uint16 item_1DCount[ATLAS1D_MAX_ATLASES];
 static cc_uint16 item_1DIndices[ATLAS1D_MAX_ATLASES];
 
+/* Untextured white glow shell, drawn additively over each item to give the */
+/*  brief Survival Test "twinkle". Needs its own vertex buffer/format since */
+/*  it has no texture - it's just a flat colour, alpha-blended over the item. */
+#define GLOW_VERTICES_PER_DROP 24
+#define GLOW_MAX_VERTICES (DROP_MAX * GLOW_VERTICES_PER_DROP)
+static GfxResourceID st_glowVB;
+
 /* Computes the spin/bob/glow animation phase for a drop. var3 is the running */
 /*  spin angle in degrees; sin(var3/10) (matching the original) drives bob+glow. */
 static float DropItem_Phase(struct DropItem* d) {
@@ -106,13 +113,15 @@ static float DropItem_Phase(struct DropItem* d) {
 }
 
 /* Survival Test redrew the item in additive white once per ~second for a */
-/*  brief glint. The engine exposes no additive blend, so instead of a second */
-/*  pass we lerp the item's own colour toward white on the same curve - a */
-/*  clean single-pass flash with no overlay/z-fighting artifacts. */
+/*  brief glint. NOTE: lerping the item's own lit colour towards white is a */
+/*  no-op in full daylight (the lit colour is already pure white there), so */
+/*  that approach was invisible outdoors. Instead this drives the alpha of a */
+/*  separate white glow shell (see DropItem_BuildGlowCube), which genuinely */
+/*  brightens the item regardless of how bright its lit colour already is. */
 static float DropItem_GlowAmount(struct DropItem* d) {
 	float s = Math_SinF(DropItem_Phase(d) / 10.0f) * 0.5f + 0.5f; /* 0..1 */
-	s = s * s * s;           /* ^3 -> a brief glint, mostly dim */
-	return s * 0.85f;        /* strong peak so it reads even in daylight */
+	s = s * s * s * s;       /* ^4, matching the decompiled glow curve exactly */
+	return s * 0.4f;         /* max alpha 0.4, matching the decompiled glColor4f(1,1,1,g*0.4) */
 }
 
 /* Drops are lit by the world like in Survival Test (darker in shade); */
@@ -137,20 +146,29 @@ static void DropItem_RotatedCorners(float half, float cx, float cz, float angleR
 	d->x = cx + (-half) * cosA - ( half) * sinA; d->z = cz + (-half) * sinA + ( half) * cosA;
 }
 
+/* Computes the world-space geometry (top/bottom Y and the 4 spun XZ corners) */
+/*  shared by the item cube, its glow shell, and the sprite-quad drop variant. */
+static void DropItem_ComputeGeometry(struct DropItem* d, float* yLo, float* yHi,
+									  Vec3* a, Vec3* b, Vec3* c, Vec3* e) {
+	float var3 = DropItem_Phase(d);
+	float bob  = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
+	*yLo = d->position.y + bob;
+	*yHi = *yLo + DROP_ITEM_HALF * 2.0f;
+
+	DropItem_RotatedCorners(DROP_ITEM_HALF, d->position.x, d->position.z,
+							 var3 * MATH_DEG2RAD, a, b, c, e);
+}
+
 /* Appends the 6-face, 24-vertex textured cube for one drop (cropped to the */
 /*  given UV rect on every face, matching the decompiled ItemModel exactly). */
 static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol col,
 									struct VertexTextured** vertices) {
 	struct VertexTextured* v = *vertices;
-	float var3   = DropItem_Phase(d);
-	float bob    = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
-	float yLo    = d->position.y + bob;
-	float yHi    = yLo + DROP_ITEM_HALF * 2.0f;
+	float yLo, yHi;
 	float u1 = rec.u1, v1 = rec.v1, u2 = rec.u2, v2 = rec.v2;
 	Vec3 a, b, c, e;
 
-	DropItem_RotatedCorners(DROP_ITEM_HALF, d->position.x, d->position.z,
-							 var3 * MATH_DEG2RAD, &a, &b, &c, &e);
+	DropItem_ComputeGeometry(d, &yLo, &yHi, &a, &b, &c, &e);
 
 	#define ITEM_V(p, py, uu, vv) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v->U = (uu); v->V = (vv); v++;
 	ITEM_V(a,yLo, u1,v1) ITEM_V(b,yLo, u2,v1) ITEM_V(c,yLo, u2,v2) ITEM_V(e,yLo, u1,v2) /* bottom */
@@ -160,6 +178,31 @@ static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol
 	ITEM_V(a,yLo, u1,v1) ITEM_V(e,yLo, u2,v1) ITEM_V(e,yHi, u2,v2) ITEM_V(a,yHi, u1,v2) /* side AD */
 	ITEM_V(b,yLo, u1,v1) ITEM_V(b,yHi, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(c,yLo, u1,v2) /* side BC */
 	#undef ITEM_V
+	*vertices = v;
+}
+
+/* Appends the 24-vertex untextured glow shell for one drop - identical */
+/*  geometry to the item cube, but flat white with alpha-blended glow */
+/*  intensity baked into the vertex colour's alpha channel. Drawn with face */
+/*  culling on (the cube's winding is consistent, see DropItem_RotatedCorners */
+/*  callers) so only the front faces blend - without culling, the unseen back */
+/*  faces would also blend in, doubling up and producing a boxy flash. */
+static void DropItem_BuildGlowCube(struct DropItem* d, PackedCol col,
+									struct VertexColoured** vertices) {
+	struct VertexColoured* v = *vertices;
+	float yLo, yHi;
+	Vec3 a, b, c, e;
+
+	DropItem_ComputeGeometry(d, &yLo, &yHi, &a, &b, &c, &e);
+
+	#define GLOW_V(p, py) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v++;
+	GLOW_V(a,yLo) GLOW_V(b,yLo) GLOW_V(c,yLo) GLOW_V(e,yLo) /* bottom   */
+	GLOW_V(a,yHi) GLOW_V(e,yHi) GLOW_V(c,yHi) GLOW_V(b,yHi) /* top      */
+	GLOW_V(a,yLo) GLOW_V(a,yHi) GLOW_V(b,yHi) GLOW_V(b,yLo) /* side AB  */
+	GLOW_V(e,yLo) GLOW_V(c,yLo) GLOW_V(c,yHi) GLOW_V(e,yHi) /* side DC  */
+	GLOW_V(a,yLo) GLOW_V(e,yLo) GLOW_V(e,yHi) GLOW_V(a,yHi) /* side AD  */
+	GLOW_V(b,yLo) GLOW_V(b,yHi) GLOW_V(c,yHi) GLOW_V(c,yLo) /* side BC  */
+	#undef GLOW_V
 	*vertices = v;
 }
 
@@ -316,11 +359,13 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	struct DropItem* d;
 	struct VertexTextured* data;
 	struct VertexTextured* ptr;
+	struct VertexColoured* glowData;
+	struct VertexColoured* glowPtr;
 	TextureLoc loc;
 	TextureRec base, rec;
-	PackedCol col;
+	PackedCol col, glowCol;
 	float du, dv;
-	int i, index, texIndex, offset;
+	int i, index, texIndex, offset, glowCount;
 	cc_bool any = false;
 
 	for (i = 0; i < DROP_MAX; i++) { if (st_drops[i].active) { any = true; break; } }
@@ -330,9 +375,16 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		st_itemVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
 		if (!st_itemVB) return;
 	}
+	if (!st_glowVB) {
+		st_glowVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
+		if (!st_glowVB) return;
+	}
 
 	SurvivalTest_UpdateItem1DCounts();
-	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB, VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
+	data     = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB,  VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
+	glowData = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB, VERTEX_FORMAT_COLOURED,  GLOW_MAX_VERTICES);
+	glowPtr  = glowData;
+	glowCount = 0;
 
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
@@ -350,11 +402,17 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
 
 		col = DropItem_WorldColor(&d->position);
-		col = PackedCol_Lerp(col, PACKEDCOL_WHITE, DropItem_GlowAmount(d)); /* white glint */
 		DropItem_BuildItemCube(d, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
+
+		/* White glow shell - alpha-blended over the item, independent of how */
+		/*  bright its lit colour already is (so it still reads in daylight) */
+		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d)));
+		DropItem_BuildGlowCube(d, glowCol, &glowPtr);
+		glowCount += GLOW_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_itemVB);
+	Gfx_UnlockDynamicVb(st_glowVB);
 
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_SetAlphaTest(true);
@@ -368,6 +426,17 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		offset += vCount;
 	}
 	Gfx_SetAlphaTest(false);
+
+	if (glowCount > 0) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
+		Gfx_SetFaceCulling(true);
+		Gfx_SetDepthWrite(false);
+		Gfx_SetAlphaBlending(true);
+		Gfx_DrawVb_IndexedTris_Range(glowCount, 0, DRAW_HINT_NONE);
+		Gfx_SetAlphaBlending(false);
+		Gfx_SetDepthWrite(true);
+		Gfx_SetFaceCulling(false);
+	}
 }
 
 void SurvivalTest_RenderDrops(float delta, float t) {
@@ -650,6 +719,7 @@ static void SurvivalTest_ResetState(void) {
 /*  whenever the graphics context is lost (it is rebuilt lazily on render). */
 static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
+	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
 static void SurvivalTest_Init(void) {
@@ -668,6 +738,7 @@ static void SurvivalTest_Free(void) {
 	Event_Unregister_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	Gfx_DeleteDynamicVb(&st_itemVB);
+	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {
