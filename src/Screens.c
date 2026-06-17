@@ -468,13 +468,14 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 	struct VertexTextured* cur = dst;
 	char digits[STRING_INT_CHARS];
 	int i, j, count, nDigits, totalW, savedY;
-	float half, cx, cy;
+	int slotRight, slotBottom, inset;
 
 	if (!SurvivalTest_Enabled) return 0;
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
 
 	savedY = atlas->tex.y;
-	half   = w->elemSize / 2.0f; /* half the block-icon size = slot content radius */
+	/* Small corner inset that scales with the slot size */
+	inset  = (int)(w->slotWidth * 0.12f);
 
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
 		count = SurvivalTest_HotbarCount(i);
@@ -485,12 +486,13 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 		totalW  = 0;
 		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'];
 
-		/* Slot block-icon centre (matches HotbarWidget_TileX / BuildEntriesMesh) */
-		cx = (float)(w->x + w->slotXOffset + w->slotWidth * i);
-		cy = (float)(w->y + w->height / 2);
+		/* Bottom-right corner of slot i's cell (cells are slotWidth apart, */
+		/*  starting at the hotbar's left edge - see HotbarWidget_PointerDown). */
+		slotRight  = (int)(w->x + w->slotWidth * (i + 1)) - inset;
+		slotBottom = (w->y + w->height) - inset;
 
-		atlas->curX  = (int)(cx + half) - totalW;            /* right edge of icon */
-		atlas->tex.y = (int)(cy + half) - atlas->tex.height; /* bottom edge of icon */
+		atlas->curX  = slotRight  - totalW;
+		atlas->tex.y = slotBottom - atlas->tex.height;
 		TextAtlas_AddInt(atlas, count, &cur);
 	}
 
