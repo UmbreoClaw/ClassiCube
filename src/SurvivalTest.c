@@ -92,21 +92,27 @@ struct DropItem {
 };
 static struct DropItem st_drops[DROP_MAX];
 
-/* Vertex buffers: the textured item cube, and the additive white-glow shell */
+/* Vertex buffer for the textured item cubes */
 #define ITEM_VERTICES_PER_DROP 24
 #define ITEM_MAX_VERTICES (DROP_MAX * ITEM_VERTICES_PER_DROP)
 static GfxResourceID st_itemVB;
 static cc_uint16 item_1DCount[ATLAS1D_MAX_ATLASES];
 static cc_uint16 item_1DIndices[ATLAS1D_MAX_ATLASES];
 
-#define GLOW_VERTICES_PER_DROP 24
-#define GLOW_MAX_VERTICES (DROP_MAX * GLOW_VERTICES_PER_DROP)
-static GfxResourceID st_glowVB;
-
 /* Computes the spin/bob/glow animation phase for a drop. var3 is the running */
 /*  spin angle in degrees; sin(var3/10) (matching the original) drives bob+glow. */
 static float DropItem_Phase(struct DropItem* d) {
 	return d->rot0 + d->age * DROP_SPIN_DEG_PER_SEC;
+}
+
+/* Survival Test redrew the item in additive white once per ~second for a */
+/*  brief glint. The engine exposes no additive blend, so instead of a second */
+/*  pass we lerp the item's own colour toward white on the same curve - a */
+/*  clean single-pass flash with no overlay/z-fighting artifacts. */
+static float DropItem_GlowAmount(struct DropItem* d) {
+	float s = Math_SinF(DropItem_Phase(d) / 10.0f) * 0.5f + 0.5f; /* 0..1 */
+	s = s * s * s * s;       /* ^4 -> brief sharp peak, mostly dim */
+	return s * 0.5f;         /* peak ~50% toward white */
 }
 
 /* Drops are lit by the world like in Survival Test (darker in shade); */
@@ -154,33 +160,6 @@ static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol
 	ITEM_V(a,yLo, u1,v1) ITEM_V(e,yLo, u2,v1) ITEM_V(e,yHi, u2,v2) ITEM_V(a,yHi, u1,v2) /* side AD */
 	ITEM_V(b,yLo, u1,v1) ITEM_V(b,yHi, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(c,yLo, u1,v2) /* side BC */
 	#undef ITEM_V
-	*vertices = v;
-}
-
-/* Appends a white cube (24 verts), slightly inflated, around one drop's */
-/*  bounds - same rotation/bob as the item cube so the glow always lines up. */
-static void SurvivalTest_BuildGlowCube(struct DropItem* d, PackedCol col, struct VertexColoured** vertices) {
-	struct VertexColoured* v = *vertices;
-	float var3   = DropItem_Phase(d);
-	float bob    = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
-	/* Inflate slightly so the white shell sits just outside the item cube */
-	/*  (avoids z-fighting with the textured cube drawn in the first pass). */
-	const float pad = 0.015f;
-	float yLo = d->position.y + bob - pad;
-	float yHi = yLo + (DROP_ITEM_HALF + pad) * 2.0f;
-	Vec3 a, b, c, e;
-
-	DropItem_RotatedCorners(DROP_ITEM_HALF + pad, d->position.x, d->position.z,
-							 var3 * MATH_DEG2RAD, &a, &b, &c, &e);
-
-	#define GLOW_V(p, py) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v++;
-	GLOW_V(a,yLo) GLOW_V(b,yLo) GLOW_V(c,yLo) GLOW_V(e,yLo) /* bottom */
-	GLOW_V(a,yHi) GLOW_V(e,yHi) GLOW_V(c,yHi) GLOW_V(b,yHi) /* top    */
-	GLOW_V(a,yLo) GLOW_V(a,yHi) GLOW_V(b,yHi) GLOW_V(b,yLo) /* side AB */
-	GLOW_V(e,yLo) GLOW_V(c,yLo) GLOW_V(c,yHi) GLOW_V(e,yHi) /* side DC */
-	GLOW_V(a,yLo) GLOW_V(e,yLo) GLOW_V(e,yHi) GLOW_V(a,yHi) /* side AD */
-	GLOW_V(b,yLo) GLOW_V(b,yHi) GLOW_V(c,yHi) GLOW_V(c,yLo) /* side BC */
-	#undef GLOW_V
 	*vertices = v;
 }
 
@@ -330,8 +309,9 @@ static void SurvivalTest_UpdateItem1DCounts(void) {
 	}
 }
 
-/* Pass 1: the lit, textured item cube - cropped to the middle 50% of the */
-/*  block's tile on every face, spinning about Y and bobbing up/down. */
+/* Renders the lit, textured item cubes - cropped to the middle 50% of the */
+/*  block's tile on every face, spinning about Y and bobbing up/down, with a */
+/*  brief white glint (~1 Hz) applied as a colour lerp toward white. */
 static void SurvivalTest_RenderDropBlocks(void) {
 	struct DropItem* d;
 	struct VertexTextured* data;
@@ -370,6 +350,7 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
 
 		col = DropItem_WorldColor(&d->position);
+		col = PackedCol_Lerp(col, PACKEDCOL_WHITE, DropItem_GlowAmount(d)); /* white glint */
 		DropItem_BuildItemCube(d, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
 	}
@@ -389,58 +370,9 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	Gfx_SetAlphaTest(false);
 }
 
-/* Pass 2: the pulsing white glow. Survival Test redrew the item in solid */
-/*  white with additive blending, the alpha following (sin(var3/10)*0.5+0.5)^4 */
-/*  so the glint is a brief, sharp white flash about once a second. We use a */
-/*  white alpha-blended cube (the engine has no additive blend exposed). */
-static void SurvivalTest_RenderDropGlow(void) {
-	struct DropItem* d;
-	struct VertexColoured* ptr;
-	struct VertexColoured* start;
-	PackedCol col;
-	float var3, s, a;
-	int i, count, alpha;
-
-	if (!st_glowVB) {
-		st_glowVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
-		if (!st_glowVB) return;
-	}
-
-	ptr   = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB,
-						VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
-	start = ptr;
-
-	for (i = 0; i < DROP_MAX; i++) {
-		d = &st_drops[i];
-		if (!d->active) continue;
-
-		var3 = DropItem_Phase(d);
-		s    = Math_SinF(var3 / 10.0f) * 0.5f + 0.5f; /* 0..1 */
-		s    = s * s * s * s;                         /* bias toward dim (^4) */
-		a    = s * 0.4f;                              /* peak ~40% white */
-		alpha = (int)(a * 255.0f);
-		if (alpha < 2) continue;                      /* skip near-invisible */
-
-		col = PackedCol_Make(255, 255, 255, alpha);
-		SurvivalTest_BuildGlowCube(d, col, &ptr);
-	}
-
-	count = (int)(ptr - start);
-	Gfx_UnlockDynamicVb(st_glowVB);
-	if (!count) return;
-
-	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
-	Gfx_SetAlphaBlending(true);
-	Gfx_SetDepthWrite(false);
-	Gfx_DrawVb_IndexedTris(count);
-	Gfx_SetDepthWrite(true);
-	Gfx_SetAlphaBlending(false);
-}
-
 void SurvivalTest_RenderDrops(float delta, float t) {
 	if (!SurvivalTest_Enabled) return;
 	SurvivalTest_RenderDropBlocks();
-	SurvivalTest_RenderDropGlow();
 }
 
 
@@ -714,11 +646,10 @@ static void SurvivalTest_ResetState(void) {
 	}
 }
 
-/* The vertex buffers are GPU resources and must be dropped/recreated */
-/*  whenever the graphics context is lost (they are rebuilt lazily on render). */
+/* The item vertex buffer is a GPU resource and must be dropped/recreated */
+/*  whenever the graphics context is lost (it is rebuilt lazily on render). */
 static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
-	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
 static void SurvivalTest_Init(void) {
@@ -737,7 +668,6 @@ static void SurvivalTest_Free(void) {
 	Event_Unregister_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	Gfx_DeleteDynamicVb(&st_itemVB);
-	Gfx_DeleteDynamicVb(&st_glowVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {

@@ -459,30 +459,59 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 }
 
 /* Builds the stack-count digits drawn over each hotbar slot. Uses the same */
-/*  digit atlas as the position display. Counts of 1 are left implicit. */
+/*  digit atlas as the position display, but scales the glyphs by the hotbar */
+/*  scale (so they track slot size in fullscreen) and anchors each number to */
+/*  the bottom-right of its slot, like vanilla. Counts of 1 are left implicit. */
 static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
 	struct TextAtlas* atlas = &s->posAtlas;
 	struct HotbarWidget* w  = &s->hotbar;
 	struct VertexTextured* cur = dst;
-	int i, count, slotX, savedY;
+	struct Texture part;
+	char digits[STRING_INT_CHARS];
+	int i, j, count, nDigits, d;
+	float f, half, cx, cy, penX, y, digitH, totalW;
 
 	if (!SurvivalTest_Enabled) return 0;
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
 
-	/* All counts sit along the bottom edge of the hotbar */
-	savedY       = atlas->tex.y;
-	atlas->tex.y = w->y + w->height - atlas->tex.height;
+	/* The atlas is a fixed font size; scale glyphs by the hotbar scale so they */
+	/*  stay proportional to the (resolution-dependent) slot size. */
+	f      = w->scale;
+	if (f < 1.0f) f = 1.0f;
+	digitH = atlas->tex.height * f;
+	half   = w->elemSize / 2.0f; /* half the block-icon size = slot content radius */
+
+	part.ID     = atlas->tex.ID;
+	part.uv.v1  = atlas->tex.uv.v1;
+	part.uv.v2  = atlas->tex.uv.v2;
+	part.height = (cc_uint16)digitH;
 
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
 		count = SurvivalTest_HotbarCount(i);
 		if (count <= 1) continue;
 
-		slotX        = (int)(w->x + w->slotXOffset + w->slotWidth * i);
-		atlas->curX  = slotX;
-		TextAtlas_AddInt(atlas, count, &cur);
-	}
+		nDigits = String_MakeUInt32((cc_uint32)count, digits);
+		totalW  = 0.0f;
+		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'] * f;
 
-	atlas->tex.y = savedY;
+		/* Slot block-icon centre (matches HotbarWidget_TileX / BuildEntriesMesh) */
+		cx   = (float)(w->x + w->slotXOffset + w->slotWidth * i);
+		cy   = (float)(w->y + w->height / 2);
+		penX = cx + half - totalW;  /* right-align to slot's right edge */
+		y    = cy + half - digitH;  /* bottom-align to slot's bottom edge */
+
+		/* String_MakeUInt32 writes least-significant first, so emit in reverse */
+		for (j = nDigits - 1; j >= 0; j--) {
+			d           = digits[j] - '0';
+			part.x      = (short)penX;
+			part.y      = (short)y;
+			part.width  = (cc_uint16)(atlas->widths[d] * f);
+			part.uv.u1  = atlas->offsets[d] * atlas->uScale;
+			part.uv.u2  = part.uv.u1 + atlas->widths[d] * atlas->uScale;
+			Gfx_Make2DQuad(&part, PACKEDCOL_WHITE, &cur);
+			penX += part.width;
+		}
+	}
 	return (int)(cur - dst);
 }
 

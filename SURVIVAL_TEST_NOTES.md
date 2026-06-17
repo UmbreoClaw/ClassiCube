@@ -95,14 +95,22 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
 - **Drop visuals**: drops render as a **small 0.25-block cube** (matching the
   decompiled `ItemModel` — see research note), textured with only the **middle 50%**
   (texels 4..12 of 16) of the block's tile on **every face**. They **spin** (3°/tick),
-  **bob** (~1 Hz), are **world-lit**, and have a **pulsing white glow** (additive-style
-  white alpha-blended shell, alpha = (sin(var3/10)*0.5+0.5)^4 * 0.4, peaking ~1×/sec).
+  **bob** (~1 Hz), are **world-lit**, and get a brief **white glint** (~1×/sec).
   All in `SurvivalTest.c`: the textured cube is built by hand in `DropItem_BuildItemCube`
   (rotated XZ corners via `DropItem_RotatedCorners`, UV cropped from `Atlas1D_TexRec`,
-  drawn per-1D-atlas like the terrain particles into `st_itemVB`); the glow shell is
-  `SurvivalTest_BuildGlowCube` into `st_glowVB`. Both dynamic VBs are recreated on
-  `GfxEvents.ContextLost`. (Switched from the earlier full-size `Models.Block` approach.)
+  drawn per-1D-atlas like the terrain particles into the single dynamic VB `st_itemVB`,
+  recreated on `GfxEvents.ContextLost`). (Switched from the earlier full-size
+  `Models.Block` approach.)
+  - **Glint = single-pass colour lerp toward white** (`DropItem_GlowAmount`,
+    `PackedCol_Lerp(litCol, WHITE, (sin(var3/10)*0.5+0.5)^4 * 0.5)`). The original did
+    an *additive* second white pass; the engine exposes no additive blend, and the
+    earlier attempt (a separate alpha-blended white *shell* cube) read as a boxy
+    translucent overlay + double-blended its faces — visible artifact. The lerp is a
+    clean approximation: no overlay, no z-fighting, flashes the item itself.
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
+- **HUD stack counts**: digit glyphs scale by the hotbar `scale` and anchor to each
+  slot's bottom-right (`HUDScreen_BuildCountsMesh`), so they track slot size correctly
+  in fullscreen (previously fixed font-16 size = too small/misplaced when scaled up).
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
 - **Mushrooms**: right-click to eat — brown +5 HP, red −3 HP poison (`SurvivalTest_TryEat`).
