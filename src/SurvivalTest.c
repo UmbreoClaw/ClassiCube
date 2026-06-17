@@ -111,8 +111,8 @@ static float DropItem_Phase(struct DropItem* d) {
 /*  clean single-pass flash with no overlay/z-fighting artifacts. */
 static float DropItem_GlowAmount(struct DropItem* d) {
 	float s = Math_SinF(DropItem_Phase(d) / 10.0f) * 0.5f + 0.5f; /* 0..1 */
-	s = s * s * s * s;       /* ^4 -> brief sharp peak, mostly dim */
-	return s * 0.5f;         /* peak ~50% toward white */
+	s = s * s * s;           /* ^3 -> a brief glint, mostly dim */
+	return s * 0.85f;        /* strong peak so it reads even in daylight */
 }
 
 /* Drops are lit by the world like in Survival Test (darker in shade); */

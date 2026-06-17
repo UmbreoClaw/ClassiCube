@@ -108,9 +108,10 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
     translucent overlay + double-blended its faces — visible artifact. The lerp is a
     clean approximation: no overlay, no z-fighting, flashes the item itself.
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
-- **HUD stack counts**: digit glyphs scale by the hotbar `scale` and anchor to each
-  slot's bottom-right (`HUDScreen_BuildCountsMesh`), so they track slot size correctly
-  in fullscreen (previously fixed font-16 size = too small/misplaced when scaled up).
+- **HUD stack counts**: digits drawn at the natural font size (like the inventory
+  screen) but anchored to each slot's block-icon **bottom-right**
+  (`HUDScreen_BuildCountsMesh`). The original fullscreen bug was *positioning*
+  (left-aligned/detached), not size — manual glyph scaling overshot and was reverted.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
 - **Mushrooms**: right-click to eat — brown +5 HP, red −3 HP poison (`SurvivalTest_TryEat`).
