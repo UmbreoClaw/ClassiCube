@@ -473,13 +473,14 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 
 	if (!SurvivalTest_Enabled) return 0;
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
+	if (!atlas->tex.height)    return 0;
 
-	/* The atlas is a fixed font size; scale glyphs by the hotbar scale so they */
-	/*  stay proportional to the (resolution-dependent) slot size. */
-	f      = w->scale;
-	if (f < 1.0f) f = 1.0f;
-	digitH = atlas->tex.height * f;
-	half   = w->elemSize / 2.0f; /* half the block-icon size = slot content radius */
+	/* Size the digits as a fixed fraction of the slot (the block-icon size), */
+	/*  so they always track slot size at any resolution. The font atlas is a */
+	/*  fixed size, so derive the glyph scale f from that target height. */
+	half   = w->elemSize / 2.0f;       /* half the block-icon size = slot content radius */
+	digitH = w->elemSize * 0.6f;       /* count height ~ vanilla proportion */
+	f      = digitH / atlas->tex.height;
 
 	part.ID     = atlas->tex.ID;
 	part.uv.v1  = atlas->tex.uv.v1;
