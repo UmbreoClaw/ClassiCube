@@ -50,10 +50,18 @@ void Gfx_SetAlphaTest(cc_bool enabled) {
 static void SetAlphaBlend(cc_bool enabled);
 void Gfx_SetAlphaBlending(cc_bool enabled) {
 	if (gfx_alphaBlend == enabled) return;
-	
+
 	gfx_alphaBlend = enabled;
 	SetAlphaBlend(enabled);
 }
+
+#if CC_GFX_BACKEND_IS_GL() || (CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9) || (CC_GFX_BACKEND == CC_GFX_BACKEND_D3D11)
+/* Real additive-blending implementations are defined in the backends */
+#else
+/* No cheap additive blend mode on this backend - fall back to regular alpha blending */
+/*  (slightly less punchy glow flashes, e.g. dropped item glint, but no visual breakage) */
+void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) { Gfx_SetAlphaBlending(enabled); }
+#endif
 
 /* Initialises/Restores render state */
 CC_NOINLINE static void Gfx_RestoreState(void);

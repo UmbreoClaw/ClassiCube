@@ -105,7 +105,7 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
     same geometry as the item cube but `VERTEX_FORMAT_COLOURED` (flat colour, no
     texture), alpha = `(sin(var3/10)*0.5+0.5)^4 * 0.4` (`DropItem_GlowAmount`) —
     matches the decompiled curve and 0.4 max alpha exactly. Drawn with
-    `Gfx_SetFaceCulling(true)` + `Gfx_SetAlphaBlending(true)` + `Gfx_SetDepthWrite(false)`.
+    `Gfx_SetFaceCulling(true)` + `Gfx_SetAlphaBlendingAdditive(true)` + `Gfx_SetDepthWrite(false)`.
     Two earlier attempts both failed: (1) the first shell attempt had no face culling,
     so its own back faces blended in too, doubling up into a boxy/flashing artifact;
     (2) lerping the item's *own* lit colour toward white was a no-op in full daylight,
@@ -115,6 +115,20 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
     correct outward normal for all 6 faces), so culling back faces leaves exactly the
     visible front shell, matching the original's literal two-pass solid+glow render
     (confirmed via decompiled `Item.render()` calling `model.render()` twice).
+    A third issue: even after the above two fixes, the flash still looked "wrong"/
+    flatter than the reference client. Root cause: the shell pass used standard
+    interpolative alpha blending (`dst = dst*(1-a) + src*a`), but the decompiled
+    `Item.render()` explicitly does `glBlendFunc(SRC_ALPHA, ONE)` — genuine **additive**
+    blending (`dst = dst + src*a`), a different curve entirely (not reproducible via
+    repeated standard-blend passes). Added a new cross-platform primitive,
+    `Gfx_SetAlphaBlendingAdditive(cc_bool)` (`Graphics.h`), with real implementations
+    for GL1/GL11/GL2 (`_GLShared.h`, toggling `glBlendFunc` between
+    `SRC_ALPHA,ONE_MINUS_SRC_ALPHA` and `SRC_ALPHA,ONE`), D3D9 (`Graphics_D3D9.c`,
+    same toggle via `D3DRS_DESTBLEND`), and D3D11 (`Graphics_D3D11.c`, widened the
+    precomputed `om_blendStates` lookup table with an extra "additive" bit folded into
+    `DestBlend`/`DestBlendAlpha`). All other backends fall back to regular
+    `Gfx_SetAlphaBlending` via a generic default in `_GraphicsBase.h` (slightly less
+    punchy glow, but no breakage) since none of those platforms build from this branch.
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
 - **HUD stack counts**: digits drawn at the natural font size (like the inventory
   screen) but anchored to each slot's block-icon **bottom-right**

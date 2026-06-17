@@ -983,11 +983,12 @@ void Gfx_DisableMipmaps(void) {
 static ID3D11RenderTargetView* backbuffer;
 static ID3D11Texture2D* depthbuffer;
 static ID3D11DepthStencilView* depthbufferView;
-static ID3D11BlendState* om_blendStates[16 * 2];
+static ID3D11BlendState* om_blendStates[16 * 2 * 2];
 static ID3D11DepthStencilState* om_depthStates[4];
 static float gfx_clearColor[4];
 static cc_bool gfx_channels[4] = { true, true, true, true };
 static cc_bool gfx_depthTest, gfx_depthWrite;
+static cc_bool gfx_alphaBlendAdditive;
 
 static void OM_Clear(GfxBuffers buffers) {
 	if (buffers & GFX_BUFFER_COLOR) {
@@ -1065,19 +1066,20 @@ static void OM_CreateBlendStates(void) {
 	desc.RenderTarget[0].BlendOpAlpha   = D3D11_BLEND_OP_ADD;
 	desc.RenderTarget[0].SrcBlend       = D3D11_BLEND_SRC_ALPHA;
 	desc.RenderTarget[0].SrcBlendAlpha  = D3D11_BLEND_SRC_ALPHA;
-	desc.RenderTarget[0].DestBlend      = D3D11_BLEND_INV_SRC_ALPHA;
-	desc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
 
-	for (int i = 0; i < Array_Elems(om_blendStates); i++) 
+	for (int i = 0; i < Array_Elems(om_blendStates); i++)
 	{
 		int mask = 0;
 		if (i & 0x01) mask |= D3D11_COLOR_WRITE_ENABLE_RED;
 		if (i & 0x02) mask |= D3D11_COLOR_WRITE_ENABLE_GREEN;
 		if (i & 0x04) mask |= D3D11_COLOR_WRITE_ENABLE_BLUE;
 		if (i & 0x08) mask |= D3D11_COLOR_WRITE_ENABLE_ALPHA;
-		
+
 		desc.RenderTarget[0].RenderTargetWriteMask = mask;
 		desc.RenderTarget[0].BlendEnable           = (i & 0x10) != 0;
+		/* dst = dst + src * alpha, instead of the usual dst = dst*(1-alpha) + src*alpha */
+		desc.RenderTarget[0].DestBlend             = (i & 0x20) ? D3D11_BLEND_ONE : D3D11_BLEND_INV_SRC_ALPHA;
+		desc.RenderTarget[0].DestBlendAlpha        = desc.RenderTarget[0].DestBlend;
 
 		hr = ID3D11Device_CreateBlendState(device, &desc, &om_blendStates[i]);
 		if (hr) Process_Abort2(hr, "Failed to create blend state");
@@ -1085,7 +1087,7 @@ static void OM_CreateBlendStates(void) {
 }
 
 static void OM_UpdateBlendState(void) {
-	int idx = (gfx_channels[0]) | (gfx_channels[1] << 1) | (gfx_channels[2] << 2) | (gfx_channels[3] << 3) | (gfx_alphaBlend << 4);
+	int idx = (gfx_channels[0]) | (gfx_channels[1] << 1) | (gfx_channels[2] << 2) | (gfx_channels[3] << 3) | (gfx_alphaBlend << 4) | (gfx_alphaBlendAdditive << 5);
 	ID3D11BlendState* blendState = om_blendStates[idx];
 	ID3D11DeviceContext_OMSetBlendState(context, blendState, NULL, 0xffffffff);
 }
@@ -1136,6 +1138,12 @@ void Gfx_SetDepthWrite(cc_bool enabled) {
 }
 
 static void SetAlphaBlend(cc_bool enabled) {
+	OM_UpdateBlendState();
+}
+
+void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
+	gfx_alphaBlend         = enabled;
+	gfx_alphaBlendAdditive = enabled;
 	OM_UpdateBlendState();
 }
 

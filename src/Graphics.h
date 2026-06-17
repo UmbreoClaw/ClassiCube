@@ -254,6 +254,10 @@ CC_API void Gfx_SetAlphaTest(cc_bool enabled);
 CC_API void Gfx_SetAlphaBlending(cc_bool enabled);
 /* Sets whether blending between the alpha components of texture and vertex colour is performed */
 CC_API void Gfx_SetAlphaArgBlend(cc_bool enabled);
+/* Sets whether existing and new pixels are blended together additively (dst = dst + src * alpha) */
+/*  instead of the usual interpolation (dst = dst * (1-alpha) + src * alpha). Backends without a */
+/*  cheap additive mode fall back to regular alpha blending. */
+CC_API void Gfx_SetAlphaBlendingAdditive(cc_bool enabled);
 
 /* Sets whether pixels may be discard based on z/depth */
 CC_API void Gfx_SetDepthTest(cc_bool enabled);

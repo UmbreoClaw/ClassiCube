@@ -441,9 +441,9 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 		Gfx_SetFaceCulling(true);
 		Gfx_SetDepthWrite(false);
-		Gfx_SetAlphaBlending(true);
+		Gfx_SetAlphaBlendingAdditive(true);
 		Gfx_DrawVb_IndexedTris_Range(glowCount, 0, DRAW_HINT_NONE);
-		Gfx_SetAlphaBlending(false);
+		Gfx_SetAlphaBlendingAdditive(false);
 		Gfx_SetDepthWrite(true);
 		Gfx_SetFaceCulling(false);
 	}

@@ -255,10 +255,16 @@ void Gfx_SetFaceCulling(cc_bool enabled) {
 	if (enabled) { _glEnable(GL_CULL_FACE); } else { _glDisable(GL_CULL_FACE); }
 }
 
-static void SetAlphaBlend(cc_bool enabled) { 
+static void SetAlphaBlend(cc_bool enabled) {
 	if (enabled) { _glEnable(GL_BLEND); } else { _glDisable(GL_BLEND); }
 }
 void Gfx_SetAlphaArgBlend(cc_bool enabled) { }
+
+void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
+	Gfx_SetAlphaBlending(enabled);
+	/* dst = dst + src * alpha, instead of the usual dst = dst*(1-alpha) + src*alpha */
+	_glBlendFunc(GL_SRC_ALPHA, enabled ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+}
 
 static void GL_ClearColor(PackedCol color) {
 	_glClearColor(PackedCol_R(color) / 255.0f, PackedCol_G(color) / 255.0f,
