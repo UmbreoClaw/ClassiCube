@@ -74,6 +74,9 @@ static struct HUDScreen {
 	struct FontDesc font;
 	struct TextWidget line1, line2;
 	struct TextAtlas posAtlas;
+	/* Separate, unpadded digit atlas for hotbar stack counts, so the glyph */
+	/*  metrics are exact (the padded posAtlas threw off corner alignment). */
+	struct TextAtlas countAtlas;
 	float accumulator;
 	int frames, posCount;
 	cc_bool hacksChanged;
@@ -206,16 +209,20 @@ static void HUDScreen_ContextLost(void* screen) {
 	Screen_ContextLost(screen);
 
 	TextAtlas_Free(&s->posAtlas);
+	TextAtlas_Free(&s->countAtlas);
 	Elem_Free(&s->hotbar);
 	Elem_Free(&s->line1);
 	Elem_Free(&s->line2);
 }
 
-static void HUDScreen_ContextRecreated(void* screen) {	
+static void HUDScreen_ContextRecreated(void* screen) {
 	static const cc_string chars  = String_FromConst("0123456789-, ()");
 	static const cc_string prefix = String_FromConst("Position: ");
+	static const cc_string digits = String_FromConst("0123456789");
+	static const cc_string empty  = String_FromConst("");
 
 	struct HUDScreen* s = (struct HUDScreen*)screen;
+	struct FontDesc countFont;
 	Screen_UpdateVb(s);
 
 	Font_Make(&s->font, 16, FONT_FLAGS_PADDING);
@@ -225,6 +232,12 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	HUDScreen_RemakeLine1(s);
 	TextAtlas_Make(&s->posAtlas, &chars, &s->font, &prefix);
 	HUDScreen_RemakeLine2(s);
+
+	/* Unpadded digit atlas for stack counts (exact glyph metrics). The font */
+	/*  is only needed to rasterise the atlas, so it can be freed right after. */
+	Font_Make(&countFont, 16, FONT_FLAGS_NONE);
+	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
+	Font_Free(&countFont);
 }
 
 int HUDScreen_LayoutHotbar(void) {
@@ -458,45 +471,62 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	return (int)(cur - dst);
 }
 
-/* Builds the stack-count digits drawn over each hotbar slot. Uses the same */
-/*  digit atlas as the position display, at its natural font size (like the */
-/*  inventory screen), anchored to the bottom-right of each slot's block icon */
-/*  like vanilla. Counts of 1 are left implicit. */
+/* Builds the stack-count digits drawn over each hotbar slot. Uses the */
+/*  unpadded count atlas, scaled per-frame to a fraction of the slot size */
+/*  (so it tracks the hotbar in fullscreen) and anchored to each slot cell's */
+/*  bottom-right corner, like vanilla. Counts of 1 are left implicit. */
 static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
-	struct TextAtlas* atlas = &s->posAtlas;
+	struct TextAtlas* atlas = &s->countAtlas;
 	struct HotbarWidget* w  = &s->hotbar;
 	struct VertexTextured* cur = dst;
+	struct Texture part;
 	char digits[STRING_INT_CHARS];
-	int i, j, count, nDigits, totalW, savedY;
+	int i, j, count, nDigits, d;
 	int slotRight, slotBottom, inset;
+	float f, digitH, totalW, penX;
 
 	if (!SurvivalTest_Enabled) return 0;
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
+	if (!atlas->tex.height)    return 0;
 
-	savedY = atlas->tex.y;
-	/* Small corner inset that scales with the slot size */
-	inset  = (int)(w->slotWidth * 0.12f);
+	/* Target digit height ~ a third of the slot cell, so it scales with the */
+	/*  hotbar; derive the glyph scale from the (unpadded) atlas height. */
+	digitH = w->slotWidth * 0.34f;
+	f      = digitH / atlas->tex.height;
+	inset  = (int)(w->slotWidth * 0.1f);
+
+	part.ID     = atlas->tex.ID;
+	part.uv.v1  = atlas->tex.uv.v1;
+	part.uv.v2  = atlas->tex.uv.v2;
+	part.height = (cc_uint16)digitH;
 
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
 		count = SurvivalTest_HotbarCount(i);
 		if (count <= 1) continue;
 
-		/* Measure the number's pixel width so it can be right-aligned */
 		nDigits = String_MakeUInt32((cc_uint32)count, digits);
-		totalW  = 0;
-		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'];
+		totalW  = 0.0f;
+		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'] * f;
 
 		/* Bottom-right corner of slot i's cell (cells are slotWidth apart, */
 		/*  starting at the hotbar's left edge - see HotbarWidget_PointerDown). */
 		slotRight  = (int)(w->x + w->slotWidth * (i + 1)) - inset;
 		slotBottom = (w->y + w->height) - inset;
 
-		atlas->curX  = slotRight  - totalW;
-		atlas->tex.y = slotBottom - atlas->tex.height;
-		TextAtlas_AddInt(atlas, count, &cur);
-	}
+		penX     = slotRight - totalW;
+		part.y   = (short)(slotBottom - (int)digitH);
 
-	atlas->tex.y = savedY;
+		/* String_MakeUInt32 writes least-significant first, so emit reversed */
+		for (j = nDigits - 1; j >= 0; j--) {
+			d           = digits[j] - '0';
+			part.x      = (short)penX;
+			part.width  = (cc_uint16)(atlas->widths[d] * f);
+			part.uv.u1  = atlas->offsets[d] * atlas->uScale;
+			part.uv.u2  = part.uv.u1 + atlas->widths[d] * atlas->uScale;
+			Gfx_Make2DQuad(&part, PACKEDCOL_WHITE, &cur);
+			penX += part.width;
+		}
+	}
 	return (int)(cur - dst);
 }
 
@@ -567,8 +597,8 @@ static void HUDScreen_Render(void* screen, float delta) {
 		}
 
 		/* Draw survival hotbar stack counts (digit atlas) */
-		if (SurvivalTest_Enabled && s->countVertices > 0 && s->posAtlas.tex.ID) {
-			Gfx_BindTexture(s->posAtlas.tex.ID);
+		if (SurvivalTest_Enabled && s->countVertices > 0 && s->countAtlas.tex.ID) {
+			Gfx_BindTexture(s->countAtlas.tex.ID);
 			Gfx_BindDynamicVb(s->vb);
 			Gfx_DrawVb_IndexedTris_Range(s->countVertices,
 				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES,
