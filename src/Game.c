@@ -504,6 +504,7 @@ static void Render3DFrame(float delta, float t) {
 	AxisLinesRenderer_Render();
 	Entities_RenderModels(delta, t);
 	SurvivalTest_RenderDrops(delta, t);
+	SurvivalTest_RenderMobs(delta, t);
 	EntityNames_Render();
 
 	Particles_Render(t);

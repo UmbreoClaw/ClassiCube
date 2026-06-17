@@ -10,7 +10,84 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ## NEXT TASK (agreed — start here next session)
 
-**Physical dropped-item entities + drop table correction: DONE this session.**
+**Mob entity system (spawning/AI/combat/death/render): DONE this session.**
+
+Implemented entirely in `src/SurvivalTest.c` (+ hooks in `src/SurvivalTest.h`,
+`src/Game.c`, `src/InputHandler.c`), based on decompiled `Mob.java`/`AI.java`/
+`BasicAI.java`/`BasicAttackAI.java`/`JumpAttackAI.java`/`Zombie.java`/
+`Skeleton.java`/`Spider.java`/`Creeper.java`/`Pig.java`/`MobSpawner.java`/
+`SurvivalGameMode.java` (not guessed). Summary of what landed:
+
+- **6 species**, fixed pool `st_mobs[MOB_MAX=32]`, each wrapping a plain
+  `struct Entity` (`Mob.Base`) the same way drops do — simulated/rendered
+  entirely inside `SurvivalTest.c`, never added to the networked `Entities.List[]`.
+  Per-species table (`mobTypeInfo[]`): Zombie (AI=attack, runSpeed 1.0,
+  damage 6, lookAngle 30°), Skeleton (attack, 0.3, damage 8, melee-only —
+  no projectile system), Pig (passive, 0.7), Creeper (attack, 0.7, damage 6,
+  lookAngle 45°, self-damaging/explodes), Spider (jump-attack lunge, 0.56),
+  Sheep (passive, 0.7).
+- **Physics**: faithful port of `Mob.travel()`/`moveRelative()` — gravity
+  0.08, drag (.91,.98,.91), ground friction (.6,1,.6), jump velocity 0.42 —
+  reusing the engine's `CollisionsComp`/`Collisions_MoveAndWallSlide` for
+  wall/ground collision (same as `LocalPlayer`). Water/lava use the
+  original's drag constants (0.8/0.5) with a simplified upward-nudge paddle
+  assist instead of the exact `isFree` port.
+- **AI**: wander (7%/tick new direction, 1%/tick jump, 4%/tick ±30° turn
+  impulse), chase (full speed toward target, 4%/tick hop / 80%/tick while
+  submerged), attack (aggro range 16 blocks, gives up at 32 blocks with a 1%
+  roll/tick, attacks within 2 blocks, delay 10+rand(20) ticks, damage
+  `(int)((rand+rand)/2*damage+1)`), Spider's jump-attack lunges at the
+  target when it has one. Facing uses `Math_Atan2f` on the CC-native yaw
+  convention (re-derived from `Vec3_RotateY3`, not a literal port of Java's
+  raw yRot formula).
+- **Combat**: flat 20-tick invincibility window (simplification of Java's
+  dual-threshold `invulnerableTime`), knockback away from attacker, aggro-on-hit
+  for non-passive mobs, player fist deals flat 4 HP (`SurvivalTest_TryAttackMob`,
+  wired into `InputHandler_Tick`'s left-click so it's tried before block-breaking).
+  Picking uses `Intersection_RayIntersectsRotatedBox` against each mob's AABB,
+  gated by `ReachDistance`, same pattern as block picking.
+- **Death/drops**: Pig spawns exactly 1–2 brown mushrooms (`(int)(rand+rand+1)`,
+  not 1–3) via the existing drop-entity system; Sheep has no drop (passive,
+  no `die()` override in source). Creeper explodes ~20 ticks after death,
+  radius-4 sphere block destruction (TNT-immune blocks skipped, faithful to
+  `BlocksTNT`), player damage falls off linearly with distance, capped at
+  `MOB_MAX_HEALTH*0.6` (~12 HP) at point-blank — exact Java falloff curve
+  unknown, this is an approximation. Creeper also self-damages 6 HP per
+  successful attack (matches `Creeper$1.attack()`), dying after ~4 hits.
+- **Spawning**: faithful port of `MobSpawner.spawn()`'s cluster-jitter
+  algorithm (3 outer x 3 inner jitter, vertical jitter always 0 — a quirk
+  preserved from the original, not a bug), including the
+  `distSq < 256` avoid-skip-but-still-consume-jitter behaviour. Periodic gate
+  (`SurvivalTest_TrySpawnMobs`, called every tick): `area = volume/64³`,
+  spawns if `rand(100) < area && mobCount < area*20`. Initial population on
+  map load (`SurvivalTest_SpawnInitialMobs`): `area = volume/800`, avoiding
+  the map spawn point.
+- **Rendering**: `SurvivalTest_RenderMobs` reuses `Model_Render`/
+  `AnimatedComp_GetCurrent`/`Model_ShouldRender`, hooked into `Game.c`'s
+  `Render3DFrame` right after `SurvivalTest_RenderDrops`. Needed a real
+  `EntityVTABLE` (`mob_VTABLE`) with a working `GetCol` since `Model_SetupState`
+  calls `e->VTABLE->GetCol(e)` directly — all other slots are NULL since
+  mobs are ticked/rendered by hand, never through generic Entity dispatch.
+  `Mob_GetColor` blends in a red hit-flash based on `hurtTicks`.
+- Verified: `gcc -fsyntax-only` clean on all three touched files, then a full
+  `make -j$(nproc)` build compiles **and links** with zero errors/warnings
+  (the earlier `-lXi`/`-lGL` link failure was just missing system dev
+  packages in this container — resolved by installing `libgl1-mesa-dev` +
+  `libxi-dev` after an `apt-get update`; not a code issue). Not yet tested
+  in a running game (no display in this container) — worth an in-game pass
+  next session: spawn rates, wander/chase/attack feel, knockback, creeper
+  explosion radius/damage, pig drops.
+
+### Possible follow-ups (not done, not asked for yet)
+- Skeleton arrow-shooting (needs a projectile system — out of scope here).
+- Despawn-at-distance and mob-mob push-apart physics (dropped, minor).
+- Mob death animation / fall-over before removal (currently mobs just
+  freeze in place during `deathTicks` then vanish).
+- Mob names/render distance culling tuning, sound effects on hurt/death.
+
+---
+
+**Physical dropped-item entities + drop table correction: DONE (earlier session).**
 
 Implemented in `src/SurvivalTest.c` (+ one hook in `src/Game.c`). Summary of what
 landed, so the next session knows where things stand:
@@ -146,8 +223,8 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   (ClassiCube-SurvivalTest-Win32/Win64, 14-day retention).
 
 ### Decisions made
-- Combat/mobs: **deferred**. ClassiCube has mob *models* but no mob system (no spawn/AI,
-  no mob entity type). Focus on simpler mechanics first.
+- Combat/mobs: **implemented this session** (see NEXT TASK above) — full spawn/AI/
+  combat/death/render system, client-simulated, not networked.
 - Death: **faithful Game Over / permadeath** (chosen over keeping respawn).
 
 ---
@@ -167,14 +244,33 @@ per-version pages.
 - Knockback + white hurt-flash + death animation: yes (not yet implemented).
 - **Death = permadeath "Game over!"**, world ends; only option generate a new level.
 
-### Combat (DEFERRED — for when mobs are built)
+### Combat (IMPLEMENTED — see decompiled-source figures below)
+Figures below are from the recovered decompiled `Mob.java`/`Zombie.java`/
+`Skeleton.java`/`Spider.java`/`Creeper.java`/`Pig.java`/`BasicAttackAI.java`
+(ground truth, supersedes the earlier wiki-reconstructed guesses).
 - Player fist: flat **4 HP/hit**. All mobs have **20 HP** (5 punches to kill).
-- Zombie/Skeleton melee: **1–6 HP random**. Creeper melee 2–6 HP.
-- Creeper **explodes only on death**: up to **12 HP (6 hearts)**, distance-scaled.
+- Melee damage formula: `(int)((rand+rand)/2*damage+1)` where `damage` is the
+  mob's base figure below (so actual hit range is roughly 1..damage, weighted
+  toward the middle, not uniform).
+  - **Zombie**: base damage **6** → ~1–6 HP/hit.
+  - **Skeleton**: base damage **8** → ~1–8 HP/hit. Melee-only in this
+    implementation (no projectile system for its real ranged attack).
+  - **Spider**: base damage **6** → ~1–6 HP/hit (jump-attack lunge, not a
+    bigger hit).
+  - **Creeper**: base damage **6** → ~1–6 HP/hit (same as Zombie, NOT 2–6 as
+    previously guessed). Also **self-damages 6 HP per successful attack**
+    (`Creeper$1.attack()`), dying after ~4 successful hits even without being
+    fought back.
+- Creeper **explodes ~20 ticks after death** (not on death instantly): up to
+  ~**12 HP (6 hearts)** (`MOB_MAX_HEALTH*0.6`, our linear-falloff approximation
+  — exact Java damage-falloff curve vs. distance is unknown), **4-block radius**,
+  TNT-immune blocks (stone etc.) survive.
 - TNT: up to 12 HP, ~4-block radius, stone immune. (after 0.26, player starts with 10 TNT)
-- Skeleton arrow dmg & spider dmg: undocumented.
 - Mobs present: zombie, skeleton, creeper, spider (hostile); pig, sheep (passive).
-- Mob drops are **physical**: skeleton 4–9 arrows, pig/sheep mushrooms.
+- Mob drops are **physical**: **Pig drops exactly 1–2 brown mushrooms**
+  (`(int)(rand+rand+1)`, not a 1–3 range as previously guessed). **Sheep has
+  no drop** (passive `QuadrupedMob`, no `die()` override in source). Skeleton
+  arrow-drops are out of scope (no projectile/arrow system).
 
 ### Mining & drops
 - **Uniform hold-to-break timer** — every block takes the *same* time to break;
@@ -246,5 +342,8 @@ Item (entity), Breaking, Damage, Pig, Skeleton, Indev 0.31; decompiled `Item.jav
 - Isometric block drawing: `IsometricDrawer_BeginBatch/AddBatch/EndBatch/Render`.
 - Entities: `Entities.List[]`, `Entities.CurPlayer`; `Entity_GetBounds` /
   `Entity_GetPickingBounds` for AABBs; `Entity_TouchesAny(bb, cond)` for block tests.
-- Local build note: container is missing `-lXi`/`-lGL` so the final *link* fails, but
-  all `.c` files compile clean under `-Werror`. Windows CI is the real compile gate.
+- Local build note: this container originally lacked `libgl1-mesa-dev`/`libxi-dev`
+  (so the final link failed with `-lXi`/`-lGL` not found, even though all `.c` files
+  compiled clean). Fixed by `apt-get update` then installing both packages — full
+  `make PLAT=linux` now compiles **and links** successfully. Windows CI remains the
+  authoritative compile gate either way.

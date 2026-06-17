@@ -57,5 +57,16 @@ cc_bool SurvivalTest_TryEat(void);
 /*  Entities_RenderModels (e.g. in Render3DFrame). */
 void SurvivalTest_RenderDrops(float delta, float t);
 
+/* Renders all living/dying mobs in the 3D world. */
+/* No-op when survival mode is disabled. Call once per frame, alongside */
+/*  SurvivalTest_RenderDrops (e.g. in Render3DFrame). */
+void SurvivalTest_RenderMobs(float delta, float t);
+
+/* Attempts to melee-attack whichever mob the player is looking at, within */
+/*  reach distance. Returns true if a mob was hit, so the caller can skip */
+/*  its normal block-breaking action for that input (no-op, returns false */
+/*  when survival mode is disabled). */
+cc_bool SurvivalTest_TryAttackMob(void);
+
 CC_END_HEADER
 #endif

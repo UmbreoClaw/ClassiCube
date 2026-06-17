@@ -498,7 +498,7 @@ void InputHandler_Tick(float delta) {
 	}
 
 	if (left) {
-		InputHandler_DeleteBlock();
+		if (!SurvivalTest_TryAttackMob()) InputHandler_DeleteBlock();
 	} else if (right) {
 		InputHandler_PlaceBlock();
 	} else if (middle) {

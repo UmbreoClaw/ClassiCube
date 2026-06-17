@@ -16,6 +16,10 @@
 #include "Platform.h"
 #include "Lighting.h"
 #include "TexturePack.h"
+#include "Physics.h"
+#include "Audio.h"
+#include "Funcs.h"
+#include "Model.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -56,6 +60,9 @@ static RNGState st_dropRng;
 /* Defined later, in the Inventory section - forward declared so the */
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static void SurvivalTest_AddBlock(BlockID block);
+/* Defined later, in the Ticking section - forward declared so the Mobs */
+/*  section below (which ticks before Ticking is reached) can reuse it. */
+static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
 
 
 /*########################################################################################################################*
@@ -491,6 +498,617 @@ void SurvivalTest_Heal(int amount) {
 
 
 /*########################################################################################################################*
+*---------------------------------------------------------Mobs-------------------------------------------------------------*
+*#########################################################################################################################*/
+/* Survival Test (c0.30-s) populates the world with hostile and passive mobs */
+/*  (decompiled from Mob.java/BasicAI.java/BasicAttackAI.java/JumpAttackAI.java */
+/*  and the per-species Zombie/Skeleton/Pig/Creeper/Spider classes). Mobs are */
+/*  simulated client-side in a fixed array, the same way dropped items are -  */
+/*  they are NOT real Entities.List[]/NetPlayer entries, just enough of an */
+/*  Entity to reuse the model/animation/collision systems. */
+#define MOB_MAX            32
+#define MOB_MAX_HEALTH     20  /* Mob.java's default health - same scale as the player's */
+#define MOB_INVINC_TICKS   20  /* simplified flat invincibility window (Mob.invulnerableDuration) */
+#define MOB_AIR_TICKS     300  /* 15 seconds @ 20 TPS, matches Mob.airSupply */
+#define MOB_EXPLODE_RADIUS  4  /* Creeper.beforeRemove's level.explode radius */
+
+enum MobType {
+	MOB_TYPE_ZOMBIE, MOB_TYPE_SKELETON, MOB_TYPE_PIG, MOB_TYPE_CREEPER, MOB_TYPE_SPIDER, MOB_TYPE_SHEEP,
+	MOB_TYPE_COUNT
+};
+/* The 3 broad AI behaviours found in the decompiled source - which of these */
+/*  a mob uses is entirely determined by its type (see mobTypeInfo below). */
+enum MobAI { MOB_AI_PASSIVE, MOB_AI_ATTACK, MOB_AI_JUMPATTACK };
+
+struct MobTypeInfo {
+	const char* model;
+	cc_uint8    ai;
+	float       runSpeed;
+	float       defaultLookAngle;
+	int         damage;
+	cc_bool     isCreeper; /* self-damages 6 HP per attack and explodes on death */
+};
+/* Order matches MobSpawner.spawn's `type = random.nextInt(6)` exactly, so */
+/*  Mob_SpawnerRun can index straight into this table with that roll. */
+static const struct MobTypeInfo mobTypeInfo[MOB_TYPE_COUNT] = {
+	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false },
+	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false },
+	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false },
+	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true  },
+	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false },
+	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false },
+};
+
+struct Mob {
+	struct Entity Base;
+	struct CollisionsComp Collisions;
+	cc_uint8 type;
+	cc_bool  active;
+	cc_bool  hasTarget;
+	cc_bool  jumping;
+
+	int health;
+	int invincTicks; /* simplified single-threshold version of Mob.invulnerableTime */
+	int hurtTicks;    /* red hit-flash timer, purely cosmetic (Mob.hurtTime) */
+	int attackDelay;  /* cooldown before this mob can attack again (BasicAttackAI.attackDelay) */
+	int deathTicks;   /* ticks since health reached 0 - removed once this exceeds 20 */
+	int airTicks;     /* underwater air supply (Mob.airSupply) */
+
+	/* BasicAI's wander/chase input axes and turn impulse - decayed every */
+	/*  tick and refreshed at random, exactly as in the decompiled source. */
+	float moveStrafe, moveForward, turnRate;
+};
+static struct Mob st_mobs[MOB_MAX];
+static RNGState st_mobRng;
+
+static int SurvivalTest_CountMobs(void) {
+	int i, n = 0;
+	for (i = 0; i < MOB_MAX; i++) { if (st_mobs[i].active) n++; }
+	return n;
+}
+
+static int SurvivalTest_FindFreeMobSlot(void) {
+	int i;
+	for (i = 0; i < MOB_MAX; i++) { if (!st_mobs[i].active) return i; }
+	return -1;
+}
+
+/* Adds the world-space velocity for one tick of relative (forward/strafe) */
+/*  input, exactly matching the decompiled Mob.moveRelative/Entity.moveRelative */
+/*  formula (and re-derived/verified against PhysicsComp_MoveHor, which uses */
+/*  the identical normalise-then-scale pattern for the local player). */
+static void Mob_MoveRelative(struct Entity* e, float strafe, float forward, float friction) {
+	float dist = strafe * strafe + forward * forward;
+	float sinYaw, cosYaw;
+	if (dist < 0.0001f) return;
+
+	dist = Math_SqrtF(dist);
+	if (dist < 1.0f) dist = 1.0f;
+	dist     = friction / dist;
+	strafe  *= dist;
+	forward *= dist;
+
+	sinYaw = Math_SinF(e->Yaw * MATH_DEG2RAD);
+	cosYaw = Math_CosF(e->Yaw * MATH_DEG2RAD);
+	/* CC's own forward/strafe basis (re-derived from LocalPlayer_Tick + */
+	/*  PlayerInputNormal), NOT a literal port of Java's yRot-based formula - */
+	/*  ClassiCube's Yaw convention is mirrored relative to Java's yRot. */
+	e->Velocity.x += forward * sinYaw + strafe * cosYaw;
+	e->Velocity.z += strafe  * sinYaw - forward * cosYaw;
+}
+
+/* Ground/air movement model - exactly Mob.travel()'s final `else` branch. */
+/*  (Its constants - 0.91/0.98/0.91 drag, 0.08 gravity, 0.6/0.6 ground */
+/*  friction - are exactly PhysicsComp_Init's constants; both derive from */
+/*  the same original Minecraft source.) */
+static void Mob_TravelGround(struct Mob* m, float forward, float strafe) {
+	struct Entity* e = &m->Base;
+	float friction = e->OnGround ? 0.1f : 0.02f;
+
+	Mob_MoveRelative(e, strafe, forward, friction);
+	Collisions_MoveAndWallSlide(&m->Collisions);
+	Vec3_AddBy(&e->Position, &e->Velocity);
+
+	e->Velocity.x *= 0.91f;
+	e->Velocity.y *= 0.98f;
+	e->Velocity.z *= 0.91f;
+	e->Velocity.y -= 0.08f;
+
+	if (e->OnGround) {
+		e->Velocity.x *= 0.6f;
+		e->Velocity.z *= 0.6f;
+	}
+}
+
+/* Water/lava movement model - Mob.travel()'s water/lava branches, which */
+/*  are identical apart from the drag factor (0.8 water, 0.5 lava). The */
+/*  exact `isFree` paddle-up-stairs assist wasn't ported (needs a generic */
+/*  collision probe this codebase doesn't expose) - approximated here with */
+/*  a simple upward nudge when blocked, which is enough to stop mobs getting */
+/*  permanently stuck against underwater terrain. */
+static void Mob_TravelLiquid(struct Mob* m, float forward, float strafe, float drag) {
+	struct Entity* e = &m->Base;
+
+	Mob_MoveRelative(e, strafe, forward, 0.02f);
+	Collisions_MoveAndWallSlide(&m->Collisions);
+	Vec3_AddBy(&e->Position, &e->Velocity);
+
+	e->Velocity.x *= drag;
+	e->Velocity.y *= drag;
+	e->Velocity.z *= drag;
+	e->Velocity.y -= 0.02f;
+
+	if (Collisions_HitHorizontal(&m->Collisions)) e->Velocity.y = 0.3f;
+}
+
+static void Mob_Travel(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	if (inWater)      Mob_TravelLiquid(m, m->moveForward, m->moveStrafe, 0.8f);
+	else if (inLava)  Mob_TravelLiquid(m, m->moveForward, m->moveStrafe, 0.5f);
+	else              Mob_TravelGround(m, m->moveForward, m->moveStrafe);
+}
+
+/* BasicAI's jump dispatch: a held/random "jumping" intent only actually */
+/*  does anything once on the ground (or paddles upward in liquid). Spiders */
+/*  using JumpAttackAI instead lunge forward when jumping with a target */
+/*  (matches JumpAttackAI.jumpFromGround's attackTarget != null branch). */
+static void Mob_DoJump(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	struct Entity* e = &m->Base;
+	if (!m->jumping) return;
+
+	if (inWater || inLava) {
+		e->Velocity.y += 0.04f;
+	} else if (e->OnGround) {
+		if (m->type == MOB_TYPE_SPIDER && m->hasTarget) {
+			e->Velocity.x = 0.0f;
+			e->Velocity.z = 0.0f;
+			Mob_MoveRelative(e, 0.0f, 1.0f, 0.6f);
+			e->Velocity.y = 0.5f;
+		} else {
+			e->Velocity.y = 0.42f;
+		}
+	}
+}
+
+/* Spawns 1-2 brown mushrooms at the mob's position. (int)(rand+rand+1.0) */
+/*  mathematically only ever yields 1 or 2 - never the "1-3" some ports guess. */
+static void Mob_SpawnPigDrops(struct Mob* m) {
+	IVec3 coords;
+	int count = (int)(Random_Float(&st_mobRng) + Random_Float(&st_mobRng) + 1.0f);
+	int i;
+
+	coords.x = Math_Floor(m->Base.Position.x);
+	coords.y = Math_Floor(m->Base.Position.y);
+	coords.z = Math_Floor(m->Base.Position.z);
+	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_BROWN_SHROOM); }
+}
+
+/* die(Entity) - called the instant health reaches 0 (separate from the mob's */
+/*  20-tick removal delay, which is handled in SurvivalTest_TickOneMob). */
+static void Mob_Die(struct Mob* m) {
+	if (m->type == MOB_TYPE_PIG) Mob_SpawnPigDrops(m);
+}
+
+/* Mirrors BlockPhysics.c's private BlocksTNT immunity check (liquids and */
+/*  metal/stone-sounding solid blocks survive blasts) - duplicated here since */
+/*  that function isn't exposed outside BlockPhysics.c. */
+static cc_bool Mob_ExplosionImmune(BlockID b) {
+	return (b >= BLOCK_WATER && b <= BLOCK_STILL_LAVA) ||
+		(Blocks.ExtendedCollide[b] == COLLIDE_SOLID && (Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE));
+}
+
+/* Creeper.beforeRemove's level.explode call, fired once the creeper's 20-tick */
+/*  death animation finishes (it dies from its own repeated headbutt damage - */
+/*  see Mob_Hurt). Block-destruction radius/shape matches TNT exactly (both */
+/*  derive from the same original explosion code); the exact player-damage */
+/*  falloff curve wasn't recovered, so a simple linear falloff is used. */
+static void Mob_CreeperExplode(struct Mob* m) {
+	struct Entity* e = &m->Base;
+	struct LocalPlayer* p = Entities.CurPlayer;
+	int x = Math_Floor(e->Position.x);
+	int y = Math_Floor(e->Position.y);
+	int z = Math_Floor(e->Position.z);
+	int dx, dy, dz, xx, yy, zz;
+	BlockID block;
+	Vec3 diff;
+	float dist;
+
+	for (dy = -MOB_EXPLODE_RADIUS; dy <= MOB_EXPLODE_RADIUS; dy++) {
+	for (dz = -MOB_EXPLODE_RADIUS; dz <= MOB_EXPLODE_RADIUS; dz++) {
+	for (dx = -MOB_EXPLODE_RADIUS; dx <= MOB_EXPLODE_RADIUS; dx++) {
+		if (dx * dx + dy * dy + dz * dz > MOB_EXPLODE_RADIUS * MOB_EXPLODE_RADIUS) continue;
+		xx = x + dx; yy = y + dy; zz = z + dz;
+		if (!World_Contains(xx, yy, zz)) continue;
+
+		block = World_GetBlock(xx, yy, zz);
+		if (block == BLOCK_AIR || Mob_ExplosionImmune(block)) continue;
+		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+	}}}
+
+	if (!p) return;
+	diff.x = p->Base.Position.x - e->Position.x;
+	diff.y = p->Base.Position.y - e->Position.y;
+	diff.z = p->Base.Position.z - e->Position.z;
+	dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+	if (dist < (float)MOB_EXPLODE_RADIUS) {
+		int dmg = (int)((1.0f - dist / (float)MOB_EXPLODE_RADIUS) * MOB_MAX_HEALTH * 0.6f);
+		SurvivalTest_Hurt(dmg);
+	}
+}
+
+/* hurt(Entity attacker, int damage) - simplified to a single flat */
+/*  invincibility window rather than porting Mob.java's dual-threshold */
+/*  invulnerableTime mechanic (matches the player's own damage code, which */
+/*  already uses the same simplification). knockback() pushes the mob */
+/*  directly away from its attacker; aggroes attack-type mobs onto whoever */
+/*  hit them (BasicAttackAI.hurt). */
+static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage) {
+	struct Entity* e = &m->Base;
+	float dx, dz, dist;
+
+	if (m->health <= 0)        return;
+	if (m->invincTicks > 0)    return;
+	if (damage <= 0)           return;
+
+	m->health      -= damage;
+	m->invincTicks  = MOB_INVINC_TICKS;
+	m->hurtTicks    = 10;
+
+	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) m->hasTarget = true;
+
+	if (attacker) {
+		dx   = attacker->Position.x - e->Position.x;
+		dz   = attacker->Position.z - e->Position.z;
+		dist = Math_SqrtF(dx * dx + dz * dz);
+		if (dist >= 0.0001f) {
+			e->Velocity.x = e->Velocity.x / 2.0f - (dx / dist) * 0.4f;
+			e->Velocity.z = e->Velocity.z / 2.0f - (dz / dist) * 0.4f;
+		}
+		e->Velocity.y = e->Velocity.y / 2.0f + 0.4f;
+		if (e->Velocity.y > 0.4f) e->Velocity.y = 0.4f;
+	}
+
+	if (m->health <= 0) {
+		m->health = 0;
+		Mob_Die(m);
+	}
+}
+
+/* BasicAI.update() - the shared wander/turn logic used by every mob, plus */
+/*  the chase override applied once a mob has acquired a target (only ever */
+/*  true for attack-type mobs - BasicAttackAI is what actually sets hasTarget). */
+static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
+	struct Entity* e = &m->Base;
+
+	if (Random_Next(&st_mobRng, 100) < 7) {
+		m->moveStrafe  = (Random_Float(&st_mobRng) - 0.5f) * info->runSpeed;
+		m->moveForward =  Random_Float(&st_mobRng)         * info->runSpeed;
+	}
+	m->jumping = Random_Next(&st_mobRng, 100) < 1;
+
+	if (Random_Next(&st_mobRng, 100) < 4) {
+		m->turnRate = (Random_Float(&st_mobRng) - 0.5f) * 60.0f;
+	}
+	e->Yaw  += m->turnRate;
+	e->Pitch = info->defaultLookAngle;
+
+	if (m->hasTarget) {
+		m->moveForward = info->runSpeed;
+		m->jumping = Random_Next(&st_mobRng, 100) < 4;
+		if (inWater || inLava) m->jumping = Random_Next(&st_mobRng, 100) < 80;
+	}
+}
+
+/* BasicAttackAI.doAttack() - acquires/loses the player as a target based on */
+/*  distance, faces them, and lands a hit once in range and off cooldown. */
+/*  Facing uses CC's own atan2-based formula (re-derived/verified against */
+/*  Entity_GetEyePosition/Vec3_GetDirVector), not Java's raw yRot formula. */
+static void Mob_DoAttack(struct Mob* m) {
+	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
+	struct Entity* e = &m->Base;
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Entity* pe;
+	Vec3 diff;
+	float distSq, horDist;
+	int damage;
+
+	if (!p) return;
+	pe = &p->Base;
+
+	diff.x = pe->Position.x - e->Position.x;
+	diff.y = pe->Position.y - e->Position.y;
+	diff.z = pe->Position.z - e->Position.z;
+	distSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
+
+	if (!m->hasTarget && distSq <= 256.0f) m->hasTarget = true; /* aggroRange = 16 */
+	if (!m->hasTarget) return;
+
+	if (distSq > 1024.0f && Random_Next(&st_mobRng, 100) == 0) { /* 2x aggroRange give-up roll */
+		m->hasTarget = false;
+		return;
+	}
+
+	horDist  = Math_SqrtF(diff.x * diff.x + diff.z * diff.z);
+	e->Yaw   = Math_Atan2f(-diff.z, diff.x) * MATH_RAD2DEG;
+	e->Pitch = Math_Atan2f(horDist, -diff.y) * MATH_RAD2DEG;
+
+	if (distSq < 4.0f && m->attackDelay <= 0) {
+		m->attackDelay = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
+		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
+		SurvivalTest_Hurt(damage);
+
+		/* Creeper$1.attack: headbutting the player also hurts the creeper - */
+		/*  after ~4 hits this kills it and triggers its death explosion. */
+		if (info->isCreeper) Mob_Hurt(m, NULL, 6);
+	}
+}
+
+static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
+	const struct MobTypeInfo* info;
+	struct Entity* e = &m->Base;
+	Vec3 oldPos;
+	cc_bool inWater, inLava;
+
+	if (!m->active) return;
+	info = &mobTypeInfo[m->type];
+
+	if (m->invincTicks > 0) m->invincTicks--;
+	if (m->hurtTicks   > 0) m->hurtTicks--;
+
+	if (m->health <= 0) {
+		m->deathTicks++;
+		if (m->deathTicks > 20) {
+			if (info->isCreeper) Mob_CreeperExplode(m);
+			m->active = false;
+			return;
+		}
+	}
+
+	inWater = Entity_TouchesAnyWater(e);
+	inLava  = Entity_TouchesAnyLava(e);
+
+	/* Environmental damage - Mob.tick()'s airSupply/lava handling. Both */
+	/*  damage calls go through the same flat invincibility window as combat */
+	/*  damage (see Mob_Hurt), so e.g. lava only actually ticks roughly once */
+	/*  per second rather than truly every tick. */
+	if (SurvivalTest_IsHeadInWater(e)) {
+		if (m->airTicks > 0) { m->airTicks--; }
+		else                 { Mob_Hurt(m, NULL, 2); }
+	} else {
+		m->airTicks = MOB_AIR_TICKS;
+	}
+	if (inLava) Mob_Hurt(m, NULL, 10);
+
+	if (m->attackDelay > 0) m->attackDelay--;
+
+	if (m->health <= 0) {
+		/* BasicAI.tick's freeze branch: no more wandering/attacking, but */
+		/*  gravity/physics below still run, so the body settles naturally. */
+		m->jumping     = false;
+		m->moveStrafe  = 0.0f;
+		m->moveForward = 0.0f;
+		m->turnRate    = 0.0f;
+	} else {
+		Mob_BasicAIUpdate(m, inWater, inLava);
+		if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
+	}
+
+	Mob_DoJump(m, inWater, inLava);
+
+	m->moveStrafe  *= 0.98f;
+	m->moveForward *= 0.98f;
+	m->turnRate    *= 0.9f;
+
+	oldPos = e->Position;
+	Mob_Travel(m, inWater, inLava);
+	AnimatedComp_Update(e, oldPos, e->Position, delta);
+}
+
+/* Ground-validity check shared by both the outer spawn-point roll and the */
+/*  inner cluster jitter (MobSpawner.spawn's isSolidTile calls). */
+static cc_bool Mob_BlockIsSolid(int x, int y, int z) {
+	if (!World_Contains(x, y, z)) return true;
+	return Blocks.Collide[World_GetBlock(x, y, z)] == COLLIDE_SOLID;
+}
+
+/* Duplicates the private Entity_GetColor (lighting at the entity's eye */
+/*  position) since mobs aren't real Entities.List[] entries, plus a brief */
+/*  red hit-flash while hurtTicks counts down from 10 (Mob.hurtTime), */
+/*  blended into the lit colour rather than drawn as a separate pass. */
+static PackedCol Mob_GetColor(struct Entity* e) {
+	struct Mob* m = (struct Mob*)e; /* Base is the first field of struct Mob */
+	Vec3 eyePos = Entity_GetEyePosition(e);
+	IVec3 pos;
+	PackedCol col;
+	IVec3_Floor(&pos, &eyePos);
+	col = Lighting.Color(pos.x, pos.y, pos.z);
+
+	if (m->hurtTicks > 0) {
+		float f  = m->hurtTicks / 10.0f;
+		int   r  = PackedCol_R(col), g = PackedCol_G(col), b = PackedCol_B(col);
+		r = (int)(r + (255 - r) * f);
+		g = (int)(g * (1.0f - f));
+		b = (int)(b * (1.0f - f));
+		col = PackedCol_Make((cc_uint8)r, (cc_uint8)g, (cc_uint8)b, PackedCol_A(col));
+	}
+	return col;
+}
+
+/* Mobs are ticked/rendered by hand (SurvivalTest_TickOneMob/RenderMobs), */
+/*  never through generic Entity dispatch - so only GetCol needs to be real, */
+/*  since Model_SetupState calls it directly. The rest can stay NULL. */
+static const struct EntityVTABLE mob_VTABLE = { NULL, NULL, NULL, Mob_GetColor, NULL, NULL };
+
+static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
+	struct Mob* m;
+	cc_string model;
+	int slot = SurvivalTest_FindFreeMobSlot();
+	if (slot < 0) return;
+
+	m = &st_mobs[slot];
+	Mem_Set(m, 0, sizeof(struct Mob));
+	Entity_Init(&m->Base);
+	m->Base.VTABLE = &mob_VTABLE;
+
+	model = String_FromReadonly(mobTypeInfo[type].model);
+	Entity_SetModel(&m->Base, &model);
+
+	m->Base.Position = pos;
+	m->Base.Yaw      = Random_Float(&st_mobRng) * 360.0f;
+
+	m->Collisions.Entity   = &m->Base;
+	m->Collisions.StepSize = 0.5f; /* matches LocalPlayer's default step size */
+
+	m->type     = type;
+	m->health   = MOB_MAX_HEALTH;
+	m->airTicks = MOB_AIR_TICKS;
+	m->active   = true;
+}
+
+/* MobSpawner.spawn - for each of `count` attempts, picks a random point */
+/*  (Y biased toward low altitude via min-of-two-uniforms) and, if valid, */
+/*  scatters a small cluster of up to 9 mobs of the same random type around */
+/*  it, skipping any that land too close to avoidPos but still consuming */
+/*  the jitter step (a faithfully-preserved quirk of the original). */
+#define MOB_SPAWN_MIN_DIST_SQ 256.0f /* 16 blocks */
+static void Mob_SpawnerRun(int count, Vec3* avoidPos) {
+	int attempt, outer, inner;
+	int x, y, z, cx, cy, cz;
+	cc_uint8 type;
+	Vec3 candidate;
+	float dx, dy, dz, distSq;
+
+	for (attempt = 0; attempt < count; attempt++) {
+		type = (cc_uint8)Random_Next(&st_mobRng, MOB_TYPE_COUNT);
+		x    = Random_Next(&st_mobRng, World.Width);
+		y    = (int)(min(Random_Float(&st_mobRng), Random_Float(&st_mobRng)) * World.Height);
+		z    = Random_Next(&st_mobRng, World.Length);
+
+		if (Mob_BlockIsSolid(x, y, z)) continue;
+		if (Blocks.Collide[World_GetBlock(x, y, z)] == COLLIDE_LIQUID) continue;
+		if (Lighting.IsLit(x, y, z) && Random_Next(&st_mobRng, 5) != 0) continue;
+
+		for (outer = 0; outer < 3; outer++) {
+			cx = x; cy = y; cz = z;
+
+			for (inner = 0; inner < 3; inner++) {
+				cx += Random_Next(&st_mobRng, 6) - Random_Next(&st_mobRng, 6);
+				cz += Random_Next(&st_mobRng, 6) - Random_Next(&st_mobRng, 6);
+				/* NOTE: the original's vertical jitter is rand(1)-rand(1), */
+				/*  which is always 0 - cy is faithfully never adjusted here. */
+
+				if (cx < 0 || cz < 1 || cy < 0 || cy >= World.Height - 2 ||
+					cx >= World.Width || cz >= World.Length) continue;
+				if (!Mob_BlockIsSolid(cx, cy - 1, cz))   continue;
+				if (Mob_BlockIsSolid(cx, cy, cz))        continue;
+				if (Mob_BlockIsSolid(cx, cy + 1, cz))    continue;
+
+				candidate.x = cx + 0.5f;
+				candidate.y = (float)(cy + 1);
+				candidate.z = cz + 0.5f;
+
+				dx = candidate.x - avoidPos->x;
+				dy = candidate.y - avoidPos->y;
+				dz = candidate.z - avoidPos->z;
+				distSq = dx * dx + dy * dy + dz * dz;
+				if (distSq < MOB_SPAWN_MIN_DIST_SQ) continue;
+
+				SurvivalTest_SpawnMobAt(type, candidate);
+			}
+		}
+	}
+}
+
+/* SurvivalGameMode.spawnMob() - the periodic per-tick spawn gate. */
+static void SurvivalTest_TrySpawnMobs(void) {
+	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
+	int area = (int)(volume / 64 / 64 / 64);
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!p || area <= 0) return;
+
+	if (Random_Next(&st_mobRng, 100) < area && SurvivalTest_CountMobs() < area * 20) {
+		Mob_SpawnerRun(area, &p->Base.Position);
+	}
+}
+
+/* SurvivalGameMode.prepareLevel() - the one-time initial population done */
+/*  when a new map finishes loading, avoiding the player's spawn point. */
+static void SurvivalTest_SpawnInitialMobs(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	cc_int64 volume;
+	int area;
+	if (!p) return;
+
+	volume = (cc_int64)World.Width * World.Height * World.Length;
+	area   = (int)(volume / 800);
+	if (area <= 0) return;
+
+	Mob_SpawnerRun(area, &p->Spawn);
+}
+
+static void SurvivalTest_TickMobs(float delta) {
+	int i;
+	for (i = 0; i < MOB_MAX; i++) { SurvivalTest_TickOneMob(&st_mobs[i], delta); }
+	SurvivalTest_TrySpawnMobs();
+}
+
+
+void SurvivalTest_RenderMobs(float delta, float t) {
+	struct Mob* m;
+	struct Entity* e;
+	int i;
+	if (!SurvivalTest_Enabled) return;
+
+	for (i = 0; i < MOB_MAX; i++) {
+		m = &st_mobs[i];
+		if (!m->active) continue;
+		e = &m->Base;
+
+		AnimatedComp_GetCurrent(e, t);
+		e->ShouldRender = Model_ShouldRender(e);
+		if (!e->ShouldRender) continue;
+
+		Model_Render(e->Model, e);
+	}
+}
+
+/* The player's melee attack - casts a ray along the view direction (exactly */
+/*  PerspectiveCamera_GetPickedBlock/Entities_GetClosest's pattern) and hits */
+/*  the closest mob within reach, using the same rotated-box intersection */
+/*  test the engine already uses for picking other entities. */
+cc_bool SurvivalTest_TryAttackMob(void) {
+	struct LocalPlayer* p;
+	struct Entity* e;
+	struct Mob* best = NULL;
+	struct Mob* m;
+	Vec3 eyePos, dir;
+	float t0, t1, bestT = 1.0e30f;
+	int i;
+
+	if (!SurvivalTest_Enabled) return false;
+	p = Entities.CurPlayer;
+	if (!p) return false;
+	e = &p->Base;
+
+	eyePos = Entity_GetEyePosition(e);
+	dir    = Vec3_GetDirVector(e->Yaw * MATH_DEG2RAD, e->Pitch * MATH_DEG2RAD);
+
+	for (i = 0; i < MOB_MAX; i++) {
+		m = &st_mobs[i];
+		if (!m->active || m->health <= 0) continue;
+		if (!Intersection_RayIntersectsRotatedBox(eyePos, dir, &m->Base, &t0, &t1)) continue;
+		if (t0 > p->ReachDistance) continue;
+		if (t0 < bestT) { bestT = t0; best = m; }
+	}
+	if (!best) return false;
+
+	/* Player fist: flat 4 HP/hit, matching SurvivalTest_Hurt's own player-damage figure */
+	Mob_Hurt(best, e, 4);
+	return true;
+}
+
+
+/*########################################################################################################################*
 *------------------------------------------------------Inventory----------------------------------------------------------*
 *#########################################################################################################################*/
 BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].block; }
@@ -700,6 +1318,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 
 	/* Dropped items --------------------------------------------------------- */
 	SurvivalTest_TickDrops(e, delta);
+
+	/* Mobs ----------------------------------------------------------------- */
+	SurvivalTest_TickMobs(delta);
 }
 
 
@@ -723,6 +1344,9 @@ static void SurvivalTest_ResetState(void) {
 	for (i = 0; i < DROP_MAX; i++) {
 		st_drops[i].active = false;
 	}
+	for (i = 0; i < MOB_MAX; i++) {
+		st_mobs[i].active = false;
+	}
 }
 
 /* The item vertex buffer is a GPU resource and must be dropped/recreated */
@@ -737,6 +1361,7 @@ static void SurvivalTest_Init(void) {
 	if (!SurvivalTest_Enabled) return;
 
 	Random_SeedFromCurrentTime(&st_dropRng);
+	Random_SeedFromCurrentTime(&st_mobRng);
 	SurvivalTest_ResetState();
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
@@ -770,6 +1395,8 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 	p->Hacks.CanNoclip = false;
 	p->Hacks.CanSpeed  = false;
 	HacksComp_Update(&p->Hacks);
+
+	SurvivalTest_SpawnInitialMobs();
 }
 
 struct IGameComponent SurvivalTest_Component = {
