@@ -606,9 +606,11 @@ static void InputHandler_CheckZoomFov(void* obj) {
 
 static cc_bool BindTriggered_DeleteBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
-	
+
 	MouseStatePress(MOUSE_LEFT);
-	InputHandler_DeleteBlock();
+	/* In survival, a left click first tries to melee whatever mob is aimed at */
+	/*  (matching InputHandler_Tick's held-down path) before deleting a block. */
+	if (!SurvivalTest_TryAttackMob()) InputHandler_DeleteBlock();
 	return true;
 }
 
@@ -872,8 +874,17 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 		if (!Bind_OnTriggered[i])              continue;
 		triggered |= Bind_OnTriggered[i](key, device);
 	}
-	
-	for (i = 0; i < Gui.ScreensCount; i++) 
+
+	/* Minecraft.java: Tab is a discrete (one-per-press) "fire arrow" action in */
+	/*  Survival Test. It must be handled here, before the screen loop below, */
+	/*  because the chat HUD claims BIND_TABLIST (Tab by default) and would */
+	/*  otherwise swallow the keypress via its show-player-list handler. Skipped */
+	/*  while input is grabbed (e.g. typing into chat) so Tab autocomplete works. */
+	if (!was && !Gui.InputGrab && InputBind_Claims(BIND_TABLIST, key, device)) {
+		SurvivalTest_TryShootArrow();
+	}
+
+	for (i = 0; i < Gui.ScreensCount; i++)
 	{
 		s = Gui_Screens[i];
 		s->dirty = true;
@@ -895,13 +906,6 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 
 	/* Hotkeys should not be triggered multiple times when holding down */
 	if (was) return;
-
-	/* Minecraft.java: Tab is a discrete key-down "fire arrow" action in */
-	/*  Survival Test, independent of (and alongside) BIND_TABLIST's */
-	/*  existing show-player-list-while-held behaviour bound to the same key. */
-	if (SurvivalTest_Enabled && key == CCKEY_TAB) {
-		SurvivalTest_TryShootArrow();
-	}
 
 	if (triggered) {
 	} else if (key == CCKEY_F5 && Game_ClassicMode) {

@@ -203,6 +203,40 @@ next time a display is available.
 
 ---
 
+## INPUT BUG FIXES (this session): Tab-fire arrows + click-to-attack mobs
+
+User reported two gameplay bugs from live testing: Tab didn't fire arrows,
+and mobs "had no hitboxes" (couldn't be attacked). Both were input-routing
+bugs, not gameplay-logic bugs — the underlying `SurvivalTest_TryShootArrow`
+and `SurvivalTest_TryAttackMob` were correct.
+
+- **Tab arrows**: the old `SurvivalTest_TryShootArrow()` call in
+  `OnInputDown` (InputHandler.c) sat *after* the per-screen
+  `HandlesInputDown` loop. The chat HUD (`ChatScreen_KeyDown`, Screens.c)
+  claims `BIND_TABLIST` (Tab by default) and `return true`s, so the screen
+  loop returned early and the arrow code was dead. Moved the handler to
+  *before* the screen loop, guarded by `!was` (one arrow per discrete press,
+  not per key-repeat), `!Gui.InputGrab` (don't fire while typing chat so Tab
+  autocomplete still works), and `InputBind_Claims(BIND_TABLIST, …)` (respects
+  key rebinding, instead of the old hardcoded `key == CCKEY_TAB`).
+- **Mob melee**: `SurvivalTest_TryAttackMob()` was only called from
+  `InputHandler_Tick` — the held-down auto-repeat path that runs 4×/sec after
+  ~0.25s. A normal quick left *click* goes through `BindTriggered_DeleteBlock`
+  (bound to `BIND_DELETE_BLOCK`), which called `InputHandler_DeleteBlock()`
+  directly and never tried to attack a mob. Added the same
+  `if (!SurvivalTest_TryAttackMob()) InputHandler_DeleteBlock();` guard there.
+  Confirmed the ray/hitbox path itself is correct: `SurvivalTest_TryAttackMob`
+  uses the exact same `Entity_GetEyePosition` + `Vec3_GetDirVector` +
+  `Intersection_RayIntersectsRotatedBox` pattern as the engine's own
+  `Entities_GetClosest` (Entity.c), and mob `ModelAABB` is populated by the
+  standard `Entity_SetModel` call at spawn.
+
+Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
+build — zero errors/warnings. Not yet confirmed in a running game this
+session (no display available).
+
+---
+
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
