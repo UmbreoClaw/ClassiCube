@@ -63,6 +63,10 @@ static void SurvivalTest_AddBlock(BlockID block);
 /* Defined later, in the Ticking section - forward declared so the Mobs */
 /*  section below (which ticks before Ticking is reached) can reuse it. */
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
+/* Defined later, in the Arrows section - forward declared so the Mobs */
+/*  section below (skeletons firing/death-bursting arrows) can spawn them. */
+static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float force,
+									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot);
 
 
 /*########################################################################################################################*
@@ -696,6 +700,43 @@ static void Mob_Die(struct Mob* m) {
 	if (m->type == MOB_TYPE_PIG) Mob_SpawnPigDrops(m);
 }
 
+/* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
+/*  Both yaw and pitch get an independent, symmetric +-22.5 degree random */
+/*  spread (decompiled Skeleton.java: yRot+180+(random()*45-22.5), */
+/*  xRot-(random()*45-22.5) - the spread itself is what matters, since +180 */
+/*  and the minus sign are both artifacts of Java's yRot/xRot convention). */
+/*  e->Yaw/e->Pitch already face the target directly (see Mob_DoAttack's own */
+/*  CC-convention atan2 formula), so no extra offset is needed here. */
+static void Mob_ShootArrow(struct Mob* m) {
+	struct Entity* e = &m->Base;
+	float yaw   = e->Yaw   + (Random_Float(&st_mobRng) * 45.0f - 22.5f);
+	float pitch = e->Pitch + (Random_Float(&st_mobRng) * 45.0f - 22.5f);
+	int slot    = (int)(m - st_mobs);
+
+	/* damage=3, type=1 (mob-fired): Arrow's constructor picks these whenever */
+	/*  the owner isn't a Player - the skeleton qualifies as a Mob owner here. */
+	SurvivalTest_SpawnArrow(Entity_GetEyePosition(e), yaw, pitch, 1.0f, 3, 1, false, slot);
+}
+
+/* SkeletonAI.beforeRemove() - a parting burst of 4-9 pickupable arrows */
+/*  scattered above the corpse as it disappears (count = (int)((rand+rand)*3+4), */
+/*  which only ever yields 4-9). Owned by the player (not the skeleton) purely */
+/*  so they can be picked back up, exactly as in the decompiled source. */
+static void Mob_SkeletonDeathBurst(struct Mob* m) {
+	struct Entity* e = &m->Base;
+	int count = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) * 3.0f + 4.0f);
+	Vec3 pos  = e->Position;
+	float yaw, pitch;
+	int i;
+
+	pos.y -= 0.2f;
+	for (i = 0; i < count; i++) {
+		yaw   = Random_Float(&st_mobRng) * 360.0f;
+		pitch = -Random_Float(&st_mobRng) * 60.0f; /* always downward-biased, never upward */
+		SurvivalTest_SpawnArrow(pos, yaw, pitch, 0.4f, 7, 0, true, -1);
+	}
+}
+
 /* Mirrors BlockPhysics.c's private BlocksTNT immunity check (liquids and */
 /*  metal/stone-sounding solid blocks survive blasts) - duplicated here since */
 /*  that function isn't exposed outside BlockPhysics.c. */
@@ -866,7 +907,8 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	if (m->health <= 0) {
 		m->deathTicks++;
 		if (m->deathTicks > 20) {
-			if (info->isCreeper) Mob_CreeperExplode(m);
+			if (info->isCreeper)              Mob_CreeperExplode(m);
+			if (m->type == MOB_TYPE_SKELETON) Mob_SkeletonDeathBurst(m);
 			m->active = false;
 			return;
 		}
@@ -899,6 +941,12 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	} else {
 		Mob_BasicAIUpdate(m, inWater, inLava);
 		if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
+
+		/* SkeletonAI.tick(): on top of (not instead of) the melee attack above, */
+		/*  a skeleton with a target has a 1/30 per-tick chance to loose an arrow. */
+		if (m->type == MOB_TYPE_SKELETON && m->hasTarget && Random_Next(&st_mobRng, 30) == 0) {
+			Mob_ShootArrow(m);
+		}
 	}
 
 	Mob_DoJump(m, inWater, inLava);
@@ -1140,6 +1188,395 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 
 
 /*########################################################################################################################*
+*--------------------------------------------------------Arrows-------------------------------------------------------------*
+*#########################################################################################################################*/
+/* Decompiled from item/Arrow.java. Like drops and mobs, arrows are simulated */
+/*  client-side in a fixed array - never real Entities.List[] entries - and */
+/*  are ticked/rendered entirely by hand. */
+#define ARROW_MAX           64
+#define ARROW_WIDTH        0.3f  /* Arrow's setSize(0.3F, 0.5F) */
+#define ARROW_HEIGHT       0.5f
+#define ARROW_SUBSTEP_LEN  0.2f  /* Arrow.tick's per-substep travel distance */
+#define ARROW_DRAG       0.998f
+#define ARROW_OWNER_GRACE_TICKS              5  /* can't hit the entity that fired it for this many ticks */
+#define ARROW_STICK_MOB_TICKS                20 /* mob-fired (type 1) arrows always despawn 20 ticks after sticking */
+#define ARROW_STICK_PLAYER_MIN_TICKS        300 /* player-fired (type 0) arrows are only eligible to despawn after this long */
+#define ARROW_STICK_PLAYER_DESPAWN_CHANCE  0.01f /* ...and even then, only a 1% roll per tick */
+#define ARROW_PLAYER_START                   20 /* Player.java: public int arrows = 20; */
+#define ARROW_PLAYER_MAX                     99 /* Player.java: MAX_ARROWS = 99 */
+#define ARROW_PLAYER_FIRE_FORCE            1.2f /* Minecraft.java's Tab-fire call */
+#define ARROW_PLAYER_DAMAGE                   7 /* Arrow's constructor: damage=7 when the owner is a Player */
+#define ARROW_VERTICES_PER_ARROW             24 /* 2 head quads + 4 shaft quads, 4 verts each */
+#define ARROW_MAX_VERTICES (ARROW_MAX * ARROW_VERTICES_PER_ARROW)
+
+struct ArrowEntity {
+	Vec3 pos;        /* feet-equivalent anchor - same convention as Entity_GetBounds/AABB_Make */
+	Vec3 velocity;
+	Vec3 facing;     /* unit direction the arrow visually points; frozen once stuck in a block */
+	float gravity;   /* Arrow.java: gravity = 1/force, scales the per-tick fall acceleration below */
+	int   stickTime; /* ticks since hasHit became true */
+	int   age;       /* ticks since spawn - gates the owner-exclusion window above */
+	int   damage;
+	cc_uint8 type;         /* 0 = player-type (slow despawn, texture rows 0-9), 1 = mob-type (fast despawn, rows 10-19) */
+	cc_bool  hasHit;
+	cc_bool  ownerIsPlayer;
+	cc_int8  ownerMobSlot; /* index into st_mobs when fired by a mob, else -1 */
+	cc_bool  active;
+};
+static struct ArrowEntity st_arrows[ARROW_MAX];
+static RNGState st_arrowRng;
+static int st_playerArrows = ARROW_PLAYER_START;
+static GfxResourceID st_arrowVB;
+static GfxResourceID st_arrowsTexId;
+
+static int SurvivalTest_FindFreeArrowSlot(void) {
+	int i;
+	for (i = 0; i < ARROW_MAX; i++) { if (!st_arrows[i].active) return i; }
+	return -1;
+}
+
+/* Arrow's constructor - spawns at pos, backed off slightly opposite the */
+/*  firing direction (so the visible tip starts roughly at the eye/bow */
+/*  rather than inside the shooter's head), with initial velocity along */
+/*  yaw/pitch scaled by force. CC's own Vec3_GetDirVector is used to turn */
+/*  yaw/pitch into a direction (matching Mob_DoAttack/SurvivalTest_TryAttackMob's */
+/*  reuse of the same helper), rather than porting Java's yRot/xRot trig */
+/*  literally - the two conventions don't agree on axis directions. */
+static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float force,
+									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot) {
+	struct ArrowEntity* a;
+	Vec3 dir;
+	int slot = SurvivalTest_FindFreeArrowSlot();
+	if (slot < 0) return;
+
+	dir = Vec3_GetDirVector(yaw * MATH_DEG2RAD, pitch * MATH_DEG2RAD);
+
+	a = &st_arrows[slot];
+	Mem_Set(a, 0, sizeof(struct ArrowEntity));
+
+	a->pos.x = pos.x - dir.x * 0.2f;
+	a->pos.y = pos.y - dir.y * 0.2f;
+	a->pos.z = pos.z - dir.z * 0.2f;
+
+	a->velocity.x = dir.x * force;
+	a->velocity.y = dir.y * force;
+	a->velocity.z = dir.z * force;
+	a->facing     = dir;
+	a->gravity    = 1.0f / force;
+
+	a->type          = type;
+	a->damage        = damage;
+	a->ownerIsPlayer = ownerIsPlayer;
+	a->ownerMobSlot  = (cc_int8)ownerMobSlot;
+	a->active        = true;
+}
+
+static void Arrow_BoxAt(Vec3* pos, struct AABB* out) {
+	Vec3 size = { ARROW_WIDTH, ARROW_HEIGHT, ARROW_WIDTH };
+	AABB_Make(out, pos, &size);
+}
+
+/* AABB.expand()'s semantics: grows whichever corner the signed delta points */
+/*  towards, turning the box into the swept volume covered by one substep. */
+static void Arrow_ExpandBox(struct AABB* bb, Vec3* d) {
+	if (d->x > 0.0f) bb->Max.x += d->x; else bb->Min.x += d->x;
+	if (d->y > 0.0f) bb->Max.y += d->y; else bb->Min.y += d->y;
+	if (d->z > 0.0f) bb->Max.z += d->z; else bb->Min.z += d->z;
+}
+
+/* level.getCubes(box).size() > 0 - true if any solid block overlaps the box. */
+static cc_bool Arrow_BlockCollision(struct AABB* bb) {
+	int x0, x1, y0, y1, z0, z1, x, y, z;
+	BlockID b;
+	struct AABB blockBB;
+
+	x0 = Math_Floor(bb->Min.x); x1 = Math_Floor(bb->Max.x);
+	y0 = Math_Floor(bb->Min.y); y1 = Math_Floor(bb->Max.y);
+	z0 = Math_Floor(bb->Min.z); z1 = Math_Floor(bb->Max.z);
+
+	for (y = y0; y <= y1; y++) {
+	for (z = z0; z <= z1; z++) {
+	for (x = x0; x <= x1; x++) {
+		if (!World_Contains(x, y, z)) continue;
+		b = World_GetBlock(x, y, z);
+		if (Blocks.Collide[b] != COLLIDE_SOLID) continue;
+
+		blockBB.Min.x = x + Blocks.MinBB[b].x; blockBB.Max.x = x + Blocks.MaxBB[b].x;
+		blockBB.Min.y = y + Blocks.MinBB[b].y; blockBB.Max.y = y + Blocks.MaxBB[b].y;
+		blockBB.Min.z = z + Blocks.MinBB[b].z; blockBB.Max.z = z + Blocks.MaxBB[b].z;
+		if (AABB_Intersects(bb, &blockBB)) return true;
+	}}}
+	return false;
+}
+
+/* blockMap.getEntities + isShootable + owner-exclusion check, tested against */
+/*  the player and every live mob (Entity.java: Mob/Player are the only two */
+/*  classes that override isShootable() to return true). */
+static cc_bool Arrow_EntityCollision(struct ArrowEntity* a, struct AABB* bb,
+									  struct Entity** outEntity, struct Mob** outMob) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct AABB other;
+	struct Mob* m;
+	int i;
+
+	if (p && !(a->ownerIsPlayer && a->age <= ARROW_OWNER_GRACE_TICKS)) {
+		Entity_GetBounds(&p->Base, &other);
+		if (AABB_Intersects(bb, &other)) {
+			*outEntity = &p->Base; *outMob = NULL; return true;
+		}
+	}
+
+	for (i = 0; i < MOB_MAX; i++) {
+		m = &st_mobs[i];
+		if (!m->active || m->health <= 0) continue;
+		if (!a->ownerIsPlayer && a->ownerMobSlot == i && a->age <= ARROW_OWNER_GRACE_TICKS) continue;
+
+		Entity_GetBounds(&m->Base, &other);
+		if (AABB_Intersects(bb, &other)) {
+			*outEntity = &m->Base; *outMob = m; return true;
+		}
+	}
+	return false;
+}
+
+/* entity.hurt(this, damage) - knockback is computed from the ARROW's own */
+/*  position (not the original shooter's), exactly as Mob.hurt()/Arrow.tick() */
+/*  do in the decompiled source (the arrow passes itself as the cause). */
+static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, struct Mob* hitMob) {
+	struct Entity fakeAttacker = { 0 };
+	fakeAttacker.Position = a->pos;
+
+	if (hitMob) {
+		Mob_Hurt(hitMob, &fakeAttacker, a->damage);
+	} else {
+		SurvivalTest_Hurt(a->damage);
+	}
+	a->active = false; /* entity hits remove() the arrow immediately - it never sticks */
+}
+
+/* Arrow.tick() - drag+gravity, then a subdivided sweep (so fast arrows can't */
+/*  tunnel through thin obstacles) checking blocks first, then entities. */
+static void Arrow_Tick(struct ArrowEntity* a) {
+	struct AABB bb, swept;
+	struct Entity* hitEntity;
+	struct Mob* hitMob;
+	Vec3 step;
+	float len;
+	int steps, s;
+	cc_bool collided = false;
+
+	a->age++;
+
+	if (a->hasHit) {
+		a->stickTime++;
+		if (a->type == 0) {
+			if (a->stickTime >= ARROW_STICK_PLAYER_MIN_TICKS &&
+				Random_Float(&st_arrowRng) < ARROW_STICK_PLAYER_DESPAWN_CHANCE) a->active = false;
+		} else {
+			if (a->stickTime >= ARROW_STICK_MOB_TICKS) a->active = false;
+		}
+		return;
+	}
+
+	a->velocity.x *= ARROW_DRAG;
+	a->velocity.y *= ARROW_DRAG;
+	a->velocity.z *= ARROW_DRAG;
+	a->velocity.y -= 0.02f * a->gravity;
+
+	len   = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
+	steps = (int)(len / ARROW_SUBSTEP_LEN + 1.0f);
+	step.x = a->velocity.x / steps;
+	step.y = a->velocity.y / steps;
+	step.z = a->velocity.z / steps;
+
+	Arrow_BoxAt(&a->pos, &bb);
+
+	for (s = 0; s < steps && !collided; s++) {
+		swept = bb;
+		Arrow_ExpandBox(&swept, &step);
+
+		if (Arrow_BlockCollision(&swept)) collided = true;
+
+		if (Arrow_EntityCollision(a, &swept, &hitEntity, &hitMob)) {
+			Arrow_ApplyHit(a, hitEntity, hitMob);
+			return; /* entity hits short-circuit the whole tick, exactly as in Arrow.tick() */
+		}
+
+		if (!collided) {
+			a->pos.x += step.x; a->pos.y += step.y; a->pos.z += step.z;
+			Arrow_BoxAt(&a->pos, &bb);
+		}
+	}
+
+	if (collided) {
+		a->hasHit = true;
+		a->velocity.x = a->velocity.y = a->velocity.z = 0.0f;
+	} else if (len > 0.0001f) {
+		a->facing.x = a->velocity.x / len;
+		a->facing.y = a->velocity.y / len;
+		a->facing.z = a->velocity.z / len;
+	}
+}
+
+/* playerTouch() - pickup is a plain AABB touch test (no pickup radius), and */
+/*  only ever applies to player-owned arrows that are already stuck. */
+static void Arrow_TryPickup(struct ArrowEntity* a) {
+	struct LocalPlayer* p;
+	struct AABB arrowBB, playerBB;
+	if (!a->hasHit || !a->ownerIsPlayer)      return;
+	if (st_playerArrows >= ARROW_PLAYER_MAX)  return;
+
+	p = Entities.CurPlayer;
+	if (!p) return;
+
+	Arrow_BoxAt(&a->pos, &arrowBB);
+	Entity_GetBounds(&p->Base, &playerBB);
+	if (!AABB_Intersects(&arrowBB, &playerBB)) return;
+
+	st_playerArrows++;
+	a->active = false;
+}
+
+static void SurvivalTest_TickArrows(void) {
+	struct ArrowEntity* a;
+	int i;
+	for (i = 0; i < ARROW_MAX; i++) {
+		a = &st_arrows[i];
+		if (!a->active) continue;
+
+		Arrow_Tick(a);
+		if (a->active) Arrow_TryPickup(a);
+	}
+}
+
+static void ArrowsPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&st_arrowsTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry arrows_entry = { "arrows.png", ArrowsPngProcess };
+
+/* render() - reconstructs the model's final world-space orientation from an */
+/*  orthonormal (facing, crossA, crossB) basis plus a fixed 45-degree roll, */
+/*  rather than literally porting Java's RotY(yRot-90)*RotZ(xRot)*RotX(45) */
+/*  Euler sequence (which depends on axis conventions this engine doesn't */
+/*  share) - matching the precedent already set by Mob_MoveRelative's own */
+/*  from-scratch re-derivation of a Java rotation formula. The exact local */
+/*  geometry/UVs below (2 head quads at local x=-7, 4 shaft quads spanning */
+/*  x=-8..8 rotated 0/90/180/270 around the shaft axis, all scaled by */
+/*  0.05625) are copied directly from the decompiled render() though, since */
+/*  that part has no convention mismatch to resolve. */
+static void Arrow_BuildVertices(struct ArrowEntity* a, PackedCol col, struct VertexTextured** vertices) {
+	struct VertexTextured* v = *vertices;
+	Vec3 F, ref, right, up, crossA, crossB, center;
+	const float s = 0.05625f;
+	const float c45 = 0.70710678f;
+	float var2, var3, var4, var5, var8;
+	float cy, sy;
+	int k;
+	static const float thetaCos[4] = { 1.0f, 0.0f, -1.0f,  0.0f };
+	static const float thetaSin[4] = { 0.0f, 1.0f,  0.0f, -1.0f };
+
+	F = a->facing;
+	ref.x = 0.0f; ref.y = 1.0f; ref.z = 0.0f;
+	if (Math_AbsF(F.y) > 0.999f) { ref.x = 0.0f; ref.y = 0.0f; ref.z = 1.0f; }
+
+	right.x = F.y * ref.z - F.z * ref.y;
+	right.y = F.z * ref.x - F.x * ref.z;
+	right.z = F.x * ref.y - F.y * ref.x;
+	Vec3_Normalise(&right);
+
+	up.x = right.y * F.z - right.z * F.y;
+	up.y = right.z * F.x - right.x * F.z;
+	up.z = right.x * F.y - right.y * F.x;
+
+	crossA.x = (right.x + up.x) * c45; crossA.y = (right.y + up.y) * c45; crossA.z = (right.z + up.z) * c45;
+	crossB.x = (up.x - right.x) * c45; crossB.y = (up.y - right.y) * c45; crossB.z = (up.z - right.z) * c45;
+
+	center   = a->pos;
+	center.y -= 0.125f; /* render() translates heightOffset/2 (=0.25/2) below the tracked position */
+
+	var2 = 0.5f;                            /* shaft U width (16 of 32 texels) */
+	var3 = (a->type * 10) / 32.0f;          /* shaft V1 */
+	var4 = (5.0f + a->type * 10) / 32.0f;   /* shaft V2 == head V1 */
+	var5 = 0.15625f;                        /* head U width (5 of 32 texels) */
+	var8 = (10.0f + a->type * 10) / 32.0f;  /* head V2 */
+
+	#define ARROW_V(lx, ly, lz, uu, vv) \
+		v->x = center.x - F.x*(lx)*s + crossA.x*(ly)*s + crossB.x*(lz)*s; \
+		v->y = center.y - F.y*(lx)*s + crossA.y*(ly)*s + crossB.y*(lz)*s; \
+		v->z = center.z - F.z*(lx)*s + crossA.z*(ly)*s + crossB.z*(lz)*s; \
+		v->Col = col; v->U = (uu); v->V = (vv); v++;
+
+	/* Head - 2 coplanar quads (opposite winding for front+back visibility) at local x=-7 */
+	ARROW_V(-7,-2,-2, 0.0f,var4) ARROW_V(-7,-2, 2, var5,var4) ARROW_V(-7, 2, 2, var5,var8) ARROW_V(-7, 2,-2, 0.0f,var8)
+	ARROW_V(-7, 2,-2, 0.0f,var4) ARROW_V(-7, 2, 2, var5,var4) ARROW_V(-7,-2, 2, var5,var8) ARROW_V(-7,-2,-2, 0.0f,var8)
+
+	/* Shaft - the same flat quad drawn 4 times, rotated 0/90/180/270 around */
+	/*  the shaft axis to form the classic 4-bladed cross cross-section. */
+	for (k = 0; k < 4; k++) {
+		cy = thetaCos[k]; sy = thetaSin[k];
+		ARROW_V(-8,-2.0f*cy,-2.0f*sy, 0.0f,var3) ARROW_V( 8,-2.0f*cy,-2.0f*sy, var2,var3)
+		ARROW_V( 8, 2.0f*cy, 2.0f*sy, var2,var4) ARROW_V(-8, 2.0f*cy, 2.0f*sy, 0.0f,var4)
+	}
+	#undef ARROW_V
+	*vertices = v;
+}
+
+void SurvivalTest_RenderArrows(float delta, float t) {
+	struct ArrowEntity* a;
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	PackedCol col;
+	int i, count = 0;
+	cc_bool any = false;
+
+	if (!SurvivalTest_Enabled) return;
+	for (i = 0; i < ARROW_MAX; i++) { if (st_arrows[i].active) { any = true; break; } }
+	if (!any || !st_arrowsTexId) return;
+
+	if (!st_arrowVB) {
+		st_arrowVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, ARROW_MAX_VERTICES);
+		if (!st_arrowVB) return;
+	}
+
+	ptr = data = (struct VertexTextured*)Gfx_LockDynamicVb(st_arrowVB, VERTEX_FORMAT_TEXTURED, ARROW_MAX_VERTICES);
+	for (i = 0; i < ARROW_MAX; i++) {
+		a = &st_arrows[i];
+		if (!a->active) continue;
+
+		col = Lighting.Color(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z));
+		Arrow_BuildVertices(a, col, &ptr);
+		count += ARROW_VERTICES_PER_ARROW;
+	}
+	Gfx_UnlockDynamicVb(st_arrowVB);
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetAlphaTest(true);
+	Gfx_BindTexture(st_arrowsTexId);
+	Gfx_DrawVb_IndexedTris_Range(count, 0, DRAW_HINT_NONE);
+	Gfx_SetAlphaTest(false);
+}
+
+/* Minecraft.java's Tab-fire gate: discrete key-down, survival mode, arrows>0. */
+cc_bool SurvivalTest_TryShootArrow(void) {
+	struct LocalPlayer* p;
+	struct Entity* e;
+	if (!SurvivalTest_Enabled) return false;
+	if (st_playerArrows <= 0)  return false;
+
+	p = Entities.CurPlayer;
+	if (!p) return false;
+	e = &p->Base;
+
+	SurvivalTest_SpawnArrow(Entity_GetEyePosition(e), e->Yaw, e->Pitch,
+							 ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
+	st_playerArrows--;
+	return true;
+}
+
+int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
+
+
+/*########################################################################################################################*
 *------------------------------------------------------Inventory----------------------------------------------------------*
 *#########################################################################################################################*/
 BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].block; }
@@ -1363,6 +1800,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 
 	/* Mobs ----------------------------------------------------------------- */
 	SurvivalTest_TickMobs(delta);
+
+	/* Arrows ----------------------------------------------------------------- */
+	SurvivalTest_TickArrows();
 }
 
 
@@ -1389,6 +1829,10 @@ static void SurvivalTest_ResetState(void) {
 	for (i = 0; i < MOB_MAX; i++) {
 		st_mobs[i].active = false;
 	}
+	for (i = 0; i < ARROW_MAX; i++) {
+		st_arrows[i].active = false;
+	}
+	st_playerArrows = ARROW_PLAYER_START;
 }
 
 /* The item vertex buffer is a GPU resource and must be dropped/recreated */
@@ -1396,6 +1840,8 @@ static void SurvivalTest_ResetState(void) {
 static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
+	Gfx_DeleteDynamicVb(&st_arrowVB);
+	if (!Gfx.ManagedTextures) Gfx_DeleteTexture(&st_arrowsTexId);
 }
 
 static void SurvivalTest_Init(void) {
@@ -1404,10 +1850,12 @@ static void SurvivalTest_Init(void) {
 
 	Random_SeedFromCurrentTime(&st_dropRng);
 	Random_SeedFromCurrentTime(&st_mobRng);
+	Random_SeedFromCurrentTime(&st_arrowRng);
 	SurvivalTest_ResetState();
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
+	TextureEntry_Register(&arrows_entry);
 }
 
 static void SurvivalTest_Free(void) {
@@ -1416,6 +1864,7 @@ static void SurvivalTest_Free(void) {
 	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
+	Gfx_DeleteDynamicVb(&st_arrowVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {

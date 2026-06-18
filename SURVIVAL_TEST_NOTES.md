@@ -11,7 +11,7 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
-IN PROGRESS.** User confirmed: humans start with **20 arrows** (`MAX_ARROWS=99`),
+DONE.** User confirmed: humans start with **20 arrows** (`MAX_ARROWS=99`),
 sourced from decompiled `Player.java`. Researched (decompiled `Arrow.java`/
 `Skeleton.java`/`Player.java`/`Minecraft.java` + Wiki, not guessed):
 - No bow item in Survival Test — player fires directly via Tab key, force 1.2F,
@@ -44,10 +44,41 @@ sourced from decompiled `Player.java`. Researched (decompiled `Arrow.java`/
   regardless of subfolder, so this alone makes `arrows.png` get pulled from the
   classic jar. Adding this entry invalidates existing users' cached
   `default.zip` (one-time re-download+rebuild), which is expected/correct.
-- **Not yet implemented**: the arrow entity struct/pool, physics tick, model/
-  render code, Tab-key firing input hook, skeleton shooting AI hook, hit
-  detection + damage application, stick/despawn/pickup logic. This is the
-  next concrete coding task.
+- **Implemented** (`SurvivalTest.c`, new "Arrows" section, all behaviour
+  re-derived directly from decompiled `Arrow.java`/`Skeleton.java`/
+  `Minecraft.java`, not guessed):
+  - Fixed `st_arrows[ARROW_MAX]` pool (mirrors the drops/mobs pattern), each
+    with its own `gravity = 1/force` since force varies per source (1.2
+    player Tab-fire, 1.0 skeleton `shootArrow`, 0.4 skeleton death-burst).
+  - `Arrow_Tick`: exact drag/gravity/substep collision sweep from
+    `Arrow.tick()` — block hits zero velocity and stick; entity hits
+    (respecting the 5-tick owner-immunity window) call `Mob_Hurt`/
+    `SurvivalTest_Hurt` and always despawn (no sticking on entity hit).
+    Player-fired stuck arrows are pickupable and despawn after stickTime>=300
+    with a 1%/tick roll; mob-fired stuck arrows always despawn at tick 20.
+  - `SurvivalTest_TryShootArrow` wired to a discrete Tab key-down hook in
+    `InputHandler.c`'s `OnInputDown` (covers both the legacy and `Down2`
+    input dispatch paths, which both route through that one function).
+  - Skeleton AI (`SurvivalTest.c` Mobs section): 1/30 per-tick chance to call
+    `Mob_ShootArrow` (±22.5° yaw/pitch spread, force 1.0, damage 3) while it
+    has a target, on top of (not instead of) its existing melee attack;
+    `Mob_SkeletonDeathBurst` fires 4-9 arrows (force 0.4, owner=player so
+    they're pickupable) at the 20-deathTick removal mark.
+  - Rendering (`SurvivalTest_RenderArrows`, called from `Game.c`'s 3D
+    render-frame alongside `SurvivalTest_RenderDrops`/`RenderMobs`): exact
+    2-quad head + 4-quad cross-shaft geometry and UVs from `Arrow.render()`,
+    rebuilt each frame into a dynamic VB via an orthonormal basis derived
+    from the arrow's stored unit facing vector (with a degenerate straight
+    up/down fallback), using the `arrows.png` texture registered via the
+    same `TextureEntry` pattern as `particles.png`.
+  - HUD: arrow count digit display added to `Screens.c`'s `HUDScreen`
+    (mirrors the existing hotbar stack-count digit rendering, drawn
+    right-aligned above the hotbar's right edge, alongside the heart row),
+    following the fixed-vertex-budget VB pattern (`SURVIVAL_ARROWS_MAX_VERTICES`
+    folded into `HUD_MAX_VERTICES`, dirty-checked via a `lastArrows` field).
+  - Deliberate simplification: no player-side knockback from arrow hits —
+    the existing mob-melee-vs-player damage path also has none, so adding it
+    only for arrows would've been an inconsistent, out-of-scope addition.
 
 ---
 

@@ -896,6 +896,13 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	/* Hotkeys should not be triggered multiple times when holding down */
 	if (was) return;
 
+	/* Minecraft.java: Tab is a discrete key-down "fire arrow" action in */
+	/*  Survival Test, independent of (and alongside) BIND_TABLIST's */
+	/*  existing show-player-list-while-held behaviour bound to the same key. */
+	if (SurvivalTest_Enabled && key == CCKEY_TAB) {
+		SurvivalTest_TryShootArrow();
+	}
+
 	if (triggered) {
 	} else if (key == CCKEY_F5 && Game_ClassicMode) {
 		int weather = Env.Weather == WEATHER_SUNNY ? WEATHER_RAINY : WEATHER_SUNNY;

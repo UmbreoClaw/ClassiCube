@@ -68,5 +68,19 @@ void SurvivalTest_RenderMobs(float delta, float t);
 /*  when survival mode is disabled). */
 cc_bool SurvivalTest_TryAttackMob(void);
 
+/* Renders all in-flight/stuck arrow entities in the 3D world. No-op when */
+/*  survival mode is disabled. Call once per frame, alongside */
+/*  SurvivalTest_RenderDrops/RenderMobs (e.g. in Render3DFrame). */
+void SurvivalTest_RenderArrows(float delta, float t);
+
+/* Fires an arrow from the player along their current look direction, */
+/*  decrementing their arrow count (Tab key, matching Survival Test). */
+/*  Returns false (and does nothing) if out of arrows or survival mode */
+/*  is disabled. */
+cc_bool SurvivalTest_TryShootArrow(void);
+
+/* Gets how many arrows the player currently has (0 to 99). */
+int SurvivalTest_ArrowCount(void);
+
 CC_END_HEADER
 #endif

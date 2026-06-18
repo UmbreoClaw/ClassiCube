@@ -86,8 +86,10 @@ static struct HUDScreen {
 	struct HotbarWidget hotbar;
 	int heartCount;     /* number of heart vertices built last frame */
 	int countVertices;  /* number of stack-count vertices built last frame */
+	int arrowVertices;  /* number of arrow-count digit vertices built last frame */
 	int lastHealth;     /* SurvivalTest_Health value from last rebuild */
 	int lastInvVersion; /* SurvivalTest_InvVersion() from last rebuild */
+	int lastArrows;     /* SurvivalTest_ArrowCount() value from last rebuild */
 } HUDScreen_Instance CC_BIG_VAR;
 
 /* Each integer can be at most 10 digits + minus prefix */
@@ -98,7 +100,9 @@ static struct HUDScreen {
 #define SURVIVAL_HEARTS_MAX_VERTICES 80
 /* Up to 2 digits per hotbar slot for stack counts (4 vertices per digit) */
 #define SURVIVAL_COUNTS_MAX_VERTICES (SURVIVAL_HOTBAR_SLOTS * 2 * 4)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES)
+/* Arrow count display: up to 2 digits (4 vertices per digit) */
+#define SURVIVAL_ARROWS_MAX_VERTICES (2 * 4)
+#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES + SURVIVAL_ARROWS_MAX_VERTICES)
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -388,6 +392,11 @@ static void HUDScreen_Update(void* screen, float delta) {
 		s->lastInvVersion = SurvivalTest_InvVersion();
 		s->dirty          = true;
 	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_ArrowCount() != s->lastArrows) {
+		s->lastArrows = SurvivalTest_ArrowCount();
+		s->dirty      = true;
+	}
 }
 
 #define CH_EXTENT 16
@@ -530,12 +539,63 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 	return (int)(cur - dst);
 }
 
+/* Builds the player's current arrow count, drawn to the right of the heart */
+/*  row (right-aligned to the hotbar's right edge), using the same digit */
+/*  atlas as the hotbar stack counts. */
+static int HUDScreen_BuildArrowsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct TextAtlas* atlas = &s->countAtlas;
+	struct HotbarWidget* w  = &s->hotbar;
+	struct VertexTextured* cur = dst;
+	struct Texture part;
+	char digits[STRING_INT_CHARS];
+	int i, nDigits, d, count;
+	int right, y, heartSize;
+	float scale, f, digitH, penX;
+
+	if (!SurvivalTest_Enabled) return 0;
+	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
+	if (!atlas->tex.height)    return 0;
+
+	scale     = Gui_GetHotbarScale();
+	heartSize = (int)(9.0f * scale);
+	y         = w->y - heartSize - (int)(2.0f * scale);
+
+	digitH = heartSize * 0.9f;
+	f      = digitH / atlas->tex.height;
+
+	part.ID     = atlas->tex.ID;
+	part.uv.v1  = atlas->tex.uv.v1;
+	part.uv.v2  = atlas->tex.uv.v2;
+	part.height = (cc_uint16)digitH;
+	part.y      = (short)(y + (heartSize - (int)digitH) / 2);
+
+	count   = SurvivalTest_ArrowCount();
+	nDigits = String_MakeUInt32((cc_uint32)count, digits);
+	right   = w->x + w->width;
+
+	penX = (float)right;
+	for (i = 0; i < nDigits; i++) penX -= atlas->widths[digits[i] - '0'] * f;
+
+	/* String_MakeUInt32 writes least-significant first, so emit reversed */
+	for (i = nDigits - 1; i >= 0; i--) {
+		d           = digits[i] - '0';
+		part.x      = (short)penX;
+		part.width  = (cc_uint16)(atlas->widths[d] * f);
+		part.uv.u1  = atlas->offsets[d] * atlas->uScale;
+		part.uv.u2  = part.uv.u1 + atlas->widths[d] * atlas->uScale;
+		Gfx_Make2DQuad(&part, PACKEDCOL_WHITE, &cur);
+		penX += part.width;
+	}
+	return (int)(cur - dst);
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct VertexTextured* data;
 	struct VertexTextured** ptr;
 	struct VertexTextured* heartsDst;
 	struct VertexTextured* countsDst;
+	struct VertexTextured* arrowsDst;
 
 	data = Screen_LockVb(s);
 	ptr  = &data;
@@ -550,11 +610,13 @@ static void HUDScreen_BuildMesh(void* screen) {
 
 	/* data now points to offset (12 + HOTBAR_MAX_VERTICES) in the VB. */
 	/* The position display occupies POSITION_HUD_CHARS * 4 vertices after */
-	/*  that, then hearts, then hotbar stack counts. */
+	/*  that, then hearts, then hotbar stack counts, then arrow count. */
 	heartsDst     = data + POSITION_HUD_CHARS * 4;
 	countsDst     = heartsDst + SURVIVAL_HEARTS_MAX_VERTICES;
+	arrowsDst     = countsDst + SURVIVAL_COUNTS_MAX_VERTICES;
 	s->heartCount    = HUDScreen_BuildHeartsMesh(s, heartsDst);
 	s->countVertices = HUDScreen_BuildCountsMesh(s, countsDst);
+	s->arrowVertices = HUDScreen_BuildArrowsMesh(s, arrowsDst);
 	Gfx_UnlockDynamicVb(s->vb);
 }
 
@@ -602,6 +664,15 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_BindDynamicVb(s->vb);
 			Gfx_DrawVb_IndexedTris_Range(s->countVertices,
 				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES,
+				DRAW_HINT_RECT);
+		}
+
+		/* Draw survival arrow count (digit atlas) */
+		if (SurvivalTest_Enabled && s->arrowVertices > 0 && s->countAtlas.tex.ID) {
+			Gfx_BindTexture(s->countAtlas.tex.ID);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->arrowVertices,
+				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES,
 				DRAW_HINT_RECT);
 		}
 	}
