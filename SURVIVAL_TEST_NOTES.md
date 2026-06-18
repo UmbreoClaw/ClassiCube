@@ -237,6 +237,36 @@ session (no display available).
 
 ---
 
+## OPEN BUGS — RESUME HERE NEXT SESSION (live-test feedback, not yet fixed)
+
+User finally got to play-test everything built so far and reports **arrows
+STILL don't work** even after the InputHandler routing fix (commit 915b6a6),
+plus "a lot more bugs" — full list to be provided next session (their weekly
+usage limit was nearly up, so we paused before enumerating them).
+
+**Arrows — still broken after the Tab-routing fix.** That means the routing
+fix was either insufficient or the wrong/incomplete cause. Things to check
+first next session (don't assume — verify each against a running build):
+- Is the new handler in `OnInputDown` actually reached? Confirm no earlier
+  `return` fires for Tab, and that `InputBind_Claims(BIND_TABLIST, key, …)`
+  is true for the default Tab binding at that point.
+- Does `SurvivalTest_TryShootArrow()` return early? It bails on
+  `!SurvivalTest_Enabled`, `st_playerArrows <= 0`, or `!Entities.CurPlayer`.
+  Verify `st_playerArrows` is actually initialised to 20 at world entry
+  (ARROW_PLAYER_START) and not reset to 0 by ResetState ordering.
+- If it DOES fire: is the arrow spawning inside the player and instantly
+  colliding/despawning, spawning with zero velocity, or simply not being
+  rendered? Check `SurvivalTest_SpawnArrow` initial pos/velocity and the
+  owner-grace window vs. `SurvivalTest_RenderArrows`/tick.
+- Consider whether `!was` is ever true for Tab on the user's platform, or
+  whether the chat HUD's `ChatScreen_KeyDown` is somehow still consuming it
+  on a path that runs before `OnInputDown`'s bind section.
+
+Ask the user for the rest of the bug list at the start of next session
+before diving in, so fixes can be batched and prioritised.
+
+---
+
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
