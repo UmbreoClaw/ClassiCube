@@ -10,7 +10,48 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ## NEXT TASK (agreed — start here next session)
 
-**Fall damage bug fix (player + new mob fall damage): DONE this session.**
+**Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
+IN PROGRESS.** User confirmed: humans start with **20 arrows** (`MAX_ARROWS=99`),
+sourced from decompiled `Player.java`. Researched (decompiled `Arrow.java`/
+`Skeleton.java`/`Player.java`/`Minecraft.java` + Wiki, not guessed):
+- No bow item in Survival Test — player fires directly via Tab key, force 1.2F,
+  dead straight along look direction, instant (no charge/cooldown beyond key repeat).
+- Arrow bbox 0.3w x 0.5h, heightOffset 0.25. Per-tick: velocity *= 0.998 (drag,
+  all axes) then yd -= 0.02/force (gravity). Damage fixed: 7 if player-fired,
+  3 if mob-fired (not knockback). Sticks into blocks by zeroing velocity (no
+  shake/inTile in this era). Player arrows despawn after stickTime>=300 ticks
+  with 1%/tick roll; mob arrows always despawn at exactly 20 ticks (not
+  pickupable). Player can pick up own stuck arrows, capped at 99 total. Arrow
+  can't hit its firing owner until time>5 ticks after firing.
+- Skeleton `shootArrow()`: +-22.5 deg yaw spread + pitch spread, force 1.0F,
+  damage 3 (mob value, not its melee 8). Fires ~1/30 chance per tick once it
+  has a target, using the same aggro range constants already in
+  `SurvivalTest.c` (acquire <256, give up >1024 w/ 1% roll). Skeleton death
+  bursts 4-9 pickupable arrows (owner=player) at force 0.4F.
+- Render: 2-quad head plane + 4-quad cross shaft (each rotated 90 deg about X),
+  yaw/pitch/45-deg-roll rotation sequence, 0.05625 uniform scale.
+- **Texture, corrected this session**: authentic texture is `item/arrows.png`
+  (plural), **32x32**, two 10px-tall row-bands (type 0 = player rows 0-10,
+  type 1 = mob/"purple" rows 10-20, selected via `type*10` Y offset). It lives
+  in the **classic c0.30 jar**, not the modern 1.6.2 jar. An earlier pass in
+  this session had wrongly wired up the modern jar's single 16x16
+  `entity/arrow.png` (no player/mob variant) — reverted. Fixed in
+  `Resources.c`: `defaultZipEntries[]` entry renamed `arrow.png` -> `arrows.png`
+  and moved into the classic-jar-files block; the two `ModernPatcher_SelectEntry`/
+  `ModernPatcher_ProcessEntry` checks for `entity/arrow.png` were removed.
+  `ClassicPatcher_SelectEntry`/`ProcessEntry` needed no changes — they already
+  auto-extract any jar entry whose basename matches `defaultZipEntries[]`
+  regardless of subfolder, so this alone makes `arrows.png` get pulled from the
+  classic jar. Adding this entry invalidates existing users' cached
+  `default.zip` (one-time re-download+rebuild), which is expected/correct.
+- **Not yet implemented**: the arrow entity struct/pool, physics tick, model/
+  render code, Tab-key firing input hook, skeleton shooting AI hook, hit
+  detection + damage application, stick/despawn/pickup logic. This is the
+  next concrete coding task.
+
+---
+
+**Fall damage bug fix (player + new mob fall damage): DONE (earlier session).**
 
 User reported player fall damage wasn't registering for falls just past the
 3-block safe threshold. Root cause found in `SurvivalTest_UpdateFall`: it read
