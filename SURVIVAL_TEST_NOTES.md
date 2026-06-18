@@ -165,6 +165,44 @@ Launcher this session (no display available).
 
 ---
 
+## TERRAIN GEN AUDIT (this session): confirmed already faithful, 2 RNG bugs fixed
+
+User asked how hard it'd be to add c0.30-s terrain gen. Verified by reading
+`mcraft_client`'s `LevelGenerator.java` (genuine c0.30 client — window title
+literally "Minecraft 0.30") line-by-line against `NotchyGen` in
+`Generator.c`: **it's already a faithful port**, not a different/later
+generator. Same Perlin/octave/combined-noise stack and constants, same pass
+order (heightmap → strata → caves → ore veins coal90/iron70/gold50 (no
+diamond, correct for c0.30) → water/lava flood-fill → grass/sand/gravel
+surface → flowers → mushrooms → trees), same world sizes (Small/Normal/Huge
+= 128/256/512, height 64, waterLevel 32). Flowers/mushrooms are correctly
+gated to `Game_Version.Version >= VERSION_0023` (0.30 qualifies). No new
+code needed — survival worlds already get correct c0.30-s terrain via the
+existing "Generate new level" flow, since `SurvivalTest.c` never touches
+generation.
+
+Found and fixed 2 real RNG divergences from the original Java while
+cross-referencing (both in `Generator.c`):
+- `NotchyGen_CarveCaves`: `caveLen` was computed as
+  `Random_Float() * Random_Float() * 200` (product) instead of the
+  original's `(nextFloat() + nextFloat()) * 200` (sum) — gave a skewed-short
+  cave-length distribution instead of the original's triangular one.
+- `NotchyGen_CarveOreVeins`: same product-vs-sum bug for `veinLen`, **plus**
+  a second bug — the `theta` accumulation inside the per-vein wander loop
+  was `theta = deltaTheta * 0.2f` (overwrite) instead of
+  `theta = theta + deltaTheta * 0.2f` (increment, matching the sibling cave
+  loop a few functions up and the original `var13 += var14 * 0.2F`). This
+  meant ore veins weren't smoothly curving snake-shapes like caves/the
+  original — they were re-randomizing direction every step.
+
+Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
+build — zero errors/warnings. Not yet visually confirmed in a running game
+this session (no display available); this affects all world generation
+(not survival-specific), so worth a visual sanity check of ore vein shapes
+next time a display is available.
+
+---
+
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
