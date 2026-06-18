@@ -819,7 +819,8 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "zombie.png",   RESOURCE_TYPE_DATA },
 	/* other files */
 	{ "snow.png", RESOURCE_TYPE_DATA }, { "chicken.png",    RESOURCE_TYPE_DATA },
-	{ "gui.png",  RESOURCE_TYPE_DATA }, { "animations.png", RESOURCE_TYPE_PNG  }, 
+	{ "arrow.png", RESOURCE_TYPE_DATA },
+	{ "gui.png",  RESOURCE_TYPE_DATA }, { "animations.png", RESOURCE_TYPE_PNG  },
 	{ "animations.txt", RESOURCE_TYPE_CONST, sizeof(ANIMS_TXT) - 1, (cc_uint8*)ANIMS_TXT },
 #ifdef CC_BUILD_MOBILE
 	{ "touch.png", RESOURCE_TYPE_DATA }
@@ -980,6 +981,7 @@ static cc_bool ModernPatcher_SelectEntry(const cc_string* path) {
 	return
 		String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png") ||
 		String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")   ||
+		String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/arrow.png")     ||
 		String_CaselessEqualsConst(path, "assets/minecraft/textures/blocks/fire_layer_1.png") ||
 		ModernPatcher_GetTile(path) != NULL;
 }
@@ -1013,7 +1015,8 @@ static cc_result ModernPatcher_ProcessEntry(const cc_string* path, struct Stream
 	cc_string name;
 
 	if (String_CaselessEqualsConst(path, "assets/minecraft/textures/environment/snow.png")
-		|| String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")) {
+		|| String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/chicken.png")
+		|| String_CaselessEqualsConst(path, "assets/minecraft/textures/entity/arrow.png")) {
 		name = *path;
 		Utils_UNSAFE_GetFilename(&name);
 
