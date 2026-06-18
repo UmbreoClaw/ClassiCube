@@ -73,6 +73,12 @@ cc_bool SurvivalTest_TryAttackMob(void);
 /*  SurvivalTest_RenderDrops/RenderMobs (e.g. in Render3DFrame). */
 void SurvivalTest_RenderArrows(float delta, float t);
 
+/* Renders the flashing glow overlay on every currently-fused (lit) TNT */
+/*  block, which speeds up as its fuse nears zero. No-op when survival mode */
+/*  is disabled. Call once per frame, alongside SurvivalTest_RenderDrops/ */
+/*  RenderMobs/RenderArrows (e.g. in Render3DFrame). */
+void SurvivalTest_RenderTnt(float delta, float t);
+
 /* Fires an arrow from the player along their current look direction, */
 /*  decrementing their arrow count (Tab key, matching Survival Test). */
 /*  Returns false (and does nothing) if out of arrows or survival mode */

@@ -506,6 +506,7 @@ static void Render3DFrame(float delta, float t) {
 	SurvivalTest_RenderDrops(delta, t);
 	SurvivalTest_RenderMobs(delta, t);
 	SurvivalTest_RenderArrows(delta, t);
+	SurvivalTest_RenderTnt(delta, t);
 	EntityNames_Render();
 
 	Particles_Render(t);

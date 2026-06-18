@@ -577,16 +577,28 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 struct TntFuse { IVec3 coords; int ticksLeft; cc_bool active; };
 static struct TntFuse st_tnt[TNT_MAX];
 
+/* PrimedTnt.hurt(): hitting an already-lit TNT (mining it again) destroys it */
+/*  without exploding, dropping a normal pickup item instead - so mining is a */
+/*  way to "defuse" TNT, at the cost of losing it back into your inventory. */
+static cc_bool SurvivalTest_DefuseTnt(IVec3 coords) {
+	int i;
+	for (i = 0; i < TNT_MAX; i++) {
+		if (!st_tnt[i].active) continue;
+		if (st_tnt[i].coords.x != coords.x || st_tnt[i].coords.y != coords.y || st_tnt[i].coords.z != coords.z) continue;
+
+		st_tnt[i].active = false;
+		SurvivalTest_SpawnDrop(coords, BLOCK_TNT);
+		return true;
+	}
+	return false;
+}
+
 static void SurvivalTest_ArmTnt(IVec3 coords) {
 	int i, slot = -1;
+	if (SurvivalTest_DefuseTnt(coords)) return;
 
 	for (i = 0; i < TNT_MAX; i++) {
-		if (!st_tnt[i].active) { if (slot < 0) slot = i; continue; }
-
-		if (st_tnt[i].coords.x == coords.x && st_tnt[i].coords.y == coords.y && st_tnt[i].coords.z == coords.z) {
-			st_tnt[i].ticksLeft = TNT_FUSE_TICKS; /* already lit - just restart its fuse */
-			return;
-		}
+		if (!st_tnt[i].active) { slot = i; break; }
 	}
 	if (slot < 0) return; /* no free slot - block just vanishes, untracked */
 
@@ -616,6 +628,79 @@ static void SurvivalTest_TickTnt(void) {
 		center.z = st_tnt[i].coords.z + 0.5f;
 		SurvivalTest_Explode(center, EXPLOSION_RADIUS);
 	}
+}
+
+/* PrimedTnt.render()'s flashing white overlay: redrawn over the model with */
+/*  additive alpha blending that pulses slowly at first (every ~8 ticks) and */
+/*  speeds up to every other tick once life<=16, finishing almost solid white */
+/*  for the last 2 ticks. ticksLeft plays the role of PrimedTnt.life here. */
+static float TntFuse_GlowAlpha(int ticksLeft) {
+	float alpha = (float)((ticksLeft / 4 + 1) % 2) * 0.4f;
+	if (ticksLeft <= 16) alpha = (float)((ticksLeft + 1) % 2) * 0.6f;
+	if (ticksLeft <= 2)  alpha = 0.9f;
+	return alpha;
+}
+
+/* Untextured white glow shell, drawn additively over a lit TNT block - same */
+/*  technique as the dropped-item twinkle (DropItem_BuildGlowCube), just an */
+/*  axis-aligned full block instead of a small spinning item cube. */
+#define TNT_GLOW_VERTICES_PER_BLOCK 24
+#define TNT_GLOW_MAX_VERTICES (TNT_MAX * TNT_GLOW_VERTICES_PER_BLOCK)
+static GfxResourceID st_tntGlowVB;
+
+static void TntFuse_BuildGlowCube(IVec3 coords, PackedCol col, struct VertexColoured** vertices) {
+	struct VertexColoured* v = *vertices;
+	float x0 = (float)coords.x, x1 = x0 + 1.0f;
+	float y0 = (float)coords.y, y1 = y0 + 1.0f;
+	float z0 = (float)coords.z, z1 = z0 + 1.0f;
+
+	#define TNT_GLOW_V(px, py, pz) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v++;
+	TNT_GLOW_V(x0,y0,z0) TNT_GLOW_V(x1,y0,z0) TNT_GLOW_V(x1,y0,z1) TNT_GLOW_V(x0,y0,z1) /* bottom */
+	TNT_GLOW_V(x0,y1,z0) TNT_GLOW_V(x0,y1,z1) TNT_GLOW_V(x1,y1,z1) TNT_GLOW_V(x1,y1,z0) /* top    */
+	TNT_GLOW_V(x0,y0,z0) TNT_GLOW_V(x0,y1,z0) TNT_GLOW_V(x1,y1,z0) TNT_GLOW_V(x1,y0,z0) /* side z0 */
+	TNT_GLOW_V(x0,y0,z1) TNT_GLOW_V(x1,y0,z1) TNT_GLOW_V(x1,y1,z1) TNT_GLOW_V(x0,y1,z1) /* side z1 */
+	TNT_GLOW_V(x0,y0,z0) TNT_GLOW_V(x0,y0,z1) TNT_GLOW_V(x0,y1,z1) TNT_GLOW_V(x0,y1,z0) /* side x0 */
+	TNT_GLOW_V(x1,y0,z0) TNT_GLOW_V(x1,y1,z0) TNT_GLOW_V(x1,y1,z1) TNT_GLOW_V(x1,y0,z1) /* side x1 */
+	#undef TNT_GLOW_V
+	*vertices = v;
+}
+
+void SurvivalTest_RenderTnt(float delta, float t) {
+	struct VertexColoured* data;
+	struct VertexColoured* ptr;
+	PackedCol col;
+	int i, count = 0;
+	cc_bool any = false;
+
+	if (!SurvivalTest_Enabled) return;
+	for (i = 0; i < TNT_MAX; i++) { if (st_tnt[i].active) { any = true; break; } }
+	if (!any) return;
+
+	if (!st_tntGlowVB) {
+		st_tntGlowVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_COLOURED, TNT_GLOW_MAX_VERTICES);
+		if (!st_tntGlowVB) return;
+	}
+
+	data = (struct VertexColoured*)Gfx_LockDynamicVb(st_tntGlowVB, VERTEX_FORMAT_COLOURED, TNT_GLOW_MAX_VERTICES);
+	ptr  = data;
+	for (i = 0; i < TNT_MAX; i++) {
+		if (!st_tnt[i].active) continue;
+
+		col = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * TntFuse_GlowAlpha(st_tnt[i].ticksLeft)));
+		TntFuse_BuildGlowCube(st_tnt[i].coords, col, &ptr);
+		count += TNT_GLOW_VERTICES_PER_BLOCK;
+	}
+	Gfx_UnlockDynamicVb(st_tntGlowVB);
+	if (!count) return;
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
+	Gfx_SetFaceCulling(true);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetAlphaBlendingAdditive(true);
+	Gfx_DrawVb_IndexedTris_Range(count, 0, DRAW_HINT_NONE);
+	Gfx_SetAlphaBlendingAdditive(false);
+	Gfx_SetDepthWrite(true);
+	Gfx_SetFaceCulling(false);
 }
 
 
@@ -1979,6 +2064,7 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
+	Gfx_DeleteDynamicVb(&st_tntGlowVB);
 	if (!Gfx.ManagedTextures) Gfx_DeleteTexture(&st_arrowsTexId);
 }
 
@@ -2003,6 +2089,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
+	Gfx_DeleteDynamicVb(&st_tntGlowVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {

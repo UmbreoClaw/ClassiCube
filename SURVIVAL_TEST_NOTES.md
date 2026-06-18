@@ -78,23 +78,39 @@ Implementation, all in `SurvivalTest.c`:
   returns without spawning any drop item.
 - New "TNT" section (between Health & damage and Mobs): a small fixed-size
   `struct TntFuse st_tnt[TNT_MAX]` pool (mirrors the existing drops/mobs/arrows
-  pool pattern). `SurvivalTest_ArmTnt` finds a free slot (or refreshes an
-  existing fuse at the same coords, so re-mining an already-lit block just
-  restarts its countdown instead of double-arming it), and restores the block
-  to `BLOCK_TNT` via `Game_UpdateBlock` (NOT `Game_ChangeBlock` — using the
-  latter, or manually raising `BlockChanged`, would make
-  `SurvivalTest_BlockChanged`'s "placed" branch fire and incorrectly consume an
-  inventory item the player never actually placed).
-  `SurvivalTest_TickTnt` (wired into `SurvivalTest_Tick`) counts down every
-  armed fuse and detonates it on expiry.
+  pool pattern). `SurvivalTest_ArmTnt` restores the block to `BLOCK_TNT` via
+  `Game_UpdateBlock` (NOT `Game_ChangeBlock` — using the latter, or manually
+  raising `BlockChanged`, would make `SurvivalTest_BlockChanged`'s "placed"
+  branch fire and incorrectly consume an inventory item the player never
+  actually placed) and starts its fuse. `SurvivalTest_TickTnt` (wired into
+  `SurvivalTest_Tick`) counts down every armed fuse and detonates it on expiry.
+- `PrimedTnt.hurt()`: hitting an already-lit TNT destroys it without exploding
+  and drops a normal pickup item instead — ported as `SurvivalTest_DefuseTnt`,
+  checked first by `SurvivalTest_ArmTnt` (so re-mining an armed block defuses
+  it rather than re-arming/extending its fuse). This gives mining TNT a real
+  "punch it before it explodes" defuse mechanic, at the cost of the item
+  reverting to a normal pickup instead of staying placed.
 - Simplification: the real `PrimedTnt` is a separate falling/flashing entity,
   not the original world block (mining instantly clears the block to air, and
   the entity floats/bounces independently with its own gravity). Porting that
-  would need a new entity-rendering path, so instead the block itself is simply
+  would need a new entity-physics path, so instead the block itself is simply
   left in the world (clears back to air, then is immediately restored) ticking
   down before exploding — visually it just sits there normally for 2 seconds
-  instead of vanishing. No smoke particles or flashing-faster-near-zero render
-  effect were ported either; only the core "doesn't explode instantly" delay.
+  instead of vanishing/floating. No gravity/bounce physics were ported.
+- `PrimedTnt.render()`'s flashing white overlay (additive-blended, pulsing
+  faster as `life` approaches 0, almost solid white for the last 2 ticks) IS
+  ported, as `SurvivalTest_RenderTnt`/`TntFuse_GlowAlpha` — reuses the exact
+  technique the dropped-item twinkle already uses (`DropItem_BuildGlowCube`):
+  an untextured white cube drawn over the block with additive alpha blending
+  and face culling, just axis-aligned and full-block-sized instead of a small
+  spinning item cube. New `st_tntGlowVB` vertex buffer, registered in
+  `SurvivalTest_OnContextLost`/`SurvivalTest_Free` alongside the existing ones,
+  and a new `SurvivalTest_RenderTnt(delta, t)` called from `Game.c`'s
+  `Render3DFrame` alongside `RenderDrops`/`RenderMobs`/`RenderArrows`. The
+  continuous `SmokeParticle`-every-tick from the original was NOT ported (no
+  smoke particle type exists in this engine, and adding one felt out of
+  proportion to the rest of this simplification - the flash carries the same
+  "something is about to happen" cue on its own).
 - Refactored the explosion math: pulled `Mob_ExplosionImmune` and the
   block-destruction-loop + linear player-damage-falloff body out of
   `Mob_CreeperExplode` into shared `SurvivalTest_ExplosionImmune`/
@@ -102,9 +118,12 @@ Implementation, all in `SurvivalTest.c`:
   section), since TNT and the creeper's death blast both derive from the same
   original `level.explode` code. `Mob_CreeperExplode` is now a one-line wrapper.
   Replaced the old `MOB_EXPLODE_RADIUS` define with a shared `EXPLOSION_RADIUS`.
-- Verified via `gcc -fsyntax-only` on both touched files, then a full
-  `make PLAT=linux -j$(nproc)` build — zero errors/warnings.
-- Not yet tested in a running game this session (no display available).
+- Verified via `gcc -fsyntax-only` on all touched files, then a full
+  `make PLAT=linux -j$(nproc)` build — zero errors/warnings. The new glow-cube
+  winding order was checked by direct comparison against the existing,
+  already-working `DropItem_BuildGlowCube` face order rather than guessed, but
+  the visual result (flash brightness/timing, face culling) is NOT yet
+  confirmed in a running game this session (no display available).
 
 ---
 
