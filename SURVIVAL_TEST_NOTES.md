@@ -8,6 +8,53 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
+## AUDIT PASS (this session): bug fixes + explanatory comments
+
+User asked for a self-directed audit of everything built so far: real bugs, bloat,
+and missing WHY-comments. Found and fixed, all in `SurvivalTest.c`, all re-verified
+against the decompiled Java sources (not guessed):
+
+- **`Mob_DoAttack` had swapped `atan2` arguments** for both `Yaw` and `Pitch` —
+  this codebase's own direction-vector convention (`Vec3_GetDirVector`/the
+  commented-out inverse `Vec3_GetHeading` in `Vectors.c`) requires
+  `Yaw = atan2(dx, -dz)`, `Pitch = atan2(-dy, horDist)`; the code had the
+  arguments reversed on both, which is silently wrong by up to 90° except at
+  exactly 45°-bearing targets. This affected both mob chase-movement direction
+  (via `Mob_MoveRelative`'s sin/cos(Yaw) basis) and arrow-aim direction (via
+  `Mob_ShootArrow`'s `Vec3_GetDirVector(Yaw,Pitch)`) simultaneously. It was never
+  visually obvious before because melee damage is purely distance-gated (doesn't
+  use Yaw/Pitch) and mob rendering never reads `.Pitch` — only the new arrow code
+  actually exercised the bug's consequences. Fixed.
+- **`Mob_ShootArrow`'s pitch-spread formula was wrong-shaped**: the comment (and
+  code) claimed a symmetric `±22.5°` like yaw, but the actual decompiled
+  `Skeleton.java` formula is `xRot - (random()*45 - 10.0)`, an asymmetric
+  `(-35°, +10°]` spread. Fixed the formula and the comment.
+- **`Mob_ShootArrow` and `SurvivalTest_TryShootArrow` both spawned arrows at eye
+  height** (`Entity_GetEyePosition`), but `Skeleton.shootArrow()` and
+  `Minecraft.java`'s Tab-fire handler both literally use the entity's base
+  position (`this.x/y/z`). Fixed both to use `e->Position`.
+- **Missing starting inventory**: `SurvivalGameMode.apply(Player)` gives every
+  player **10 TNT in the last hotbar slot** on spawn — this was never ported, so
+  survival mode silently started with a fully empty inventory. Restored in
+  `SurvivalTest_ResetState` (TNT already explodes correctly via
+  `BlockPhysics.c`'s existing `Physics_HandleTnt`, so this isn't a dead item).
+- **Missing mob despawn timer**: `BasicAI.tick()` removes a mob once it's gone
+  600+ ticks without being hurt/landing a hit AND a 1/800 per-tick roll fires AND
+  the player isn't within 32 blocks (otherwise the timer just resets) — ported as
+  `Mob.noActionTime`, reset in `Mob_Hurt` and on a successful `Mob_DoAttack` hit.
+  This supersedes the older "Despawn-at-distance ... (dropped, minor)" follow-up
+  note further down in this file — it's now implemented.
+- **Documented, not fixed**: `BasicAttackAI.attack()` also does a `level.clip()`
+  line-of-sight check and aborts the attack (no damage either way) if a block is
+  in the way; `Mob_DoAttack` has no such check, so a mob can land a melee hit
+  through a sufficiently thin wall within its 2-block range. Left as a known gap
+  (noted with a comment at the call site) rather than implemented, since it'd need
+  a new arbitrary-point-to-point raycast this codebase doesn't currently expose.
+- All fixes verified via `gcc -fsyntax-only` after each change; not yet re-verified
+  with a full `make` build or in a running game this session.
+
+---
+
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
@@ -187,7 +234,8 @@ Implemented entirely in `src/SurvivalTest.c` (+ hooks in `src/SurvivalTest.h`,
 
 ### Possible follow-ups (not done, not asked for yet)
 - Skeleton arrow-shooting (needs a projectile system — out of scope here).
-- Despawn-at-distance and mob-mob push-apart physics (dropped, minor).
+- Despawn-at-distance: **implemented** in the audit pass at the top of this file
+  (see `Mob.noActionTime`). Mob-mob push-apart physics is still not ported.
 - Mob death animation / fall-over before removal (currently mobs just
   freeze in place during `deathTicks` then vanish).
 - Mob names/render distance culling tuning, sound effects on hurt/death.

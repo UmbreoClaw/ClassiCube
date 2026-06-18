@@ -557,6 +557,7 @@ struct Mob {
 	int attackDelay;  /* cooldown before this mob can attack again (BasicAttackAI.attackDelay) */
 	int deathTicks;   /* ticks since health reached 0 - removed once this exceeds 20 */
 	int airTicks;     /* underwater air supply (Mob.airSupply) */
+	int noActionTime; /* ticks since last hurt/successful attack - drives the despawn roll below */
 
 	/* BasicAI's wander/chase input axes and turn impulse - decayed every */
 	/*  tick and refreshed at random, exactly as in the decompiled source. */
@@ -701,21 +702,31 @@ static void Mob_Die(struct Mob* m) {
 }
 
 /* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
-/*  Both yaw and pitch get an independent, symmetric +-22.5 degree random */
-/*  spread (decompiled Skeleton.java: yRot+180+(random()*45-22.5), */
-/*  xRot-(random()*45-22.5) - the spread itself is what matters, since +180 */
-/*  and the minus sign are both artifacts of Java's yRot/xRot convention). */
-/*  e->Yaw/e->Pitch already face the target directly (see Mob_DoAttack's own */
-/*  CC-convention atan2 formula), so no extra offset is needed here. */
+/*  Decompiled Skeleton.java: yRot+180+(random()*45-22.5) for yaw, but */
+/*  xRot-(random()*45-10.0) for pitch - NOT a symmetric +-22.5 like yaw, it's */
+/*  an asymmetric (-35, +10] spread biased toward less-downward/more-upward */
+/*  shots. The yaw "+180" is purely an artifact of Java's yRot/Arrow-velocity */
+/*  sign convention (verified by tracing Arrow's constructor trig through to */
+/*  cancellation with BasicAttackAI's yRot formula) and isn't needed here - */
+/*  e->Yaw/e->Pitch already face the target directly via Mob_DoAttack's own */
+/*  CC-convention atan2 formula - but the asymmetric pitch *shape* is a real */
+/*  gameplay detail, not a convention artifact, so it's ported as-is (CC's */
+/*  Pitch is also positive-down, like Java's xRot, so the sign carries over */
+/*  unchanged). */
 static void Mob_ShootArrow(struct Mob* m) {
 	struct Entity* e = &m->Base;
 	float yaw   = e->Yaw   + (Random_Float(&st_mobRng) * 45.0f - 22.5f);
-	float pitch = e->Pitch + (Random_Float(&st_mobRng) * 45.0f - 22.5f);
+	float pitch = e->Pitch - (Random_Float(&st_mobRng) * 45.0f - 10.0f);
 	int slot    = (int)(m - st_mobs);
 
 	/* damage=3, type=1 (mob-fired): Arrow's constructor picks these whenever */
 	/*  the owner isn't a Player - the skeleton qualifies as a Mob owner here. */
-	SurvivalTest_SpawnArrow(Entity_GetEyePosition(e), yaw, pitch, 1.0f, 3, 1, false, slot);
+	/* Skeleton.shootArrow spawns at the skeleton's own this.x/y/z - its base */
+	/*  (feet) position, not eye height - so e->Position is used, not */
+	/*  Entity_GetEyePosition (unlike the melee-attack ray in Mob_DoAttack's */
+	/*  player counterpart, SurvivalTest_TryAttackMob, which is a genuinely */
+	/*  different camera-ray mechanic). */
+	SurvivalTest_SpawnArrow(e->Position, yaw, pitch, 1.0f, 3, 1, false, slot);
 }
 
 /* SkeletonAI.beforeRemove() - a parting burst of 4-9 pickupable arrows */
@@ -801,6 +812,7 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage) {
 	m->health      -= damage;
 	m->invincTicks  = MOB_INVINC_TICKS;
 	m->hurtTicks    = 10;
+	m->noActionTime = 0; /* BasicAI.hurt: being hurt counts as "doing something" */
 
 	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) m->hasTarget = true;
 
@@ -852,6 +864,10 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 /*  distance, faces them, and lands a hit once in range and off cooldown. */
 /*  Facing uses CC's own atan2-based formula (re-derived/verified against */
 /*  Entity_GetEyePosition/Vec3_GetDirVector), not Java's raw yRot formula. */
+/* NOTE: Java's BasicAttackAI.attack() also does a level.clip() line-of-sight */
+/*  check and aborts (no damage to either side) if a block is in the way; */
+/*  that raycast-against-arbitrary-points isn't ported here, so a mob can */
+/*  land a hit through a sufficiently thin wall if within the 2-block range. */
 static void Mob_DoAttack(struct Mob* m) {
 	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
 	struct Entity* e = &m->Base;
@@ -877,12 +893,21 @@ static void Mob_DoAttack(struct Mob* m) {
 		return;
 	}
 
+	/* atan2 argument order matters here: this must match Vec3_GetDirVector's */
+	/*  convention (yaw=atan2(dx,-dz), pitch=atan2(-dy,horDist) - see the */
+	/*  commented-out Vec3_GetHeading in Vectors.c, its documented inverse) */
+	/*  since both mob chase movement (via Mob_MoveRelative's sin/cos(Yaw) */
+	/*  basis) and arrow aim (Mob_ShootArrow's Vec3_GetDirVector(Yaw,Pitch)) */
+	/*  depend on Yaw/Pitch actually pointing at the target. The swapped-arg */
+	/*  form atan2(-dz,dx)/atan2(horDist,-dy) looks similar but is wrong by */
+	/*  up to 90 degrees whenever the target isn't at a 45-degree bearing. */
 	horDist  = Math_SqrtF(diff.x * diff.x + diff.z * diff.z);
-	e->Yaw   = Math_Atan2f(-diff.z, diff.x) * MATH_RAD2DEG;
-	e->Pitch = Math_Atan2f(horDist, -diff.y) * MATH_RAD2DEG;
+	e->Yaw   = Math_Atan2f(diff.x, -diff.z) * MATH_RAD2DEG;
+	e->Pitch = Math_Atan2f(-diff.y, horDist) * MATH_RAD2DEG;
 
 	if (distSq < 4.0f && m->attackDelay <= 0) {
-		m->attackDelay = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
+		m->attackDelay  = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
+		m->noActionTime = 0; /* BasicAttackAI.attack: landing a hit also resets the despawn timer */
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
 		SurvivalTest_Hurt(damage);
 
@@ -939,6 +964,28 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		m->moveForward = 0.0f;
 		m->turnRate    = 0.0f;
 	} else {
+		m->noActionTime++;
+		/* BasicAI.tick's despawn roll: once a mob has gone 600+ ticks without */
+		/*  being hurt or landing a hit, each tick has a 1/800 chance to check */
+		/*  whether the player is still nearby (32 blocks) - if so the timer is */
+		/*  reset (so this only ever fires repeatedly while genuinely far away), */
+		/*  otherwise the mob silently despawns. Without this, idle/far mobs */
+		/*  would accumulate forever instead of being recycled like in Java. */
+		if (m->noActionTime > 600 && Random_Next(&st_mobRng, 800) == 0) {
+			struct LocalPlayer* dp = Entities.CurPlayer;
+			if (dp) {
+				float ddx = dp->Base.Position.x - e->Position.x;
+				float ddy = dp->Base.Position.y - e->Position.y;
+				float ddz = dp->Base.Position.z - e->Position.z;
+				if (ddx * ddx + ddy * ddy + ddz * ddz < 1024.0f) {
+					m->noActionTime = 0;
+				} else {
+					m->active = false;
+					return;
+				}
+			}
+		}
+
 		Mob_BasicAIUpdate(m, inWater, inLava);
 		if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
 
@@ -1567,7 +1614,8 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 	if (!p) return false;
 	e = &p->Base;
 
-	SurvivalTest_SpawnArrow(Entity_GetEyePosition(e), e->Yaw, e->Pitch,
+	/* Minecraft.java spawns at this.player.x/y/z (base position), not eye height. */
+	SurvivalTest_SpawnArrow(e->Position, e->Yaw, e->Pitch,
 							 ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
 	st_playerArrows--;
 	return true;
@@ -1823,6 +1871,11 @@ static void SurvivalTest_ResetState(void) {
 		st_inv[i].block = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
+	/* SurvivalGameMode.apply(Player): the player always starts with 10 TNT */
+	/*  in the last hotbar slot - this was missing entirely before. */
+	st_inv[8].block = BLOCK_TNT;
+	st_inv[8].count = 10;
+
 	for (i = 0; i < DROP_MAX; i++) {
 		st_drops[i].active = false;
 	}
@@ -1869,7 +1922,8 @@ static void SurvivalTest_Free(void) {
 
 static void SurvivalTest_OnNewMap(void) {
 	if (!SurvivalTest_Enabled) return;
-	/* Start empty - the player must gather blocks by mining */
+	/* Resets to the SurvivalGameMode.apply(Player) starting loadout (10 TNT, */
+	/*  everything else gathered by mining) every time a new map is loaded. */
 	SurvivalTest_ResetState();
 	SurvivalTest_SyncHotbar();
 }
