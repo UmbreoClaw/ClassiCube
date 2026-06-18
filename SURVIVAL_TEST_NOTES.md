@@ -127,6 +127,44 @@ Implementation, all in `SurvivalTest.c`:
 
 ---
 
+## LAUNCHER UI: survival mode toggle (this session)
+
+Exposed the previously hidden `OPT_SURVIVAL_MODE` option (`Options.h`), which
+before this had zero UI anywhere and could only be set by hand-editing
+`options.txt`. Added a `LCheckbox` bound to it in two places in `LScreens.c`,
+both sharing one callback:
+
+```c
+static void SurvivalMode_Changed(struct LCheckbox* w) {
+    Options_SetBool(OPT_SURVIVAL_MODE, w->value);
+}
+```
+
+- **Launcher Settings screen** (`SettingsScreen`) — new "Survival mode"
+  checkbox under "Use display scaling". Bumped
+  `SETTINGS_SCREEN_MAX_WIDGETS` 9→10, added `set_cbSurvival` layout (y=164),
+  pushed `set_btnBack` down (y=170→210) to make room.
+- **Choose Mode screen** (`ChooseModeScreen`, Settings → "Mode", also shown
+  on first launch) — new "Survival mode" checkbox + description label below
+  the Enhanced/Classic+hax/Classic buttons. Deliberately added as an
+  *independent* checkbox rather than a 4th mutually-exclusive button: those
+  3 buttons pick the network protocol/feature mode (classic vs CPE/custom
+  blocks), which is an orthogonal axis to gameplay mode (creative/survival)
+  — a player should be able to combine e.g. "Enhanced" + "Survival".
+  Bumped `CHOOSEMODE_SCREEN_MAX_WIDGETS` 12→14.
+
+No "restart required" dialog needed (unlike DPI scaling): the Launcher and
+the actual game are separate processes (`Process_StartGame2` in
+`Launcher_StartGame`), and options are saved to disk *before* the new game
+process is spawned. So toggling the checkbox takes effect the very next
+time "Play"/Singleplayer is clicked — no extra messaging needed.
+
+Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
+build — zero errors/warnings. Not yet visually confirmed in a running
+Launcher this session (no display available).
+
+---
+
 ## NEXT TASK (agreed — start here next session)
 
 **Arrow projectile system (bow-less Tab-fire, skeleton shooting, render, pickup):
