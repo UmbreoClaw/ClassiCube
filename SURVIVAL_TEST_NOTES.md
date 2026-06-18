@@ -294,17 +294,15 @@ the numbering. Verify each against a running build; don't assume root cause.
   (`SurvivalTest_SpawnDropsForBlock` and mob death drops). Cross-check each
   block's drop + count vs. c0.30-s.
 
-### 7. Launcher — redundant survival toggle + cut-off Back button
-- I added the "Survival mode" checkbox to BOTH the Settings screen AND the
-  Choose Mode screen (commit aa377d5) — user finds two toggles redundant and
-  suggests keeping only ONE.
-- On the **Settings** screen the extra checkbox pushed the **Back button off
-  the bottom** of the window in default/windowed size (set_btnBack moved to
-  y=210). 
-- Clean fix that solves both: **remove the Settings-screen checkbox, keep
-  only the Choose Mode one**, and revert `SETTINGS_SCREEN_MAX_WIDGETS`/
-  `set_btnBack` layout to its original values. (Confirm this "keep Choose
-  Mode only" choice with the user before doing it — they said "possibly".)
+### 7. Launcher — redundant survival toggle + cut-off Back button — FIXED
+- DONE (this session). Removed the "Survival mode" checkbox from the Settings
+  screen, keeping only the one on the Choose Mode screen (user confirmed
+  "keep Choose Mode only"). Reverted `SettingsScreen`'s struct field,
+  `SETTINGS_SCREEN_MAX_WIDGETS` (10→9), `set_btnBack` (y 210→170) and the
+  layout list back to their pre-aa377d5 state — which also fixes the Back
+  button being cut off in windowed mode (it was only cut off because the
+  4th checkbox had pushed it down). `SurvivalMode_Changed` stays (still used
+  by the Choose Mode checkbox). Verified with a clean build.
 
 ### Misc observed in screenshots (confirm whether intended)
 - A "Texture ID reference sheet" debug overlay is present — confirm if that's

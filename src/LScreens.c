@@ -1451,11 +1451,11 @@ static struct SettingsScreen {
 	LScreen_Layout
 	struct LButton btnMode, btnColours, btnBack;
 	struct LLabel  lblMode, lblColours;
-	struct LCheckbox cbExtra, cbEmpty, cbScale, cbSurvival;
+	struct LCheckbox cbExtra, cbEmpty, cbScale;
 	struct LLine sep;
 } SettingsScreen CC_BIG_VAR;
 
-#define SETTINGS_SCREEN_MAX_WIDGETS 10
+#define SETTINGS_SCREEN_MAX_WIDGETS 9
 static struct LWidget* settings_widgets[SETTINGS_SCREEN_MAX_WIDGETS];
 
 LAYOUTS set_btnMode[]    = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -70 } };
@@ -1463,12 +1463,11 @@ LAYOUTS set_lblMode[]    = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -70 
 LAYOUTS set_btnColours[] = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -20 } };
 LAYOUTS set_lblColours[] = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -20 } };
 
-LAYOUTS set_sep[]      = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE,  15 } };
-LAYOUTS set_cbExtra[]    = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  44 } };
-LAYOUTS set_cbEmpty[]    = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  84 } };
-LAYOUTS set_cbScale[]    = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE, 124 } };
-LAYOUTS set_cbSurvival[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE, 164 } };
-LAYOUTS set_btnBack[]    = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE, 210 } };
+LAYOUTS set_sep[]     = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE,  15 } };
+LAYOUTS set_cbExtra[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  44 } };
+LAYOUTS set_cbEmpty[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  84 } };
+LAYOUTS set_cbScale[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE, 124 } };
+LAYOUTS set_btnBack[] = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE, 170 } };
 
 
 #if defined CC_BUILD_MOBILE
@@ -1521,8 +1520,6 @@ static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
 				SettingsScreen_ShowEmpty,  set_cbEmpty);
 	LCheckbox_Add(s, &s->cbScale, "Use display scaling",
 				SettingsScreen_DPIScaling, set_cbScale);
-	LCheckbox_Add(s, &s->cbSurvival, "Survival mode",
-				SurvivalMode_Changed, set_cbSurvival);
 	LButton_Add(s,   &s->btnBack, 80, 35, "Back",
 				SwitchToMain, set_btnBack);
 }
@@ -1539,7 +1536,6 @@ static void SettingsScreen_Activated(struct LScreen* s_) {
 
 	LCheckbox_Set(&s->cbEmpty, Launcher_ShowEmptyServers);
 	LCheckbox_Set(&s->cbScale, DisplayInfo.DPIScaling);
-	LCheckbox_Set(&s->cbSurvival, Options_GetBool(OPT_SURVIVAL_MODE, false));
 }
 
 void SettingsScreen_SetActive(void) {
