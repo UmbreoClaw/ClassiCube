@@ -67,6 +67,9 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
 /*  section below (skeletons firing/death-bursting arrows) can spawn them. */
 static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float force,
 									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot);
+/* Defined later, in the TNT section - forward declared so the Drops section */
+/*  above (which decides what mining a TNT block does) can ignite its fuse. */
+static void SurvivalTest_ArmTnt(IVec3 coords);
 
 
 /*########################################################################################################################*
@@ -271,6 +274,11 @@ static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 		dropBlock = BLOCK_WOOD;
 		count     = 3 + Random_Next(&st_dropRng, 3); /* 3-5 planks */
 		break;
+	case BLOCK_TNT:
+		/* TNTBlock.getDropCount()==0 - mining TNT never yields an item, it */
+		/*  ignites a fuse instead (TNTPhysics.onBreak spawns a PrimedTnt). */
+		SurvivalTest_ArmTnt(coords);
+		return;
 	default:
 		break; /* most blocks drop themselves */
 	}
@@ -500,6 +508,116 @@ void SurvivalTest_Heal(int amount) {
 		SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 }
 
+/* level.explode's blast radius - shared by TNT and the creeper's death blast */
+/*  (both derive from the same original explosion code). */
+#define EXPLOSION_RADIUS 4
+
+/* Mirrors BlockPhysics.c's private BlocksTNT immunity check (liquids and */
+/*  metal/stone-sounding solid blocks survive blasts) - duplicated here since */
+/*  that function isn't exposed outside BlockPhysics.c. */
+static cc_bool SurvivalTest_ExplosionImmune(BlockID b) {
+	return (b >= BLOCK_WATER && b <= BLOCK_STILL_LAVA) ||
+		(Blocks.ExtendedCollide[b] == COLLIDE_SOLID && (Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE));
+}
+
+/* level.explode(null, x, y, z, radius) - destroys a sphere of blocks around */
+/*  center and damages the player with linear falloff if within range. Used */
+/*  by both TNT (PrimedTnt's expiry) and the creeper's death blast. The exact */
+/*  player-damage falloff curve wasn't recovered, so a simple linear falloff */
+/*  is used. */
+static void SurvivalTest_Explode(Vec3 center, int radius) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	int x = Math_Floor(center.x);
+	int y = Math_Floor(center.y);
+	int z = Math_Floor(center.z);
+	int dx, dy, dz, xx, yy, zz;
+	BlockID block;
+	Vec3 diff;
+	float dist;
+
+	for (dy = -radius; dy <= radius; dy++) {
+	for (dz = -radius; dz <= radius; dz++) {
+	for (dx = -radius; dx <= radius; dx++) {
+		if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
+		xx = x + dx; yy = y + dy; zz = z + dz;
+		if (!World_Contains(xx, yy, zz)) continue;
+
+		block = World_GetBlock(xx, yy, zz);
+		if (block == BLOCK_AIR || SurvivalTest_ExplosionImmune(block)) continue;
+		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+	}}}
+
+	if (!p) return;
+	diff.x = p->Base.Position.x - center.x;
+	diff.y = p->Base.Position.y - center.y;
+	diff.z = p->Base.Position.z - center.z;
+	dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
+	if (dist < (float)radius) {
+		int dmg = (int)((1.0f - dist / (float)radius) * SURVIVAL_MAX_HEALTH * 0.6f);
+		SurvivalTest_Hurt(dmg);
+	}
+}
+
+
+/*########################################################################################################################*
+*----------------------------------------------------------TNT-------------------------------------------------------------*
+*#########################################################################################################################*/
+/* PrimedTnt.java: mining a placed TNT block (TNTPhysics.onBreak, since */
+/*  TNTBlock.getDropCount()==0) doesn't explode it instantly - it ignites a */
+/*  fuse, then explodes life=40 ticks (2 seconds @ 20 TPS) later. Placing */
+/*  TNT does nothing special (TNTPhysics.onPlace is a no-op); that's only */
+/*  BlockPhysics.c's separate, older classic-multiplayer "place TNT to */
+/*  explode instantly" feature, which Physics_HandleTnt now skips while in */
+/*  survival mode. PrimedTnt is really a separate flashing/falling entity in */
+/*  the original, but the block is simply left in the world ticking down */
+/*  here instead, to avoid needing a whole new entity-rendering path. */
+#define TNT_MAX        8
+#define TNT_FUSE_TICKS 40 /* PrimedTnt's default life */
+
+struct TntFuse { IVec3 coords; int ticksLeft; cc_bool active; };
+static struct TntFuse st_tnt[TNT_MAX];
+
+static void SurvivalTest_ArmTnt(IVec3 coords) {
+	int i, slot = -1;
+
+	for (i = 0; i < TNT_MAX; i++) {
+		if (!st_tnt[i].active) { if (slot < 0) slot = i; continue; }
+
+		if (st_tnt[i].coords.x == coords.x && st_tnt[i].coords.y == coords.y && st_tnt[i].coords.z == coords.z) {
+			st_tnt[i].ticksLeft = TNT_FUSE_TICKS; /* already lit - just restart its fuse */
+			return;
+		}
+	}
+	if (slot < 0) return; /* no free slot - block just vanishes, untracked */
+
+	st_tnt[slot].coords    = coords;
+	st_tnt[slot].ticksLeft = TNT_FUSE_TICKS;
+	st_tnt[slot].active    = true;
+
+	/* InputHandler_DeleteBlock already cleared this to air - restore it */
+	/*  without raising BlockChanged, which would otherwise make */
+	/*  SurvivalTest_BlockChanged think the player just placed it. */
+	Game_UpdateBlock(coords.x, coords.y, coords.z, BLOCK_TNT);
+}
+
+static void SurvivalTest_TickTnt(void) {
+	int i;
+	Vec3 center;
+
+	for (i = 0; i < TNT_MAX; i++) {
+		if (!st_tnt[i].active) continue;
+		if (--st_tnt[i].ticksLeft > 0) continue;
+
+		st_tnt[i].active = false;
+		Game_UpdateBlock(st_tnt[i].coords.x, st_tnt[i].coords.y, st_tnt[i].coords.z, BLOCK_AIR);
+
+		center.x = st_tnt[i].coords.x + 0.5f;
+		center.y = st_tnt[i].coords.y + 0.5f;
+		center.z = st_tnt[i].coords.z + 0.5f;
+		SurvivalTest_Explode(center, EXPLOSION_RADIUS);
+	}
+}
+
 
 /*########################################################################################################################*
 *---------------------------------------------------------Mobs-------------------------------------------------------------*
@@ -514,7 +632,6 @@ void SurvivalTest_Heal(int amount) {
 #define MOB_MAX_HEALTH     20  /* Mob.java's default health - same scale as the player's */
 #define MOB_INVINC_TICKS   20  /* simplified flat invincibility window (Mob.invulnerableDuration) */
 #define MOB_AIR_TICKS     300  /* 15 seconds @ 20 TPS, matches Mob.airSupply */
-#define MOB_EXPLODE_RADIUS  4  /* Creeper.beforeRemove's level.explode radius */
 
 enum MobType {
 	MOB_TYPE_ZOMBIE, MOB_TYPE_SKELETON, MOB_TYPE_PIG, MOB_TYPE_CREEPER, MOB_TYPE_SPIDER, MOB_TYPE_SHEEP,
@@ -748,51 +865,12 @@ static void Mob_SkeletonDeathBurst(struct Mob* m) {
 	}
 }
 
-/* Mirrors BlockPhysics.c's private BlocksTNT immunity check (liquids and */
-/*  metal/stone-sounding solid blocks survive blasts) - duplicated here since */
-/*  that function isn't exposed outside BlockPhysics.c. */
-static cc_bool Mob_ExplosionImmune(BlockID b) {
-	return (b >= BLOCK_WATER && b <= BLOCK_STILL_LAVA) ||
-		(Blocks.ExtendedCollide[b] == COLLIDE_SOLID && (Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE));
-}
-
 /* Creeper.beforeRemove's level.explode call, fired once the creeper's 20-tick */
 /*  death animation finishes (it dies from its own repeated headbutt damage - */
-/*  see Mob_Hurt). Block-destruction radius/shape matches TNT exactly (both */
-/*  derive from the same original explosion code); the exact player-damage */
-/*  falloff curve wasn't recovered, so a simple linear falloff is used. */
+/*  see Mob_Hurt). Shares its block-destruction/player-damage logic with TNT */
+/*  via SurvivalTest_Explode, since both derive from the same original code. */
 static void Mob_CreeperExplode(struct Mob* m) {
-	struct Entity* e = &m->Base;
-	struct LocalPlayer* p = Entities.CurPlayer;
-	int x = Math_Floor(e->Position.x);
-	int y = Math_Floor(e->Position.y);
-	int z = Math_Floor(e->Position.z);
-	int dx, dy, dz, xx, yy, zz;
-	BlockID block;
-	Vec3 diff;
-	float dist;
-
-	for (dy = -MOB_EXPLODE_RADIUS; dy <= MOB_EXPLODE_RADIUS; dy++) {
-	for (dz = -MOB_EXPLODE_RADIUS; dz <= MOB_EXPLODE_RADIUS; dz++) {
-	for (dx = -MOB_EXPLODE_RADIUS; dx <= MOB_EXPLODE_RADIUS; dx++) {
-		if (dx * dx + dy * dy + dz * dz > MOB_EXPLODE_RADIUS * MOB_EXPLODE_RADIUS) continue;
-		xx = x + dx; yy = y + dy; zz = z + dz;
-		if (!World_Contains(xx, yy, zz)) continue;
-
-		block = World_GetBlock(xx, yy, zz);
-		if (block == BLOCK_AIR || Mob_ExplosionImmune(block)) continue;
-		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
-	}}}
-
-	if (!p) return;
-	diff.x = p->Base.Position.x - e->Position.x;
-	diff.y = p->Base.Position.y - e->Position.y;
-	diff.z = p->Base.Position.z - e->Position.z;
-	dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
-	if (dist < (float)MOB_EXPLODE_RADIUS) {
-		int dmg = (int)((1.0f - dist / (float)MOB_EXPLODE_RADIUS) * MOB_MAX_HEALTH * 0.6f);
-		SurvivalTest_Hurt(dmg);
-	}
+	SurvivalTest_Explode(m->Base.Position, EXPLOSION_RADIUS);
 }
 
 /* hurt(Entity attacker, int damage) - simplified to a single flat */
@@ -1851,6 +1929,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 
 	/* Arrows ----------------------------------------------------------------- */
 	SurvivalTest_TickArrows();
+
+	/* TNT -------------------------------------------------------------------- */
+	SurvivalTest_TickTnt();
 }
 
 
@@ -1886,6 +1967,10 @@ static void SurvivalTest_ResetState(void) {
 		st_arrows[i].active = false;
 	}
 	st_playerArrows = ARROW_PLAYER_START;
+
+	for (i = 0; i < TNT_MAX; i++) {
+		st_tnt[i].active = false;
+	}
 }
 
 /* The item vertex buffer is a GPU resource and must be dropped/recreated */

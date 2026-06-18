@@ -36,8 +36,7 @@ against the decompiled Java sources (not guessed):
 - **Missing starting inventory**: `SurvivalGameMode.apply(Player)` gives every
   player **10 TNT in the last hotbar slot** on spawn — this was never ported, so
   survival mode silently started with a fully empty inventory. Restored in
-  `SurvivalTest_ResetState` (TNT already explodes correctly via
-  `BlockPhysics.c`'s existing `Physics_HandleTnt`, so this isn't a dead item).
+  `SurvivalTest_ResetState`.
 - **Missing mob despawn timer**: `BasicAI.tick()` removes a mob once it's gone
   600+ ticks without being hurt/landing a hit AND a 1/800 per-tick roll fires AND
   the player isn't within 32 blocks (otherwise the timer just resets) — ported as
@@ -52,6 +51,60 @@ against the decompiled Java sources (not guessed):
   a new arbitrary-point-to-point raycast this codebase doesn't currently expose.
 - All fixes verified via `gcc -fsyntax-only` after each change; not yet re-verified
   with a full `make` build or in a running game this session.
+
+---
+
+## TNT FUSE SYSTEM (this session)
+
+User asked: "in survival mode tnt doesn't explode instantly". Confirmed against
+`PrimedTnt.java`/`TNTBlock.java`/`TNTPhysics.java` that this is correct — in real
+Survival Test, **placing** TNT does nothing (`TNTPhysics.onPlace` is a no-op);
+only **mining** an already-placed TNT block ignites a `PrimedTnt` with a 40-tick
+(2 second @ 20 TPS) fuse, which then explodes (`level.explode`, radius 4, same
+block-immunity rules used for normal TNT). `TNTBlock.getDropCount()==0`, so
+mining TNT never yields an item either way.
+
+ClassiCube already had a `Physics_HandleTnt` in `BlockPhysics.c` that
+instant-explodes TNT **on placement** — that's a different, older
+classic-multiplayer feature, not part of Survival Test. It had to be preserved
+for creative/non-survival use, but suppressed while `SurvivalTest_Enabled`
+(`BlockPhysics.c`: added `#include "SurvivalTest.h"` and an early-return guard
+at the top of `Physics_HandleTnt`).
+
+Implementation, all in `SurvivalTest.c`:
+
+- Added a `case BLOCK_TNT:` branch to `SurvivalTest_SpawnDropsForBlock` (the
+  mining-drops dispatcher) that calls a new `SurvivalTest_ArmTnt(coords)` and
+  returns without spawning any drop item.
+- New "TNT" section (between Health & damage and Mobs): a small fixed-size
+  `struct TntFuse st_tnt[TNT_MAX]` pool (mirrors the existing drops/mobs/arrows
+  pool pattern). `SurvivalTest_ArmTnt` finds a free slot (or refreshes an
+  existing fuse at the same coords, so re-mining an already-lit block just
+  restarts its countdown instead of double-arming it), and restores the block
+  to `BLOCK_TNT` via `Game_UpdateBlock` (NOT `Game_ChangeBlock` — using the
+  latter, or manually raising `BlockChanged`, would make
+  `SurvivalTest_BlockChanged`'s "placed" branch fire and incorrectly consume an
+  inventory item the player never actually placed).
+  `SurvivalTest_TickTnt` (wired into `SurvivalTest_Tick`) counts down every
+  armed fuse and detonates it on expiry.
+- Simplification: the real `PrimedTnt` is a separate falling/flashing entity,
+  not the original world block (mining instantly clears the block to air, and
+  the entity floats/bounces independently with its own gravity). Porting that
+  would need a new entity-rendering path, so instead the block itself is simply
+  left in the world (clears back to air, then is immediately restored) ticking
+  down before exploding — visually it just sits there normally for 2 seconds
+  instead of vanishing. No smoke particles or flashing-faster-near-zero render
+  effect were ported either; only the core "doesn't explode instantly" delay.
+- Refactored the explosion math: pulled `Mob_ExplosionImmune` and the
+  block-destruction-loop + linear player-damage-falloff body out of
+  `Mob_CreeperExplode` into shared `SurvivalTest_ExplosionImmune`/
+  `SurvivalTest_Explode(Vec3 center, int radius)` helpers (Health & damage
+  section), since TNT and the creeper's death blast both derive from the same
+  original `level.explode` code. `Mob_CreeperExplode` is now a one-line wrapper.
+  Replaced the old `MOB_EXPLODE_RADIUS` define with a shared `EXPLOSION_RADIUS`.
+- Verified via `gcc -fsyntax-only` on both touched files, then a full
+  `make PLAT=linux -j$(nproc)` build — zero errors/warnings.
+- Not yet tested in a running game this session (no display available).
 
 ---
 

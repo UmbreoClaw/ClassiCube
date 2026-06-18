@@ -14,6 +14,7 @@
 #include "Vectors.h"
 #include "Chat.h"
 #include "Audio.h"
+#include "SurvivalTest.h"
 
 /* Data for a resizable queue, used for liquid physic tick entries. */
 struct TickQueue {
@@ -494,6 +495,12 @@ static cc_bool BlocksTNT(BlockID b) {
 static void Physics_HandleTnt(int index, BlockID block) {
 	int x, y, z;
 	int dx, dy, dz, xx, yy, zz;
+
+	/* TNTPhysics.onPlace is a no-op in Survival Test - placing TNT there */
+	/*  does nothing special, only mining an already-placed TNT block ignites */
+	/*  a fuse (see SurvivalTest_ArmTnt). This instant-explode-on-place is a */
+	/*  separate, older classic-multiplayer feature that survival must skip. */
+	if (SurvivalTest_Enabled) return;
 
 	World_Unpack(index, x, y, z);
 	Game_UpdateBlock(x, y, z, BLOCK_AIR);
