@@ -10,7 +10,42 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ## NEXT TASK (agreed — start here next session)
 
-**Mob entity system (spawning/AI/combat/death/render): DONE this session.**
+**Fall damage bug fix (player + new mob fall damage): DONE this session.**
+
+User reported player fall damage wasn't registering for falls just past the
+3-block safe threshold. Root cause found in `SurvivalTest_UpdateFall`: it read
+`e->Position.y` directly, but `LocalPlayer_Tick` (which runs *before*
+`SurvivalTest_Tick` every tick — `Entities_Component` is registered before
+`SurvivalTest_Component` in `Game.c`, and both append to the same scheduled-task
+list in registration order) ends by doing
+`e->next.pos = e->Position; e->Position = e->prev.pos;` (`Entity.c:752`) —
+stashing the just-computed position for interpolation and resetting
+`e->Position` back to the *previous* tick's value. So every read of
+`e->Position.y` from our tick was one tick stale, which silently dropped the
+final (fastest, due to gravity) tick of every fall from the measured distance —
+under-counting borderline falls (a fall just over 3 blocks could measure as
+exactly 3.0 and deal 0 damage instead of 1).
+**Fix**: read `e->next.pos.y` (this tick's true, freshly-computed height)
+instead of `e->Position.y`, and seed the fall's start height from
+`e->prev.pos.y` (the resting height before this tick's movement) when first
+detecting airborne — `SurvivalTest.c`'s `SurvivalTest_UpdateFall`.
+Mobs were *not* affected by this specific bug (they have no prev/next
+double-buffering — `Mob.Base.Position` is mutated directly and never reset),
+but auditing mob damage surfaced a real gap: **mobs had no fall damage at
+all** (`Mob.java`'s `causeFallDamage()` was never ported). Added it: new
+`falling`/`fallPeakY` fields on `struct Mob`, same peak-tracking approach as
+the player, applied via the existing `Mob_Hurt(m, NULL, damage)` path right
+after `Mob_Travel` in `SurvivalTest_TickOneMob` (post-move `Position`/`OnGround`
+are already fresh for mobs, no staleness concern there).
+Verified: `gcc -fsyntax-only` clean, full `make -j$(nproc)` compiles and links
+(`ClassiCube` executable produced) with zero errors. Not yet tested in a
+running game — next session should specifically test: falling exactly 3
+blocks (should be safe, 0 damage), falling 4+ blocks (should now reliably
+deal `floor(dist)-3` damage), and a mob (e.g. a zombie) falling off a ledge.
+
+---
+
+**Mob entity system (spawning/AI/combat/death/render): DONE (earlier session).**
 
 Implemented entirely in `src/SurvivalTest.c` (+ hooks in `src/SurvivalTest.h`,
 `src/Game.c`, `src/InputHandler.c`), based on decompiled `Mob.java`/`AI.java`/

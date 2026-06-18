@@ -557,6 +557,14 @@ struct Mob {
 	/* BasicAI's wander/chase input axes and turn impulse - decayed every */
 	/*  tick and refreshed at random, exactly as in the decompiled source. */
 	float moveStrafe, moveForward, turnRate;
+
+	/* Fall damage tracking (Mob.causeFallDamage), mirrors the player's */
+	/*  st_falling/st_fallPeakY pair but per-mob since several can be */
+	/*  airborne at once. Unlike the player, mobs have no prev/next double- */
+	/*  buffered position (Mob.Base.Position is mutated directly, never reset */
+	/*  for interpolation), so reading it straight after Mob_Travel is safe. */
+	cc_bool falling;
+	float   fallPeakY;
 };
 static struct Mob st_mobs[MOB_MAX];
 static RNGState st_mobRng;
@@ -902,6 +910,29 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	oldPos = e->Position;
 	Mob_Travel(m, inWater, inLava);
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
+
+	/* Fall damage (Mob.causeFallDamage) - same peak-tracking approach as the */
+	/*  player's SurvivalTest_UpdateFall, but using e->Position directly since */
+	/*  it's already fresh here (no prev/next double-buffering for mobs). */
+	/*  Touching liquid cushions the landing, same as for the player. */
+	if (inWater || inLava) m->falling = false;
+
+	if (e->OnGround) {
+		if (m->falling) {
+			float dist = m->fallPeakY - e->Position.y;
+			if (dist > FALL_SAFE_BLOCKS) {
+				int damage = (int)dist - (int)FALL_SAFE_BLOCKS;
+				Mob_Hurt(m, NULL, damage);
+			}
+		}
+		m->falling = false;
+	} else {
+		if (!m->falling) {
+			m->falling   = true;
+			m->fallPeakY = oldPos.y;
+		}
+		if (e->Position.y > m->fallPeakY) m->fallPeakY = e->Position.y;
+	}
 }
 
 /* Ground-validity check shared by both the outer spawn-point roll and the */
@@ -1232,7 +1263,16 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e) {
 }
 
 static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_bool onGround) {
-	float y = e->Position.y;
+	/* NOTE: e->Position is one tick stale here. LocalPlayer_Tick (called from */
+	/*  the Entities_Component's task, which runs before ours every tick) ends */
+	/*  by stashing this tick's freshly-computed position into e->next.pos and */
+	/*  then resetting e->Position back to e->prev.pos for render interpolation */
+	/*  (see LocalInterpComp_AdvanceState / the end of LocalPlayer_Tick). Reading */
+	/*  e->Position.y here would silently drop the final tick of every fall from */
+	/*  the measured distance, undercounting borderline falls (e.g. a fall just */
+	/*  over the 3-block safe threshold could read as exactly 3.0 and deal no */
+	/*  damage). e->next.pos.y is this tick's true, just-computed height. */
+	float y = e->next.pos.y;
 
 	/* Flying/noclip never accumulate fall damage */
 	if (onGround || p->Hacks.Flying || p->Hacks.Noclip) {
@@ -1249,10 +1289,12 @@ static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_
 		st_falling = false;
 	} else {
 		/* Airborne: begin tracking, and keep the highest point reached so */
-		/*  that the fall is measured from the apex (matches Survival Test) */
+		/*  that the fall is measured from the apex (matches Survival Test). */
+		/*  e->prev.pos.y is this tick's pre-movement height, i.e. exactly the */
+		/*  resting height the moment the entity left the ground. */
 		if (!st_falling) {
 			st_falling   = true;
-			st_fallPeakY = y;
+			st_fallPeakY = e->prev.pos.y;
 		}
 		if (y > st_fallPeakY) st_fallPeakY = y;
 	}
