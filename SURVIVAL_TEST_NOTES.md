@@ -239,31 +239,76 @@ session (no display available).
 
 ## OPEN BUGS — RESUME HERE NEXT SESSION (live-test feedback, not yet fixed)
 
-User finally got to play-test everything built so far and reports **arrows
-STILL don't work** even after the InputHandler routing fix (commit 915b6a6),
-plus "a lot more bugs" — full list to be provided next session (their weekly
-usage limit was nearly up, so we paused before enumerating them).
+User play-tested everything and provided a full bug list + screenshots
+(transcript has the images). None of the below are fixed yet — this session
+was just enumeration to save their usage limit. Suggested priority order is
+the numbering. Verify each against a running build; don't assume root cause.
 
-**Arrows — still broken after the Tab-routing fix.** That means the routing
-fix was either insufficient or the wrong/incomplete cause. Things to check
-first next session (don't assume — verify each against a running build):
-- Is the new handler in `OnInputDown` actually reached? Confirm no earlier
-  `return` fires for Tab, and that `InputBind_Claims(BIND_TABLIST, key, …)`
-  is true for the default Tab binding at that point.
-- Does `SurvivalTest_TryShootArrow()` return early? It bails on
-  `!SurvivalTest_Enabled`, `st_playerArrows <= 0`, or `!Entities.CurPlayer`.
-  Verify `st_playerArrows` is actually initialised to 20 at world entry
-  (ARROW_PLAYER_START) and not reset to 0 by ResetState ordering.
-- If it DOES fire: is the arrow spawning inside the player and instantly
-  colliding/despawning, spawning with zero velocity, or simply not being
-  rendered? Check `SurvivalTest_SpawnArrow` initial pos/velocity and the
-  owner-grace window vs. `SurvivalTest_RenderArrows`/tick.
-- Consider whether `!was` is ever true for Tab on the user's platform, or
-  whether the chat HUD's `ChatScreen_KeyDown` is somehow still consuming it
-  on a path that runs before `OnInputDown`'s bind section.
+### 1. Arrows — STILL don't fire (highest priority, regression from 915b6a6)
+- Pressing Tab does nothing: the on-screen arrow count stays at **20** (never
+  decrements), so `SurvivalTest_TryShootArrow()` is either not reached or
+  returns false before `st_playerArrows--`. The InputHandler routing fix
+  (commit 915b6a6) did NOT resolve it.
+- Trace next session (in order):
+  - Is the new handler in `OnInputDown` actually reached for Tab? Confirm no
+    earlier `return`, and that `InputBind_Claims(BIND_TABLIST, key, device)`
+    is true for the default Tab binding there. Add a temporary Chat_Add or
+    breakpoint to confirm.
+  - Does `SurvivalTest_TryShootArrow()` bail early? Guards:
+    `!SurvivalTest_Enabled`, `st_playerArrows <= 0`, `!Entities.CurPlayer`.
+    Verify `st_playerArrows` is really initialised to 20 (ARROW_PLAYER_START)
+    at world entry and not zeroed by ResetState ordering.
+  - Is `!was` ever true for Tab on Windows, or is `ChatScreen_KeyDown` still
+    swallowing it on a path that runs before the bind section of OnInputDown?
 
-Ask the user for the rest of the bug list at the start of next session
-before diving in, so fixes can be batched and prioritised.
+### 2. Arrows — no texture
+- Even if/when they fire, arrows have **no texture** (the `arrows_entry` /
+  `st_arrowsTexId` registration isn't resolving). User confirmed via the
+  "Texture ID reference sheet" debug overlay that the arrow texture slot is
+  missing/blank. Check `TextureEntry_Register(&arrows_entry)` and how
+  `st_arrowsTexId` is looked up vs. the actual texture pack contents.
+
+### 3. Mob models render broken (zombie & skeleton especially)
+- Screenshots show zombie/skeleton rendering malformed/grayscale with wrong
+  or missing textures (one looks like a bare tripod of model parts). Pig
+  appears OK-ish. Likely our hand-spawned mob entities aren't getting their
+  mob texture/skin assigned, so the model draws with a default/missing tex.
+  Check how `SurvivalTest_SpawnMobAt` sets up textures vs. how ClassiCube's
+  normal mob models obtain `/mob/zombie.png` etc.
+
+### 4. Mob behaviour — look down + clump toward a point
+- Mobs tilt their heads/bodies **down** instead of looking ahead, and they
+  all **gravitate toward a single point** rather than wandering. Likely the
+  AI look-target/heading is defaulting to something like origin or (0,0,0),
+  and pitch isn't being clamped/zeroed. Review BasicAI/wander port in the
+  Mobs section (yaw/pitch assignment + target selection per tick).
+
+### 5. Block breaking not implemented (has textures in code already)
+- Survival should use **progressive block breaking** (multi-stage crack
+  overlay) instead of instant deletion. The destroy-stage/crack textures
+  already exist in the code/texture atlas. Need to implement the dig-timer +
+  crack overlay render and gate instant-break behind it in survival.
+
+### 6. Drop tables wrong
+- The block/mob drop tables need correcting against the decompiled source
+  (`SurvivalTest_SpawnDropsForBlock` and mob death drops). Cross-check each
+  block's drop + count vs. c0.30-s.
+
+### 7. Launcher — redundant survival toggle + cut-off Back button
+- I added the "Survival mode" checkbox to BOTH the Settings screen AND the
+  Choose Mode screen (commit aa377d5) — user finds two toggles redundant and
+  suggests keeping only ONE.
+- On the **Settings** screen the extra checkbox pushed the **Back button off
+  the bottom** of the window in default/windowed size (set_btnBack moved to
+  y=210). 
+- Clean fix that solves both: **remove the Settings-screen checkbox, keep
+  only the Choose Mode one**, and revert `SETTINGS_SCREEN_MAX_WIDGETS`/
+  `set_btnBack` layout to its original values. (Confirm this "keep Choose
+  Mode only" choice with the user before doing it — they said "possibly".)
+
+### Misc observed in screenshots (confirm whether intended)
+- A "Texture ID reference sheet" debug overlay is present — confirm if that's
+  one of ours/a dev tool and whether it should stay.
 
 ---
 
