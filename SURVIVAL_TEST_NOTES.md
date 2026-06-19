@@ -864,6 +864,19 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   (left-aligned/detached), not size — manual glyph scaling overshot and was reverted.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
+- **Damage tilt**: every successful hit briefly rolls the camera up to 14°, eased via
+  `sin(t^4*pi)` over a fixed 10-tick window (ported from `Renderer.hurtEffect` -
+  always a flat 10 ticks regardless of damage dealt, never scales). Rolls away from
+  the hit direction for melee/arrow hits (`SurvivalTest_HurtFrom`, attacker position
+  known); random left/right for environmental damage - fall/lava/drowning/poison/
+  explosion (`SurvivalTest_Hurt`, no attacker, matching the original's
+  `hurt(null, damage)` call sites). Applied directly to the view matrix in
+  `Render3DFrame` (`SurvivalTest_ApplyHurtTilt`), right after `Camera.Active->GetView`,
+  using the same `t` partial-tick fraction other survival renderers already get.
+  The original's separate death-only "keel over" roll (up to 40°, grows with
+  `deathTime`) was **not** ported - `GameOverScreen` sets `blocksWorld = true` and
+  takes over the instant health hits 0, so the 3D scene (and thus any camera roll)
+  stops rendering at the same moment, making it permanently invisible in this engine.
 - **Mushrooms**: right-click to eat — brown +5 HP, red −3 HP poison (`SurvivalTest_TryEat`).
 - **Death**: faithful **"Game over!"** screen (permadeath, no respawn) with
   "Generate new level..." and "Quit game". `GameOverScreen` in `src/Screens.c`.

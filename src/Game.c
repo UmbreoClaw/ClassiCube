@@ -494,6 +494,7 @@ static void Render3DFrame(float delta, float t) {
 	Vec3 pos;
 
 	Camera.Active->GetView(&Gfx.View);
+	SurvivalTest_ApplyHurtTilt(&Gfx.View, t);
 	/*Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Frustum_CalcPlanes(&Gfx.Projection, &Gfx.View);*/

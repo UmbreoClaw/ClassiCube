@@ -28,7 +28,13 @@ extern int SurvivalTest_Health;
 #define SURVIVAL_HOTBAR_SLOTS 9
 
 /* Applies damage to the player (respects invincibility frames). */
+/* hurtDir (for the hurt camera tilt) is randomised, matching the original's */
+/*  hurt(null, damage) call sites (environmental damage - fall/lava/etc). */
 void SurvivalTest_Hurt(int damage);
+/* Same as SurvivalTest_Hurt, but bearing the hurt camera tilt towards/away */
+/*  from attackerPos, matching the original's hurt(Entity, damage) call sites */
+/*  (melee/arrow hits, where the source is a specific entity). */
+void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos);
 /* Restores health to the player (capped at SURVIVAL_MAX_HEALTH). */
 void SurvivalTest_Heal(int amount);
 
@@ -106,6 +112,13 @@ cc_bool SurvivalTest_BreakTargeted(IVec3* pos);
 /* No-op when survival mode is disabled. Call once per frame, after the */
 /*  selection outline (e.g. in Render3DFrame). */
 void SurvivalTest_RenderCracks(float delta, float t);
+
+/* Applies the hurt camera-tilt roll (Renderer.hurtEffect) on top of the */
+/*  already-built view matrix - a brief roll away from the hit direction */
+/*  right after taking damage. No-op when survival is disabled or there's */
+/*  nothing to apply, so safe to call unconditionally every frame, right */
+/*  after the camera's view matrix is computed (e.g. in Render3DFrame). */
+void SurvivalTest_ApplyHurtTilt(struct Matrix* view, float t);
 
 CC_END_HEADER
 #endif

@@ -48,6 +48,11 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 #define AIR_SUPPLY_SECS    15.0f
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
+/* Mob.hurtTime/hurtDuration: every successful hit sets a fixed 10-tick */
+/*  window (regardless of damage dealt), used only for the camera-tilt cue. */
+#define HURT_TILT_TICKS    10
+/* Renderer.hurtEffect's peak camera roll angle, in degrees. */
+#define HURT_TILT_MAX_DEG  14.0f
 
 static float st_airTimer;
 static float st_invincTimer;
@@ -56,6 +61,12 @@ static float st_drownTimer;
 static float st_fallPeakY;    /* highest Y reached during the current fall */
 static cc_bool st_falling;    /* whether a fall is currently being tracked */
 static cc_bool st_isDead;
+/* Mob.hurtTime equivalent for the player - counts down from HURT_TILT_TICKS */
+/*  each game tick, purely cosmetic (drives the hurt camera-tilt effect). */
+static int   st_hurtTicks;
+/* Mob.hurtDir: horizontal bearing of the attacker relative to the player's */
+/*  yaw at the moment of the hit, baked in (not recomputed while it decays). */
+static float st_hurtDir;
 
 /* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
 struct SurvivalSlot { BlockID block; cc_int16 count; };
@@ -63,6 +74,9 @@ static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
 static int st_invVersion;
 static RNGState st_dropRng;
+/* General-purpose RNG also used outside the Mobs section (e.g. the random */
+/*  hurtDir fallback for environmental damage in SurvivalTest_CalcHurtDir). */
+static RNGState st_mobRng;
 /* Defined later, in the Inventory section - forward declared so the */
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static void SurvivalTest_AddBlock(BlockID block);
@@ -520,9 +534,28 @@ void SurvivalTest_RenderDrops(float delta, float t) {
 /*########################################################################################################################*
 *----------------------------------------------------Health & damage------------------------------------------------------*
 *#########################################################################################################################*/
+/* Mob.hurt(): hurtDir is the horizontal bearing of the attacker relative to */
+/*  the victim's own yaw - atan2(dx,-dz) matches Yaw's convention elsewhere */
+/*  in this file (e.g. SurvivalTest_TickOneMob's aiming code), then offset by */
+/*  the player's current yaw to get the bearing relative to their facing. */
+/*  No attacker (environmental damage) -> random 0 or 180, matching the */
+/*  original's `hurt(null, damage)` case. */
+static float SurvivalTest_CalcHurtDir(const Vec3* attackerPos) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	float dx, dz, dirYaw;
+	if (!attackerPos) return (float)(Random_Next(&st_mobRng, 2) * 180);
+
+	dx = attackerPos->x - p->Base.Position.x;
+	dz = attackerPos->z - p->Base.Position.z;
+	dirYaw = Math_Atan2f(dx, -dz) * MATH_RAD2DEG;
+	return dirYaw - p->Base.Yaw;
+}
+
 /* Applies damage. When ignoreInvinc is set the invincibility window is */
 /*  bypassed and not refreshed (used for self-inflicted poison damage). */
-static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc) {
+/*  attackerPos is NULL for environmental damage (fall/lava/drown/poison/ */
+/*  explosion), matching the original's hurt(null, damage) call sites. */
+static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc, const Vec3* attackerPos) {
 	if (!SurvivalTest_Enabled) return;
 	if (st_isDead)             return;
 	if (damage <= 0)           return;
@@ -530,6 +563,9 @@ static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc) {
 
 	SurvivalTest_Health -= damage;
 	if (!ignoreInvinc) st_invincTimer = INVINCIBILITY_SECS;
+
+	st_hurtTicks = HURT_TILT_TICKS;
+	st_hurtDir   = SurvivalTest_CalcHurtDir(attackerPos);
 
 	if (SurvivalTest_Health <= 0) {
 		SurvivalTest_Health = 0;
@@ -540,7 +576,41 @@ static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc) {
 	}
 }
 
-void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, false); }
+void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, false, NULL); }
+void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos) { SurvivalTest_Damage(damage, false, &attackerPos); }
+
+/* Current hurt camera-tilt roll (Renderer.hurtEffect), eased via sin(t^4*pi) */
+/*  over the HURT_TILT_TICKS window, t being the render partial-tick fraction. */
+/*  Returns false (no roll to apply) once the window has fully decayed. */
+static cc_bool SurvivalTest_GetHurtTilt(float t, float* degrees, float* dir) {
+	float remaining;
+	if (!SurvivalTest_Enabled || st_hurtTicks <= 0) return false;
+
+	remaining = (float)st_hurtTicks - t;
+	if (remaining <= 0.0f) return false;
+
+	remaining /= (float)HURT_TILT_TICKS;
+	*degrees = Math_SinF(remaining * remaining * remaining * remaining * MATH_PI) * HURT_TILT_MAX_DEG;
+	*dir     = st_hurtDir;
+	return true;
+}
+
+/* Applies the hurt camera-tilt roll directly to the already-built view */
+/*  matrix, matching the original's glRotatef(-hurtDir) -> glRotatef(-roll, */
+/*  Z) -> glRotatef(hurtDir) chain (rotate into the hit-direction frame, roll */
+/*  around the view's forward axis, then rotate back). No-op when there's */
+/*  nothing to apply, so this is safe to call unconditionally every frame. */
+void SurvivalTest_ApplyHurtTilt(struct Matrix* view, float t) {
+	float degrees, dir, dirRad;
+	struct Matrix rot;
+
+	if (!SurvivalTest_GetHurtTilt(t, &degrees, &dir)) return;
+	dirRad = dir * MATH_DEG2RAD;
+
+	Matrix_RotateY(&rot, -dirRad);       Matrix_MulBy(view, &rot);
+	Matrix_RotateZ(&rot, -degrees * MATH_DEG2RAD); Matrix_MulBy(view, &rot);
+	Matrix_RotateY(&rot, dirRad);         Matrix_MulBy(view, &rot);
+}
 
 void SurvivalTest_Heal(int amount) {
 	if (!SurvivalTest_Enabled) return;
@@ -822,7 +892,6 @@ struct Mob {
 	cc_bool hasFur;
 };
 static struct Mob st_mobs[MOB_MAX];
-static RNGState st_mobRng;
 
 static int SurvivalTest_CountMobs(void) {
 	int i, n = 0;
@@ -1148,7 +1217,7 @@ static void Mob_DoAttack(struct Mob* m) {
 		m->attackDelay  = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
 		m->noActionTime = 0; /* BasicAttackAI.attack: landing a hit also resets the despawn timer */
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
-		SurvivalTest_Hurt(damage);
+		SurvivalTest_HurtFrom(damage, e->Position);
 
 		/* Creeper$1.attack: headbutting the player also hurts the creeper - */
 		/*  after ~4 hits this kills it and triggers its death explosion. */
@@ -1689,7 +1758,7 @@ static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, stru
 	if (hitMob) {
 		Mob_Hurt(hitMob, &fakeAttacker, a->damage);
 	} else {
-		SurvivalTest_Hurt(a->damage);
+		SurvivalTest_HurtFrom(a->damage, a->pos);
 	}
 	a->active = false; /* entity hits remove() the arrow immediately - it never sticks */
 }
@@ -2055,7 +2124,7 @@ cc_bool SurvivalTest_TryEat(void) {
 	if (block == BLOCK_BROWN_SHROOM) {
 		SurvivalTest_Heal(5);            /* brown mushroom restores 5 HP */
 	} else if (block == BLOCK_RED_SHROOM) {
-		SurvivalTest_Damage(3, true);    /* red mushroom is poisonous: -3 HP */
+		SurvivalTest_Damage(3, true, NULL); /* red mushroom is poisonous: -3 HP */
 	} else {
 		return false;                    /* not food - let normal placement run */
 	}
@@ -2406,6 +2475,8 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		st_invincTimer -= delta;
 		if (st_invincTimer < 0.0f) st_invincTimer = 0.0f;
 	}
+	/* Mob.tick(): hurtTime decrements by a flat 1 per tick (not by delta) */
+	if (st_hurtTicks > 0) st_hurtTicks--;
 
 	onGround    = e->OnGround;
 	inLava      = Entity_TouchesAnyLava(e);
@@ -2473,6 +2544,8 @@ static void SurvivalTest_ResetState(void) {
 	st_drownTimer   = 0.0f;
 	st_isDead       = false;
 	st_invincTimer  = 0.0f;
+	st_hurtTicks    = 0;
+	st_hurtDir      = 0.0f;
 	st_breaking     = false;
 	st_breakHits    = 0;
 	st_breakDelay   = 0;
