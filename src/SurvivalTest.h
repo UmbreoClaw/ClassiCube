@@ -37,6 +37,8 @@ void SurvivalTest_Hurt(int damage);
 void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos);
 /* Restores health to the player (capped at SURVIVAL_MAX_HEALTH). */
 void SurvivalTest_Heal(int amount);
+/* Gets the player's current score (Player.getScore() - awarded on credited mob kills). */
+int SurvivalTest_Score(void);
 
 /* Gets the block held in the given inventory slot (0 to SURVIVAL_INV_SLOTS-1). */
 BlockID SurvivalTest_SlotBlock(int slot);

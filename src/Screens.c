@@ -2514,7 +2514,7 @@ void SurvivalInvScreen_Show(void) {
 /* generate a fresh level (or quit the game).                               */
 static struct GameOverScreen {
 	Screen_Body
-	struct FontDesc titleFont, messageFont;
+	struct FontDesc titleFont, messageFont, btnFont;
 	struct TextWidget title, message;
 	struct ButtonWidget gen, quit;
 	struct Widget* __widgets[4];
@@ -2532,19 +2532,30 @@ static void GameOverScreen_ContextLost(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
 	Font_Free(&s->titleFont);
 	Font_Free(&s->messageFont);
+	Font_Free(&s->btnFont);
 	Screen_ContextLost(screen);
 }
 
 static void GameOverScreen_ContextRecreated(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	cc_string msg; char msgBuffer[STRING_SIZE];
+	int score = SurvivalTest_Score();
 	Screen_UpdateVb(screen);
 
-	Gui_MakeTitleFont(&s->titleFont);
+	/* GameOverScreen.render(): "Game over!" is drawn at 2x scale (glScalef(2,2,2)) */
+	/*  - titleFont's usual 16 doubled to 32, instead of the bold-but-normal-size */
+	/*  font every other screen's title uses. */
+	Font_Make(&s->titleFont, 32, FONT_FLAGS_BOLD);
 	Gui_MakeBodyFont(&s->messageFont);
-	TextWidget_SetConst(&s->title,   "Game over!",         &s->titleFont);
-	TextWidget_SetConst(&s->message, "You ran out of health", &s->messageFont);
-	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->titleFont);
-	ButtonWidget_SetConst(&s->quit, "Quit game",             &s->titleFont);
+	Gui_MakeTitleFont(&s->btnFont);
+	TextWidget_SetConst(&s->title, "Game over!", &s->titleFont);
+
+	String_InitArray(msg, msgBuffer);
+	String_Format1(&msg, "Score: &e%i", &score);
+	TextWidget_Set(&s->message, &msg, &s->messageFont);
+
+	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
+	ButtonWidget_SetConst(&s->quit, "Quit game",             &s->btnFont);
 }
 
 static void GameOverScreen_OnGen(void* screen, void* w) {
@@ -2571,8 +2582,12 @@ static void GameOverScreen_Init(void* screen) {
 }
 
 static void GameOverScreen_Render(void* screen, float delta) {
-	PackedCol top    = PackedCol_Make(32, 32, 32, 200);
-	PackedCol bottom = PackedCol_Make(16, 16, 16, 220);
+	/* drawFadingBox(0, 0, width, height, 1615855616, -1602211792) - the two */
+	/*  ARGB literals decode to a dark red top edge fading into a more opaque, */
+	/*  lighter maroon bottom edge (not a neutral gray, like the original */
+	/*  ClassiCube colors here used to be). */
+	PackedCol top    = PackedCol_Make(80,  0,  0,  96);
+	PackedCol bottom = PackedCol_Make(128, 48, 48, 160);
 	Gfx_Draw2DGradient(0, 0, Window_UI.Width, Window_UI.Height, top, bottom);
 
 	Screen_Render2Widgets(screen, delta);

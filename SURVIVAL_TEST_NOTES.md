@@ -880,6 +880,25 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
 - **Mushrooms**: right-click to eat — brown +5 HP, red −3 HP poison (`SurvivalTest_TryEat`).
 - **Death**: faithful **"Game over!"** screen (permadeath, no respawn) with
   "Generate new level..." and "Quit game". `GameOverScreen` in `src/Screens.c`.
+  Matches the decompiled `GameOverScreen.java`: title rendered at 2x font size
+  (32 vs the usual 16, mirroring `glScalef(2,2,2)`), background is the genuine
+  dark-red-to-maroon fading gradient (`PackedCol_Make(80,0,0,96)` top to
+  `(128,48,48,160)` bottom — decoded from the original's literal
+  `drawFadingBox(.., 1615855616, -1602211792)` ARGB ints, not a neutral gray
+  like earlier), and shows **"Score: {points}"** below the title in place of
+  a fabricated "You ran out of health" line that was never in the original.
+  "Quit game" is a ClassiCube-specific stand-in for the original's
+  session-gated "Load level.." button (no login-session concept here).
+- **Score**: `Player.score`/`awardKillScore` ported as `st_score`
+  (`SurvivalTest_Score()`). Credited only on player-attributable kills —
+  direct melee always credits, arrow kills credit iff `ArrowEntity.ownerIsPlayer`
+  (mirrors `Arrow.awardKillScore` forwarding to its `owner`), and all
+  environmental/self-damage `Mob_Hurt` calls (drowning, lava, fall, creeper
+  self-damage) never credit, matching `die(Entity)`'s `attacker != null` gate.
+  Per-kill values from `Mob.deathScore`/`Pig.die()`/`Sheep.die()`: zombie 80,
+  skeleton 120, creeper 200, spider 105, pig/sheep 10 (the latter two bypass
+  the `deathScore` field in the original in favour of a hardcoded flat-10
+  `awardKillScore` call, but the net point value is identical either way).
 - **Hacks**: fly/noclip/speed disabled in survival via `OnNewMapLoaded` +
   `HacksComp_Update` (faithful — c0.30-s had no hacks).
 - **CI**: `.github/workflows/build_survival_ci.yml` cross-compiles Win32/Win64

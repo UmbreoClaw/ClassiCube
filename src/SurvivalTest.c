@@ -61,6 +61,8 @@ static float st_drownTimer;
 static float st_fallPeakY;    /* highest Y reached during the current fall */
 static cc_bool st_falling;    /* whether a fall is currently being tracked */
 static cc_bool st_isDead;
+/* Player.score: awarded on player-credited mob kills, shown on GameOverScreen. */
+static int   st_score;
 /* Mob.hurtTime equivalent for the player - counts down from HURT_TILT_TICKS */
 /*  each game tick, purely cosmetic (drives the hurt camera-tilt effect). */
 static int   st_hurtTicks;
@@ -621,6 +623,9 @@ void SurvivalTest_Heal(int amount) {
 		SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 }
 
+/* Player.getScore() */
+int SurvivalTest_Score(void) { return st_score; }
+
 /* level.explode's blast radius - shared by TNT and the creeper's death blast */
 /*  (both derive from the same original explosion code). */
 #define EXPLOSION_RADIUS 4
@@ -846,16 +851,17 @@ struct MobTypeInfo {
 	float       defaultLookAngle;
 	int         damage;
 	cc_bool     isCreeper; /* self-damages 6 HP per attack and explodes on death */
+	int         deathScore; /* points awarded to the player on a credited kill (Mob.deathScore) */
 };
 /* Order matches MobSpawner.spawn's `type = random.nextInt(6)` exactly, so */
 /*  Mob_SpawnerRun can index straight into this table with that roll. */
 static const struct MobTypeInfo mobTypeInfo[MOB_TYPE_COUNT] = {
-	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false },
-	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false },
-	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false },
-	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true  },
-	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false },
-	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false },
+	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false,  80 },
+	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false, 120 },
+	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10 },
+	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200 },
+	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105 },
+	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10 },
 };
 
 struct Mob {
@@ -1021,7 +1027,12 @@ static void Mob_SpawnMushroomDrops(struct Mob* m) {
 
 /* die(Entity) - called the instant health reaches 0 (separate from the mob's */
 /*  20-tick removal delay, which is handled in SurvivalTest_TickOneMob). */
-static void Mob_Die(struct Mob* m) {
+/* playerCredit mirrors `var1 != null` in the decompiled die(Entity var1) - */
+/*  every mob type here awards points on a credited kill (Mob.deathScore for */
+/*  most types, a flat 10 hardcoded in Pig.die()/Sheep.die() for those two - */
+/*  see mobTypeInfo's deathScore column). */
+static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
+	if (playerCredit) st_score += mobTypeInfo[m->type].deathScore;
 	if (m->type == MOB_TYPE_PIG || m->type == MOB_TYPE_SHEEP) Mob_SpawnMushroomDrops(m);
 }
 
@@ -1089,7 +1100,12 @@ static void Mob_CreeperExplode(struct Mob* m) {
 /*  already uses the same simplification). knockback() pushes the mob */
 /*  directly away from its attacker; aggroes attack-type mobs onto whoever */
 /*  hit them (BasicAttackAI.hurt). */
-static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage) {
+/* playerCredit is distinct from attacker (which is only ever used for the */
+/*  knockback direction math below) - it answers "should a kill from this hit */
+/*  add to the player's score", matching `awardKillScore` being a no-op for */
+/*  every Entity except Player. Arrow hits forward credit via the arrow's */
+/*  owner (Arrow.awardKillScore), so they can't just check attacker==player. */
+static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool playerCredit) {
 	struct Entity* e = &m->Base;
 	float dx, dz, dist;
 	IVec3 coords;
@@ -1138,7 +1154,7 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage) {
 
 	if (m->health <= 0) {
 		m->health = 0;
-		Mob_Die(m);
+		Mob_Die(m, playerCredit);
 	}
 }
 
@@ -1221,7 +1237,7 @@ static void Mob_DoAttack(struct Mob* m) {
 
 		/* Creeper$1.attack: headbutting the player also hurts the creeper - */
 		/*  after ~4 hits this kills it and triggers its death explosion. */
-		if (info->isCreeper) Mob_Hurt(m, NULL, 6);
+		if (info->isCreeper) Mob_Hurt(m, NULL, 6, false);
 	}
 }
 
@@ -1293,11 +1309,11 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	/*  per second rather than truly every tick. */
 	if (SurvivalTest_IsHeadInWater(e)) {
 		if (m->airTicks > 0) { m->airTicks--; }
-		else                 { Mob_Hurt(m, NULL, 2); }
+		else                 { Mob_Hurt(m, NULL, 2, false); }
 	} else {
 		m->airTicks = MOB_AIR_TICKS;
 	}
-	if (inLava) Mob_Hurt(m, NULL, 10);
+	if (inLava) Mob_Hurt(m, NULL, 10, false);
 
 	if (m->attackDelay > 0) m->attackDelay--;
 
@@ -1363,7 +1379,7 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 			float dist = m->fallPeakY - e->Position.y;
 			if (dist > FALL_SAFE_BLOCKS) {
 				int damage = (int)dist - (int)FALL_SAFE_BLOCKS;
-				Mob_Hurt(m, NULL, damage);
+				Mob_Hurt(m, NULL, damage, false);
 			}
 		}
 		m->falling = false;
@@ -1591,7 +1607,7 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	HeldBlockRenderer_ClickAnim(true);
 
 	/* Player fist: flat 4 HP/hit, matching SurvivalTest_Hurt's own player-damage figure */
-	Mob_Hurt(best, e, 4);
+	Mob_Hurt(best, e, 4, true);
 	return true;
 }
 
@@ -1756,7 +1772,7 @@ static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, stru
 	fakeAttacker.Position = a->pos;
 
 	if (hitMob) {
-		Mob_Hurt(hitMob, &fakeAttacker, a->damage);
+		Mob_Hurt(hitMob, &fakeAttacker, a->damage, a->ownerIsPlayer);
 	} else {
 		SurvivalTest_HurtFrom(a->damage, a->pos);
 	}
@@ -2543,6 +2559,7 @@ static void SurvivalTest_ResetState(void) {
 	st_lavaTimer    = 0.0f;
 	st_drownTimer   = 0.0f;
 	st_isDead       = false;
+	st_score        = 0;
 	st_invincTimer  = 0.0f;
 	st_hurtTicks    = 0;
 	st_hurtDir      = 0.0f;
