@@ -920,15 +920,18 @@ static void Mob_ShootArrow(struct Mob* m) {
 	float yaw   = e->Yaw   + (Random_Float(&st_mobRng) * 45.0f - 22.5f);
 	float pitch = e->Pitch - (Random_Float(&st_mobRng) * 45.0f - 10.0f);
 	int slot    = (int)(m - st_mobs);
+	Vec3 eye;
 
 	/* damage=3, type=1 (mob-fired): Arrow's constructor picks these whenever */
 	/*  the owner isn't a Player - the skeleton qualifies as a Mob owner here. */
-	/* Skeleton.shootArrow spawns at the skeleton's own this.x/y/z - its base */
-	/*  (feet) position, not eye height - so e->Position is used, not */
-	/*  Entity_GetEyePosition (unlike the melee-attack ray in Mob_DoAttack's */
-	/*  player counterpart, SurvivalTest_TryAttackMob, which is a genuinely */
-	/*  different camera-ray mechanic). */
-	SurvivalTest_SpawnArrow(e->Position, yaw, pitch, 1.0f, 3, 1, false, slot);
+	/* Spawn from eye level, not e->Position (feet). Skeleton.shootArrow uses */
+	/*  the skeleton's own this.y, which - like every Classic entity - is the */
+	/*  eye/camera position, with the bounding box hanging below it. Spawning */
+	/*  at CC's feet position births the arrow on the ground, so it instantly */
+	/*  collides with the block underfoot and sticks at the skeleton's feet */
+	/*  instead of flying at the player (same root bug as the player's Tab-fire). */
+	eye = Entity_GetEyePosition(e);
+	SurvivalTest_SpawnArrow(eye, yaw, pitch, 1.0f, 3, 1, false, slot);
 }
 
 /* SkeletonAI.beforeRemove() - a parting burst of 4-9 pickupable arrows */
@@ -1770,6 +1773,7 @@ void SurvivalTest_RenderArrows(float delta, float t) {
 cc_bool SurvivalTest_TryShootArrow(void) {
 	struct LocalPlayer* p;
 	struct Entity* e;
+	Vec3 eye;
 	if (!SurvivalTest_Enabled) return false;
 	if (st_playerArrows <= 0)  return false;
 
@@ -1777,8 +1781,16 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 	if (!p) return false;
 	e = &p->Base;
 
-	/* Minecraft.java spawns at this.player.x/y/z (base position), not eye height. */
-	SurvivalTest_SpawnArrow(e->Position, e->Yaw, e->Pitch,
+	/* Spawn from eye level, NOT e->Position. In Minecraft Classic the player */
+	/*  entity's y field IS the eye/camera position (its bounding box extends */
+	/*  downward), so the original "spawns at this.player.y" means eye height. */
+	/*  In ClassiCube Entity.Position is the feet - spawning there births the */
+	/*  arrow at ground level, where it instantly collides with the block under */
+	/*  the player, sticks, and is auto-picked-up the very next tick (refunding */
+	/*  the count). That is why firing appeared to do nothing and the count */
+	/*  stayed at 20. */
+	eye = Entity_GetEyePosition(e);
+	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
 							 ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
 	st_playerArrows--;
 	return true;

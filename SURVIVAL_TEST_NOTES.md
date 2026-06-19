@@ -244,22 +244,26 @@ User play-tested everything and provided a full bug list + screenshots
 was just enumeration to save their usage limit. Suggested priority order is
 the numbering. Verify each against a running build; don't assume root cause.
 
-### 1. Arrows — STILL don't fire (highest priority, regression from 915b6a6)
-- Pressing Tab does nothing: the on-screen arrow count stays at **20** (never
-  decrements), so `SurvivalTest_TryShootArrow()` is either not reached or
-  returns false before `st_playerArrows--`. The InputHandler routing fix
-  (commit 915b6a6) did NOT resolve it.
-- Trace next session (in order):
-  - Is the new handler in `OnInputDown` actually reached for Tab? Confirm no
-    earlier `return`, and that `InputBind_Claims(BIND_TABLIST, key, device)`
-    is true for the default Tab binding there. Add a temporary Chat_Add or
-    breakpoint to confirm.
-  - Does `SurvivalTest_TryShootArrow()` bail early? Guards:
-    `!SurvivalTest_Enabled`, `st_playerArrows <= 0`, `!Entities.CurPlayer`.
-    Verify `st_playerArrows` is really initialised to 20 (ARROW_PLAYER_START)
-    at world entry and not zeroed by ResetState ordering.
-  - Is `!was` ever true for Tab on Windows, or is `ChatScreen_KeyDown` still
-    swallowing it on a path that runs before the bind section of OnInputDown?
+### 1. Arrows — don't fire / count stuck at 20 — FIXED
+- ROOT CAUSE (found by static analysis, not the input path at all): arrows
+  were spawned at `e->Position`, which in ClassiCube is the player's **feet**.
+  `AABB_Make` puts the arrow box bottom at that y, and `AABB_Intersects` treats
+  touching edges as overlapping, so an arrow born at feet level sits exactly on
+  the block the player is standing on → instant block collision on tick 1 →
+  `hasHit=true`, velocity zeroed, stuck at the feet → `Arrow_TryPickup`
+  re-collects it the same tick (`st_playerArrows++`). Net: count went
+  20→19→20 in one tick and the arrow existed for <1 tick inside the player, so
+  firing looked like a total no-op with the count frozen at 20.
+- The InputHandler routing fix (915b6a6) was fine and necessary — it just
+  wasn't the (only) bug. The misleading part was the old comment claiming
+  "Minecraft.java spawns at this.player.y (base position), not eye height": in
+  Minecraft Classic the entity `y` IS the eye/camera position (bbox hangs
+  below it), so that maps to ClassiCube's `Entity_GetEyePosition`, NOT
+  `Entity.Position` (feet).
+- FIX: `SurvivalTest_TryShootArrow` now spawns at `Entity_GetEyePosition(e)`.
+  Same fix applied to `Mob_ShootArrow` (skeletons were spawning arrows at
+  their own feet too, so skeleton shots stuck at the skeleton and never
+  reached the player). Verified with a clean build.
 
 ### 2. Arrows — no texture
 - Even if/when they fire, arrows have **no texture** (the `arrows_entry` /
