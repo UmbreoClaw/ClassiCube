@@ -276,6 +276,43 @@ static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 		dropBlock = BLOCK_WOOD;
 		count     = 3 + Random_Next(&st_dropRng, 3); /* 3-5 planks */
 		break;
+	case BLOCK_STONE:
+	case BLOCK_OBSIDIAN:
+		/* StoneBlock.getDrop() always returns COBBLESTONE.id - and Obsidian */
+		/*  is literally constructed as `new StoneBlock(49, 37)`, so it goes */
+		/*  through the exact same override. Confirmed against the Wiki too */
+		/*  ("breaking stone/obsidian yields cobblestone"). */
+		dropBlock = BLOCK_COBBLE;
+		break;
+	case BLOCK_COAL_ORE:
+		/* OreBlock.getDrop(): coal ore is the one weird case - it yields a */
+		/*  stone SLAB, not coal (there's no separate coal item yet). Wiki */
+		/*  confirms this exact quirk ("stone slabs were obtained by mining */
+		/*  coal ore" in Survival Test). getDropCount() = 1-3 for all ores. */
+		dropBlock = BLOCK_SLAB;
+		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		break;
+	case BLOCK_GOLD_ORE:
+		dropBlock = BLOCK_GOLD; /* OreBlock.getDrop(): gold ore -> gold block */
+		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		break;
+	case BLOCK_IRON_ORE:
+		dropBlock = BLOCK_IRON; /* OreBlock.getDrop(): iron ore -> iron block */
+		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		break;
+	case BLOCK_DOUBLE_SLAB:
+		dropBlock = BLOCK_SLAB; /* SlabBlock.getDrop() always returns SLAB.id */
+		break;
+	case BLOCK_BOOKSHELF:
+		/* BookshelfBlock.getDropCount() == 0 - never drops anything */
+		return;
+	case BLOCK_WATER:
+	case BLOCK_STILL_WATER:
+	case BLOCK_LAVA:
+	case BLOCK_STILL_LAVA:
+		/* LiquidBlock overrides dropItems()/onBreak() to no-ops and */
+		/*  getDropCount() == 0 - liquids never yield an item drop. */
+		return;
 	case BLOCK_TNT:
 		/* TNTBlock.getDropCount()==0 - mining TNT never yields an item, it */
 		/*  ignites a fuse instead (TNTPhysics.onBreak spawns a PrimedTnt). */
@@ -774,6 +811,11 @@ struct Mob {
 	/*  for interpolation), so reading it straight after Mob_Travel is safe. */
 	cc_bool falling;
 	float   fallPeakY;
+
+	/* Sheep-only (Sheep.hasFur): true until sheared. A player punch (not an */
+	/*  arrow/other source) against a furred sheep shears it instead of */
+	/*  dealing damage - drops 1-3 white wool, matching Sheep.hurt(). */
+	cc_bool hasFur;
 };
 static struct Mob st_mobs[MOB_MAX];
 static RNGState st_mobRng;
@@ -888,7 +930,12 @@ static void Mob_DoJump(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 
 /* Spawns 1-2 brown mushrooms at the mob's position. (int)(rand+rand+1.0) */
 /*  mathematically only ever yields 1 or 2 - never the "1-3" some ports guess. */
-static void Mob_SpawnPigDrops(struct Mob* m) {
+/* Pig.die() and Sheep.die() are byte-for-byte identical in the decompiled */
+/*  source - both drop 1-2 brown mushrooms. Confirmed against the Wiki too */
+/*  ("pigs and sheep would drop mushrooms, which was the only food item at */
+/*  the time") - this isn't a copy-paste bug we're choosing to skip, it's */
+/*  genuine Survival Test behaviour for both mobs. */
+static void Mob_SpawnMushroomDrops(struct Mob* m) {
 	IVec3 coords;
 	int count = (int)(Random_Float(&st_mobRng) + Random_Float(&st_mobRng) + 1.0f);
 	int i;
@@ -902,7 +949,7 @@ static void Mob_SpawnPigDrops(struct Mob* m) {
 /* die(Entity) - called the instant health reaches 0 (separate from the mob's */
 /*  20-tick removal delay, which is handled in SurvivalTest_TickOneMob). */
 static void Mob_Die(struct Mob* m) {
-	if (m->type == MOB_TYPE_PIG) Mob_SpawnPigDrops(m);
+	if (m->type == MOB_TYPE_PIG || m->type == MOB_TYPE_SHEEP) Mob_SpawnMushroomDrops(m);
 }
 
 /* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
@@ -972,10 +1019,30 @@ static void Mob_CreeperExplode(struct Mob* m) {
 static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage) {
 	struct Entity* e = &m->Base;
 	float dx, dz, dist;
+	IVec3 coords;
+	int woolCount, i;
 
 	if (m->health <= 0)        return;
 	if (m->invincTicks > 0)    return;
 	if (damage <= 0)           return;
+
+	/* Sheep.hurt(): a Player punch against a still-furred sheep shears it */
+	/*  instead of dealing damage at all - drops 1-3 white wool and clears */
+	/*  hasFur, then returns without calling the normal hurt() body (so no */
+	/*  damage, no invincibility window, no knockback). Only a genuine player */
+	/*  punch counts (Entities.CurPlayer is singleplayer's only Player), not */
+	/*  arrows or other sources - matches `attacker instanceof Player`. */
+	if (m->type == MOB_TYPE_SHEEP && m->hasFur &&
+		Entities.CurPlayer && attacker == &Entities.CurPlayer->Base) {
+		m->hasFur = false;
+		woolCount = (int)(Random_Float(&st_mobRng) * 3.0f + 1.0f); /* 1-3 */
+
+		coords.x = Math_Floor(e->Position.x);
+		coords.y = Math_Floor(e->Position.y);
+		coords.z = Math_Floor(e->Position.z);
+		for (i = 0; i < woolCount; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_WHITE); }
+		return;
+	}
 
 	m->health      -= damage;
 	m->invincTicks  = MOB_INVINC_TICKS;
@@ -1266,6 +1333,7 @@ static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->health   = MOB_MAX_HEALTH;
 	m->airTicks = MOB_AIR_TICKS;
 	m->active   = true;
+	m->hasFur   = true; /* irrelevant for non-sheep, but harmless */
 }
 
 /* MobSpawner.spawn - for each of `count` attempts, picks a random point */

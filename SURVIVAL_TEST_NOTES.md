@@ -324,10 +324,69 @@ the numbering. Verify each against a running build; don't assume root cause.
   already exist in the code/texture atlas. Need to implement the dig-timer +
   crack overlay render and gate instant-break behind it in survival.
 
-### 6. Drop tables wrong
-- The block/mob drop tables need correcting against the decompiled source
-  (`SurvivalTest_SpawnDropsForBlock` and mob death drops). Cross-check each
-  block's drop + count vs. c0.30-s.
+### 6. Drop tables wrong — FIXED
+- Found the genuine c0.30 client's `level/tile/` package in `/tmp/mcraft_client`
+  (Block.java + every Block subclass: StoneBlock, OreBlock, WoodBlock,
+  LeavesBlock, GrassBlock, SlabBlock, BookshelfBlock, TNTBlock, LiquidBlock,
+  etc.) - this is the actual `getDrop()`/`getDropCount()` override table, not
+  a guess. Cross-checked every finding against the Wiki (Java_Edition_Survival_Test)
+  before changing anything; both sources agreed in every case.
+- **Real bugs found in `SurvivalTest_SpawnDropsForBlock`** (an earlier session
+  had wrongly "corrected" these away, thinking they were guesses - they were not):
+  - `BLOCK_STONE` and `BLOCK_OBSIDIAN` were dropping themselves. Both should
+    drop **cobblestone** - `StoneBlock.getDrop()` always returns
+    `COBBLESTONE.id`, and Obsidian is literally constructed as
+    `new StoneBlock(49, 37)`, so it goes through the exact same override.
+    (Wiki confirms: "breaking stone/obsidian yields cobblestone".)
+  - `BLOCK_COAL_ORE`/`BLOCK_GOLD_ORE`/`BLOCK_IRON_ORE` were dropping
+    themselves. `OreBlock.getDrop()`: gold ore -> gold block, iron ore ->
+    iron block (no separate ingot item exists yet), and **coal ore -> a
+    stone SLAB** (not coal - there's no coal item either). This slab quirk
+    is genuinely correct, not a misread: Wiki explicitly confirms "stone
+    slabs were obtained by mining coal ore" in Survival Test.
+    `getDropCount()` is `random.nextInt(3)+1` = **1-3** for all three ores.
+  - `BLOCK_DOUBLE_SLAB` was dropping itself; should drop a single `SLAB`
+    (`SlabBlock.getDrop()` always returns `SLAB.id` regardless of instance).
+  - `BLOCK_BOOKSHELF` was dropping itself; `BookshelfBlock.getDropCount()==0`
+    - it should drop nothing.
+  - `BLOCK_WATER`/`STILL_WATER`/`LAVA`/`STILL_LAVA` had no case (would fall
+    through to "drop itself" if ever minable) - `LiquidBlock` overrides
+    `dropItems()`/`onBreak()` to no-ops, `getDropCount()==0`. Added an
+    explicit no-drop case for safety even though these likely aren't
+    minable through normal play.
+  - Everything else genuinely does drop itself by default (`Block.getDrop()`
+    returns `this.id`) - grass->dirt, leaves->sapling 1/10, logs->3-5 planks,
+    and TNT's no-drop-arms-a-fuse were already correct from earlier sessions.
+- **Mob death drops** - found a second real bug while reading `Mob.java`'s
+  subclasses (`/tmp/mcraft_client/.../mob/`): **`Sheep.die()` is byte-for-byte
+  identical to `Pig.die()`** - both drop 1-2 brown mushrooms
+  (`(int)(rand+rand+1.0)`). The old notes/code had concluded "Sheep has no
+  drop" from a different decompile pass that apparently missed this override.
+  Wiki corroborates directly: "pigs and sheep would drop mushrooms, which was
+  the only food item at the time". Fixed: `Mob_Die` now calls the (renamed)
+  `Mob_SpawnMushroomDrops` for both `MOB_TYPE_PIG` and `MOB_TYPE_SHEEP`.
+- **New mechanic found and ported**: `Sheep.hurt()` - a **player punch**
+  (not an arrow/other source) against a still-furred sheep **shears** it
+  instead of dealing any damage: drops 1-3 white wool, clears `hasFur`, and
+  returns before the normal damage/knockback/invincibility logic runs at all.
+  Subsequent punches (once `hasFur` is false) behave as normal combat.
+  Added a `hasFur` field to `struct Mob` (spawned `true`, irrelevant for
+  non-sheep) and a special-cased branch at the top of `Mob_Hurt` that checks
+  `attacker == &Entities.CurPlayer->Base` (matches Java's
+  `attacker instanceof Player` - excludes arrows, which use a separate local
+  `fakeAttacker` struct, not the real player entity pointer).
+  - **Not ported** (deliberate simplification, out of scope for a drop-table
+    fix): wool **regrowth** is tied to a full sheep-specific grazing AI
+    (`Sheep$1.update()` in the decompiled source) that replaces the normal
+    wander behaviour entirely - the sheep detects grass beneath it, "eats"
+    it (converts to dirt) over 60 ticks, with a 1-in-5 chance to regrow fur
+    on completion. Porting that is a real AI feature, not a drop-table
+    correction, so sheared sheep currently stay sheared forever. Worth a
+    follow-up if the user wants full fidelity there.
+- Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
+  build - zero errors/warnings. Not yet confirmed in a running game this
+  session (no display available) - worth a test pass: mine stone/obsidian/
+  each ore type/a double slab/a bookshelf, and punch a sheep once vs. twice.
 
 ### 7. Launcher — redundant survival toggle + cut-off Back button — FIXED
 - DONE (this session). Removed the "Survival mode" checkbox from the Settings
