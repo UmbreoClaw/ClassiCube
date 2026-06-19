@@ -280,20 +280,43 @@ the numbering. Verify each against a running build; don't assume root cause.
   still override (Game_UpdateTexture frees the embedded one first). Verified
   the embedded bytes match the original and decode to the expected 32x32.
 
-### 3. Mob models render broken (zombie & skeleton especially)
-- Screenshots show zombie/skeleton rendering malformed/grayscale with wrong
-  or missing textures (one looks like a bare tripod of model parts). Pig
-  appears OK-ish. Likely our hand-spawned mob entities aren't getting their
-  mob texture/skin assigned, so the model draws with a default/missing tex.
-  Check how `SurvivalTest_SpawnMobAt` sets up textures vs. how ClassiCube's
-  normal mob models obtain `/mob/zombie.png` etc.
+### 3. Mob models render "broken" — LIKELY FIXED (body-rotation bug; verify)
+- The mob TEXTURES themselves are fine: zombie.png/skeleton.png/etc. are part
+  of ClassiCube's default.zip (see textureResources[] in Resources.c) and are
+  loaded via Model_RegisterTexture; our mob models use those defaultTex's
+  (usesHumanSkin=false, NonHumanSkin=false), so Model_ApplyTexture binds the
+  right texture. Could not render-test here (this container has no real
+  default.zip and no display), but there's no texture-assignment bug in code.
+- The real defect that made mobs look broken: our mobs set `e->Yaw` (head)
+  but NEVER set `e->RotY` (body). `Entity_GetTransform` rotates the body by
+  RotY only, and `Model_SetupState` rotates the head by `Yaw - RotY`. With
+  RotY stuck at 0, every mob's body/legs were frozen facing north while the
+  head swivelled and the legs walk-animated sideways relative to travel —
+  exactly the "mangled / tripod" look in the screenshots.
+- FIX: sync `e->RotY = e->Yaw` each tick (after the AI updates Yaw) and at
+  spawn, so Classic mobs turn as a whole. **User to verify** whether mobs now
+  look correct; if a specific texture is still wrong, revisit per-mob.
 
-### 4. Mob behaviour — look down + clump toward a point
+### 4. Mob behaviour — look down = FAITHFUL; clumping = spawn/chase + #3 fix
+- "Look down" is NOT a bug: Zombie.java sets `defaultLookAngle = 30` and
+  Creeper.java sets `= 45` in the decompiled c0.30 source, and BasicAI.update
+  does `mob.xRot = defaultLookAngle`. So zombies/creepers genuinely tilt their
+  heads down 30/45 degrees in Survival Test - the port is faithful. (In CC
+  e->Pitch only rotates the head, not the body, so it's just the head tilt.)
+  Left as-is intentionally.
+- "Gravitate toward a point": mobs spawn in clusters (MobSpawner scatters ~9
+  around a point) and hostile mobs chase the player once within 16 blocks -
+  both faithful. The unnatural part was really the frozen-body bug in #3
+  (fixed), which made their movement look wrong. Re-evaluate after the RotY
+  fix; if they still unnaturally converge, dig into wander RNG next.
+
+<!-- (superseded note kept for history)
 - Mobs tilt their heads/bodies **down** instead of looking ahead, and they
   all **gravitate toward a single point** rather than wandering. Likely the
   AI look-target/heading is defaulting to something like origin or (0,0,0),
   and pitch isn't being clamped/zeroed. Review BasicAI/wander port in the
   Mobs section (yaw/pitch assignment + target selection per tick).
+-->
 
 ### 5. Block breaking not implemented (has textures in code already)
 - Survival should use **progressive block breaking** (multi-stage crack

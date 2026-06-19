@@ -1164,6 +1164,14 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		}
 	}
 
+	/* Classic mobs turn as a whole: the body faces the same yaw as the head. */
+	/*  e->RotY drives the body/leg rotation in the model transform - e->Yaw on */
+	/*  its own only steers the HEAD (yawDelta = Yaw - RotY in Model_SetupState). */
+	/*  Without syncing RotY, the body stayed frozen facing north while the head */
+	/*  swivelled and the legs walked sideways relative to travel, which is a */
+	/*  big part of what made mobs look broken. */
+	e->RotY = e->Yaw;
+
 	Mob_DoJump(m, inWater, inLava);
 
 	m->moveStrafe  *= 0.98f;
@@ -1249,6 +1257,7 @@ static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 
 	m->Base.Position = pos;
 	m->Base.Yaw      = Random_Float(&st_mobRng) * 360.0f;
+	m->Base.RotY     = m->Base.Yaw; /* body faces the same way as the head (see TickOneMob) */
 
 	m->Collisions.Entity   = &m->Base;
 	m->Collisions.StepSize = 0.5f; /* matches LocalPlayer's default step size */
