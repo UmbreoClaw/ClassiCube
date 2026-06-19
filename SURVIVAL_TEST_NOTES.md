@@ -398,6 +398,95 @@ the numbering. Verify each against a running build; don't assume root cause.
   4th checkbox had pushed it down). `SurvivalMode_Changed` stays (still used
   by the Choose Mode checkbox). Verified with a clean build.
 
+### 8. Mob AI/texture fidelity pass (this session) — skeleton transparency FIXED, body-yaw decoupling FIXED, spider bobbing FIXED, look-angle + knockback CONFIRMED already correct
+User reported from a screenshot: skeletons looked "stiff" with heads cocked
+down, mobs didn't seem to bob much while walking, and asked about
+knockback-on-hurt fidelity. Also reported separately: skeletons have no
+transparency and their texture alignment looks "lightly fucked up".
+
+- **Skeleton transparency — FIXED, real bug.** `SurvivalTest_RenderMobs`
+  (the function that draws every mob model) never enabled alpha testing.
+  Compare `Entities_RenderModels` (`Entity.c`) which wraps its entity-model
+  loop in `Gfx_SetAlphaTest(true)` / `(false)` - mob rendering had no such
+  wrapper. Worse, `SurvivalTest_RenderDrops` (called right before
+  `SurvivalTest_RenderMobs` every frame, in `Render3DFrame`) explicitly
+  leaves alpha test **disabled** after its own draw calls, so mobs were
+  reliably drawn with alpha test off. Skeleton's model has real cutout
+  regions (gaps between its thin 2px arms/legs and the torso), so those
+  regions rendered as solid texture garbage instead of being clipped.
+  Fix: `SurvivalTest_RenderMobs` now does `Gfx_SetAlphaTest(true)` before its
+  loop and `(false)` after, matching the real entity path.
+- **Skeleton "texture alignment lightly fucked up" — investigated, found NOT
+  a UV/box bug.** Read the genuine decompiled `SkeletonModel.java` (extends
+  `ZombieModel` extends `HumanoidModel`) and compared every box size/texture
+  origin against `SkeletonModel_MakeParts` in `Model.c`: head 8x8x8 @ (0,0),
+  torso 8x12x4 @ (16,16), legs 2x12x2 @ (0,16), arms 2x12x2 @ (40,16) - all
+  match exactly, byte-for-byte. The model geometry was never wrong. Strong
+  suspicion (not separately provable without a display) is that this
+  was the *same* alpha-test bug above: with cutout regions rendering as
+  solid garbage instead of transparent, the silhouette looks like the
+  texture doesn't line up with the model. **User: please re-check after the
+  alpha-test fix** - if it still looks misaligned once transparency works,
+  it's a separate issue and worth a fresh look with an actual screenshot.
+- **Mob look-angle context-switching — confirmed ALREADY correct, no change
+  needed.** Was worried `Mob_DoAttack` might never override pitch, but it
+  already does: `Mob_BasicAIUpdate` sets the idle/wander tilt
+  (`e->Pitch = info->defaultLookAngle`) every tick first, then
+  `Mob_DoAttack` (called right after, only for non-passive mobs) overwrites
+  both `e->Yaw` and `e->Pitch` with a real look-at-target calculation once
+  `m->hasTarget` is set - faithfully porting `BasicAttackAI.doAttack()`.
+  Skeleton's own `defaultLookAngle` is correctly `0` (Skeleton's AI is a
+  fresh `Skeleton$1 extends BasicAttackAI` that never sets it, and `AI`'s
+  base default is `0`) - so an idle/non-aggroed skeleton looks straight
+  ahead, not down; only Zombie (30) and Creeper (45) tilt down while idle.
+  If skeletons still look like they're staring down at the player while
+  approaching, that's very likely just `Mob_DoAttack`'s look-at-target pitch
+  pointing slightly downward because of head-height/eye-height differences
+  versus the player's eye position - which is correct per the source, not a
+  bug.
+- **Body/head yaw decoupling — FIXED, real bug (refines #3's earlier
+  simpler fix).** The #3 fix above (`e->RotY = e->Yaw` every tick) made the
+  body stop being frozen, but it also made the *entire* model (body, legs,
+  AND head) snap instantly to face the target every tick, since
+  `Model_SetupState`'s headDelta (`Yaw - RotY`) was always exactly 0 - i.e.
+  no actual head/body decoupling ever happened. The real
+  `Mob.java tick()` keeps `yBodyRot` as separate persistent state that:
+  (a) eases toward the actual movement direction (`atan2(dz,dx)-90`) at
+  `+= delta*0.1`/tick rather than snapping, and (b) is independently
+  clamped to stay within +-75 degrees of wherever the head (`yRot`) is
+  currently looking. This is what makes a real c0.30 mob's head swivel
+  ahead to track the player while the body/legs visibly catch up a moment
+  later, instead of rigidly snapping. Ported as `Mob_UpdateBodyYaw`
+  (`SurvivalTest.c`), called after `Mob_Travel` each tick using the real
+  position delta for the movement-direction target; `e->RotY` is reused
+  directly as the persistent `yBodyRot` state (nothing else needs Entity's
+  RotY semantics for mobs).
+- **Walking bob — confirmed ALREADY implemented generically, one real bug
+  found (spiders).** ClassiCube's model system already has a universal
+  walk-bob: `model->bobbing` defaults to `true` for every `Model`
+  (`Model_Init`), and `Model_GetEntityTransform` adds
+  `e->Anim.BobbingModel` (`= |cos(WalkTime)| * Swing * 4/16`, driven by
+  actual distance moved via `AnimatedComp_Update`) to the model's Y
+  position - this already runs for mobs since `SurvivalTest_RenderMobs`
+  calls `AnimatedComp_GetCurrent`/`Model_Render` same as real entities. So
+  the "mobs should bob a lot while walking" behaviour was already faithful
+  and working for every mob *except* spiders: `Spider.java` is the only mob
+  that sets `bobStrength = 0.0F` (explicitly no bob), but
+  `SpiderModel_Register` (`Model.c`) never overrode the `bobbing` default of
+  `true`. Fixed: `spider_model.bobbing = false` now set in
+  `SpiderModel_Register`.
+- **Knockback-on-hurt — confirmed ALREADY correct, no change needed.**
+  Compared `Mob_Hurt`'s knockback math against the real `Mob.knockback()`
+  line-by-line: `xd/=2; xd -= dx/dist*0.4; zd/=2; zd -= dz/dist*0.4;
+  yd/=2; yd += 0.4; if (yd>0.4) yd=0.4;` - our existing code already does
+  exactly this (halve current velocity, then push away from the attacker
+  on X/Z and up on Y, capped at 0.4). No discrepancy found.
+- Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
+  build (`Model.c` + `SurvivalTest.c`) - zero errors/warnings. Not render-
+  tested here (no display in this container) - **user: please re-check
+  skeleton transparency/alignment, and watch for the head-leads/body-catches-
+  up effect on an approaching zombie/skeleton.**
+
 ### Misc observed in screenshots (confirm whether intended)
 - A "Texture ID reference sheet" debug overlay is present — confirm if that's
   one of ours/a dev tool and whether it should stay.

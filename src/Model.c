@@ -2006,6 +2006,9 @@ static struct Model spider_model  = { "spider", spider_vertices, &spider_tex,
 static void SpiderModel_Register(void) {
 	Model_Init(&spider_model);
 	spider_model.maxVertices = SPIDER_MAX_VERTICES;
+	/* Spider.java sets bobStrength = 0.0F - unlike every other mob, spiders */
+	/*  don't bounce while walking. */
+	spider_model.bobbing     = false;
 	Model_Register(&spider_model);
 }
 

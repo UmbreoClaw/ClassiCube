@@ -1152,6 +1152,43 @@ static void Mob_DoAttack(struct Mob* m) {
 	}
 }
 
+/* Mob.tick()'s yBodyRot handling - the body/legs don't just snap to match */
+/*  the head's yaw (e->Yaw) every tick, they ease toward the actual movement */
+/*  direction at 0.1/tick, and are additionally clamped to stay within +-75 */
+/*  degrees of wherever the head is currently looking. This is what lets a */
+/*  mob's head swivel ahead to track/look at the player (Mob_DoAttack above) */
+/*  while its body and legs visibly lag behind and catch up, instead of the */
+/*  whole model rigidly snapping to face the target every tick. e->RotY is */
+/*  used directly as the persistent yBodyRot state (nothing else needs RotY */
+/*  for mobs), since Model_SetupState already reads it as the body/leg yaw */
+/*  and e->Yaw on its own as the head-only yaw (yawDelta = Yaw - RotY). */
+static void Mob_UpdateBodyYaw(struct Mob* m, Vec3 oldPos) {
+	struct Entity* e = &m->Base;
+	float dx   = e->Position.x - oldPos.x;
+	float dz   = e->Position.z - oldPos.z;
+	float dist = Math_SqrtF(dx * dx + dz * dz);
+	float targetYaw = e->RotY;
+	float diff;
+
+	if (dist > 0.05f) {
+		targetYaw = Math_Atan2f(dz, dx) * MATH_RAD2DEG - 90.0f;
+	}
+
+	diff = targetYaw - e->RotY;
+	while (diff <  -180.0f) diff += 360.0f;
+	while (diff >=  180.0f) diff -= 360.0f;
+	e->RotY += diff * 0.1f;
+
+	diff = e->Yaw - e->RotY;
+	while (diff <  -180.0f) diff += 360.0f;
+	while (diff >=  180.0f) diff -= 360.0f;
+	if (diff <  -75.0f) diff =  -75.0f;
+	if (diff >=  75.0f) diff =  75.0f;
+
+	e->RotY  = e->Yaw - diff;
+	e->RotY += diff * 0.1f;
+}
+
 static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	const struct MobTypeInfo* info;
 	struct Entity* e = &m->Base;
@@ -1231,14 +1268,6 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		}
 	}
 
-	/* Classic mobs turn as a whole: the body faces the same yaw as the head. */
-	/*  e->RotY drives the body/leg rotation in the model transform - e->Yaw on */
-	/*  its own only steers the HEAD (yawDelta = Yaw - RotY in Model_SetupState). */
-	/*  Without syncing RotY, the body stayed frozen facing north while the head */
-	/*  swivelled and the legs walked sideways relative to travel, which is a */
-	/*  big part of what made mobs look broken. */
-	e->RotY = e->Yaw;
-
 	Mob_DoJump(m, inWater, inLava);
 
 	m->moveStrafe  *= 0.98f;
@@ -1248,6 +1277,7 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	oldPos = e->Position;
 	Mob_Travel(m, inWater, inLava);
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
+	Mob_UpdateBodyYaw(m, oldPos);
 
 	/* Fall damage (Mob.causeFallDamage) - same peak-tracking approach as the */
 	/*  player's SurvivalTest_UpdateFall, but using e->Position directly since */
@@ -1430,6 +1460,12 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 	int i;
 	if (!SurvivalTest_Enabled) return;
 
+	/* Mobs use cutout textures (e.g. skeleton's gaps between limbs), so this */
+	/*  needs alpha test enabled - same as Entities_RenderModels does for */
+	/*  ordinary entities. Without it, whatever the prior draw call left the */
+	/*  alpha test state as (usually disabled, since RenderDrops disables it) */
+	/*  leaks through and cutout regions render solid instead of transparent. */
+	Gfx_SetAlphaTest(true);
 	for (i = 0; i < MOB_MAX; i++) {
 		m = &st_mobs[i];
 		if (!m->active) continue;
@@ -1441,6 +1477,7 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 
 		Model_Render(e->Model, e);
 	}
+	Gfx_SetAlphaTest(false);
 }
 
 /* The player's melee attack - casts a ray along the view direction (exactly */
