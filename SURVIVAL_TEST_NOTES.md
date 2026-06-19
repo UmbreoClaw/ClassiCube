@@ -265,12 +265,20 @@ the numbering. Verify each against a running build; don't assume root cause.
   their own feet too, so skeleton shots stuck at the skeleton and never
   reached the player). Verified with a clean build.
 
-### 2. Arrows — no texture
-- Even if/when they fire, arrows have **no texture** (the `arrows_entry` /
-  `st_arrowsTexId` registration isn't resolving). User confirmed via the
-  "Texture ID reference sheet" debug overlay that the arrow texture slot is
-  missing/blank. Check `TextureEntry_Register(&arrows_entry)` and how
-  `st_arrowsTexId` is looked up vs. the actual texture pack contents.
+### 2. Arrows — no texture (arrows invisible) — FIXED
+- ROOT CAUSE: ClassiCube's default texture pack has no `arrows.png` (Classic
+  loaded it from `/item/arrows.png` in the jar; CC packs are flat and don't
+  ship it). So the `arrows_entry` TextureEntry callback never fired,
+  `st_arrowsTexId` stayed 0, and `SurvivalTest_RenderArrows` bailed at
+  `if (!any || !st_arrowsTexId) return;` — arrows were not just untextured but
+  not rendered at all.
+- FIX: embedded the original 32x32 RGBA `arrows.png` (322 bytes, byte-for-byte
+  from the decompiled jar) as a static array in SurvivalTest.c, plus
+  `SurvivalTest_EnsureArrowTexture()` which decodes it (Stream_ReadonlyMemory
+  + Png_Decode + Gfx_CreateTexture) the first time arrows render and after any
+  context loss. The arrows_entry TextureEntry is kept so a custom pack can
+  still override (Game_UpdateTexture frees the embedded one first). Verified
+  the embedded bytes match the original and decode to the expected 32x32.
 
 ### 3. Mob models render broken (zombie & skeleton especially)
 - Screenshots show zombie/skeleton rendering malformed/grayscale with wrong
