@@ -235,6 +235,21 @@ Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
 build — zero errors/warnings. Not yet confirmed in a running game this
 session (no display available).
 
+- **Arm doesn't swing when attacking a mob (later session, FIXED)**: user
+  noticed the held-item/hand stays still when hitting a mob, unlike the
+  visible swing when mining a block. Ground truth: `Minecraft.onMouseClick(0)`
+  (Minecraft.java:1224-1228) starts the held-block swing at the very *top* of
+  the left-click handler, unconditionally, *before* it branches into
+  `entity.hurt(player, 4)` (mob), `gamemode.hitBlock(...)` (block), or the
+  air-miss case — so every left click swings the arm. In our port the swing
+  is played by `InputHandler_DeleteBlock` (`HeldBlockRenderer_ClickAnim(true)`,
+  "always play delete animations, even if we aren't deleting a block"), but
+  the left-click routing is `if (!SurvivalTest_TryAttackMob()) DeleteBlock();`
+  — so when a mob is hit, DeleteBlock (and the swing) is skipped entirely.
+  Fix: `SurvivalTest_TryAttackMob` now calls `HeldBlockRenderer_ClickAnim(true)`
+  on a successful hit, so hit-mob / hit-block / hit-air all play exactly one
+  swing, matching Java. (Included `HeldBlockRenderer.h` in SurvivalTest.c.)
+
 ---
 
 ## OPEN BUGS — RESUME HERE NEXT SESSION (live-test feedback, not yet fixed)

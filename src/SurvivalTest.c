@@ -22,6 +22,7 @@
 #include "Model.h"
 #include "Stream.h"
 #include "Bitmap.h"
+#include "HeldBlockRenderer.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -1509,6 +1510,13 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 		if (t0 < bestT) { bestT = t0; best = m; }
 	}
 	if (!best) return false;
+
+	/* Minecraft.onMouseClick(0) starts the held-item swing at the very top, */
+	/*  before it branches into hurting a mob - so a melee hit swings the arm */
+	/*  exactly like mining a block does. The block-delete path plays this */
+	/*  itself (InputHandler_DeleteBlock), but that path is skipped when we */
+	/*  attack a mob, so trigger the same swing here to match. */
+	HeldBlockRenderer_ClickAnim(true);
 
 	/* Player fist: flat 4 HP/hit, matching SurvivalTest_Hurt's own player-damage figure */
 	Mob_Hurt(best, e, 4);
