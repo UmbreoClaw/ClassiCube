@@ -1,6 +1,7 @@
 #ifndef CC_SURVIVALTEST_H
 #define CC_SURVIVALTEST_H
 #include "Core.h"
+#include "Vectors.h"
 CC_BEGIN_HEADER
 
 /* Classic 0.30 Survival Test gamemode.
@@ -87,6 +88,24 @@ cc_bool SurvivalTest_TryShootArrow(void);
 
 /* Gets how many arrows the player currently has (0 to 99). */
 int SurvivalTest_ArrowCount(void);
+
+/* Whether the given block should break the instant it's clicked, rather than */
+/*  needing sustained mining (true for 0-hardness blocks, e.g. flowers, TNT). */
+/*  Always true when survival mode is disabled. */
+cc_bool SurvivalTest_CanInstaBreak(BlockID block);
+
+/* Current mining progress (0-1) towards breaking whatever block is being */
+/*  continuously mined, for the crack overlay. 0 if nothing is being mined. */
+float SurvivalTest_BreakProgress(void);
+
+/* Gets the coordinates of the block currently being continuously mined. */
+/* Returns false (and leaves *pos untouched) if nothing is being mined. */
+cc_bool SurvivalTest_BreakTargeted(IVec3* pos);
+
+/* Renders the crack overlay on whatever block is currently being mined. */
+/* No-op when survival mode is disabled. Call once per frame, after the */
+/*  selection outline (e.g. in Render3DFrame). */
+void SurvivalTest_RenderCracks(float delta, float t);
 
 CC_END_HEADER
 #endif

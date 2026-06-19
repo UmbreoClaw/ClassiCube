@@ -521,6 +521,7 @@ static void Render3DFrame(float delta, float t) {
 	if (Game_SelectedPos.valid && !Game_HideGui) {
 		SelOutlineRenderer_Render(&Game_SelectedPos, true);
 	}
+	SurvivalTest_RenderCracks(delta, t);
 
 	/* Render water over translucent blocks when under the water outside the map for proper alpha blending */
 	pos = Camera.CurrentPos;

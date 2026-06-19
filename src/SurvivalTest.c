@@ -23,6 +23,9 @@
 #include "Stream.h"
 #include "Bitmap.h"
 #include "HeldBlockRenderer.h"
+#include "Input.h"
+#include "Gui.h"
+#include "Picking.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -2076,6 +2079,260 @@ static void SurvivalTest_BlockChanged(void* obj,
 
 
 /*########################################################################################################################*
+*-----------------------------------------------------Block breaking-------------------------------------------------------*
+*#########################################################################################################################*/
+/* Block.getHardness() - every block's hardness is set once via Block.setData(), */
+/*  as (int)(hardnessSeconds * 20.0F) ticks. Values below are taken directly from */
+/*  Block.java's static init block. 0 means the block breaks on the very first hit */
+/*  (SurvivalGameMode's 3-arg hitBlock() breaks these instantly on click, rather */
+/*  than waiting for the continuous per-tick path below). Blocks with no explicit */
+/*  c0.30 hardness (i.e. CPE-era blocks that didn't exist yet) default to instant, */
+/*  matching this engine's pre-existing creative-style behaviour for them. */
+static int SurvivalTest_Hardness(BlockID block) {
+	switch (block) {
+		case BLOCK_STONE:       return 20;  /* 1.0s */
+		case BLOCK_GRASS:       return 12;  /* 0.6s */
+		case BLOCK_DIRT:        return 10;  /* 0.5s */
+		case BLOCK_COBBLE:      return 30;  /* 1.5s */
+		case BLOCK_WOOD:        return 30;  /* 1.5s (planks) */
+		case BLOCK_BEDROCK:     return 19980; /* 999.0s - effectively unbreakable */
+		case BLOCK_WATER: case BLOCK_STILL_WATER:
+		case BLOCK_LAVA:  case BLOCK_STILL_LAVA:
+			return 2000; /* 100.0s */
+		case BLOCK_SAND:        return 10;  /* 0.5s */
+		case BLOCK_GRAVEL:      return 12;  /* 0.6s */
+		case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE:
+			return 60;  /* 3.0s */
+		case BLOCK_LOG:         return 50;  /* 2.5s */
+		case BLOCK_LEAVES:      return 4;   /* 0.2s */
+		case BLOCK_SPONGE:      return 12;  /* 0.6s */
+		case BLOCK_GLASS:       return 6;   /* 0.3s */
+		case BLOCK_RED: case BLOCK_ORANGE: case BLOCK_YELLOW: case BLOCK_LIME:
+		case BLOCK_GREEN: case BLOCK_TEAL: case BLOCK_AQUA: case BLOCK_CYAN:
+		case BLOCK_BLUE: case BLOCK_INDIGO: case BLOCK_VIOLET: case BLOCK_MAGENTA:
+		case BLOCK_PINK: case BLOCK_BLACK: case BLOCK_GRAY: case BLOCK_WHITE:
+			return 16;  /* 0.8s (all 16 wool colours) */
+		case BLOCK_GOLD:        return 60;  /* 3.0s */
+		case BLOCK_IRON:        return 100; /* 5.0s */
+		case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB:
+			return 40;  /* 2.0s */
+		case BLOCK_BRICK:       return 40;  /* 2.0s */
+		case BLOCK_BOOKSHELF:   return 30;  /* 1.5s */
+		case BLOCK_MOSSY_ROCKS: return 20;  /* 1.0s */
+		case BLOCK_OBSIDIAN:    return 200; /* 10.0s */
+		/* DANDELION, ROSE, BROWN_SHROOM, RED_SHROOM, SAPLING, TNT: hardness 0.0s */
+		default: return 0;
+	}
+}
+
+/* SurvivalGameMode's 3-arg hitBlock(x,y,z) override (used for the discrete click */
+/*  path): true (allow instant break) only when the block has 0 hardness - */
+/*  everything else only breaks through the continuous per-tick path below. */
+/*  Always true outside survival mode, leaving creative's instant-delete untouched. */
+cc_bool SurvivalTest_CanInstaBreak(BlockID block) {
+	if (!SurvivalTest_Enabled) return true;
+	return SurvivalTest_Hardness(block) == 0;
+}
+
+static IVec3 st_breakPos;
+static cc_bool st_breaking;
+static int st_breakHits;
+static int st_breakDelay;
+
+/* Progress through the current hit, 0-1, for the crack overlay - hits/(hardness+1) */
+float SurvivalTest_BreakProgress(void) {
+	int hardness;
+	if (!st_breaking || st_breakHits <= 0) return 0.0f;
+
+	hardness = SurvivalTest_Hardness(World_GetBlock(st_breakPos.x, st_breakPos.y, st_breakPos.z));
+	return (float)st_breakHits / (float)(hardness + 1);
+}
+
+cc_bool SurvivalTest_BreakTargeted(IVec3* pos) {
+	if (!st_breaking) return false;
+	*pos = st_breakPos;
+	return true;
+}
+
+/* SurvivalGameMode.hitBlock(x,y,z,side)/resetHits() - runs every tick while the */
+/*  left mouse button is held down and the player is aiming at a block. Hits */
+/*  accumulate on whichever block was targeted last tick; aiming at a different */
+/*  block resets the count. Reaching hardness+1 hits breaks the block and starts */
+/*  a 5-tick cooldown (hitDelay) before the next block can start accumulating hits. */
+static void SurvivalTest_TickBreaking(void) {
+	IVec3 pos;
+	BlockID block, old;
+	int hardness;
+	cc_bool holding = !Gui.InputGrab && Input.Pressed[CCMOUSE_L];
+
+	if (!holding || !Game_SelectedPos.valid) {
+		st_breaking   = false;
+		st_breakHits  = 0;
+		st_breakDelay = 0;
+		return;
+	}
+
+	if (st_breakDelay > 0) { st_breakDelay--; return; }
+	pos = Game_SelectedPos.pos;
+
+	if (st_breaking && pos.x == st_breakPos.x && pos.y == st_breakPos.y && pos.z == st_breakPos.z) {
+		if (!World_Contains(pos.x, pos.y, pos.z)) { st_breaking = false; st_breakHits = 0; return; }
+
+		block = World_GetBlock(pos.x, pos.y, pos.z);
+		if (Blocks.Draw[block] == DRAW_GAS || !Blocks.CanDelete[block]) {
+			st_breaking = false; st_breakHits = 0; return;
+		}
+
+		hardness = SurvivalTest_Hardness(block);
+		st_breakHits++;
+		if (st_breakHits >= hardness + 1) {
+			old = block;
+			Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
+			Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
+
+			st_breaking   = false;
+			st_breakHits  = 0;
+			st_breakDelay = 5;
+		}
+	} else {
+		st_breaking  = true;
+		st_breakHits = 0;
+		st_breakPos  = pos;
+	}
+}
+
+static GfxResourceID st_cracksTexId;
+static GfxResourceID st_cracksVB;
+#define CRACKS_NUM_VERTICES (4 * 6)
+
+static void CracksPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&st_cracksTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry cracks_entry = { "cracks.png", CracksPngProcess };
+
+/* The 10 mining-progress crack stages, cropped from genuine c0.30 terrain.png */
+/*  (tile indices 240-249) and converted from the original's GL_DST_COLOR* */
+/*  GL_SRC_COLOR multiply-blend look into an equivalent black/alpha image - */
+/*  alpha = 255 minus the original grayscale value, which is mathematically */
+/*  identical to multiplying the destination by the original colour once */
+/*  alpha-blended with a pure black source (this engine has no multiply blend */
+/*  mode). No ClassiCube texture pack ships a cracks.png, so this asset is */
+/*  embedded and uploaded directly here - a custom pack can still override it */
+/*  via the cracks_entry TextureEntry above, same pattern as arrows_png. */
+static const cc_uint8 cracks_png[] = {
+	0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+	0x00,0x00,0x00,0xA0,0x00,0x00,0x00,0x10,0x08,0x06,0x00,0x00,0x00,0x91,0x05,0x74,
+	0x58,0x00,0x00,0x01,0x63,0x49,0x44,0x41,0x54,0x78,0xDA,0xED,0xD9,0x4D,0x0E,0xC2,
+	0x20,0x10,0x05,0x60,0x0E,0xFB,0x0E,0xD2,0xB3,0xBD,0x93,0xB9,0x71,0x61,0x0C,0x33,
+	0xCC,0x1F,0x48,0x2B,0x0B,0x62,0x54,0xBE,0xA6,0xDA,0x17,0x98,0x69,0x5B,0x6B,0xED,
+	0x3A,0xE3,0x8C,0xCE,0xE0,0xFB,0x15,0xC2,0xF7,0x10,0xE6,0x4B,0x9E,0xC2,0xE7,0xE7,
+	0xCF,0xDE,0xF8,0xE2,0x47,0x2D,0x93,0x96,0x4A,0xC0,0xA8,0x04,0x32,0xE2,0xCF,0x05,
+	0x9F,0x14,0x06,0x26,0x02,0x81,0x84,0x47,0xC0,0xF3,0xCB,0xF6,0x3C,0x3A,0xE7,0x56,
+	0xE1,0x4F,0x78,0x06,0x1E,0x41,0x8B,0x0F,0x8F,0x05,0xFE,0x3B,0x68,0x9A,0xA7,0xB2,
+	0x7A,0xAD,0xF6,0x27,0x3C,0x06,0xCF,0xC0,0xB9,0x8D,0x3C,0x0D,0x2B,0xA7,0xC7,0xF7,
+	0x56,0x1E,0x08,0xF3,0x7B,0xEF,0xA3,0x9E,0x49,0xBF,0x75,0x80,0xAA,0x3C,0x03,0xC7,
+	0xD5,0x3C,0x8C,0x5B,0xAF,0xE6,0xB1,0xD8,0x43,0x09,0x1B,0x12,0x1E,0x49,0x7F,0x9B,
+	0x00,0xD2,0x19,0x1E,0x0A,0x5B,0x04,0x9A,0xBD,0x10,0x7F,0xBA,0xC7,0x06,0x7E,0x5A,
+	0x88,0x60,0xE8,0x9C,0x3C,0xDE,0x53,0x4B,0x21,0xE8,0xA9,0x14,0xD2,0x3B,0x78,0x6E,
+	0xE8,0x29,0xFC,0x4E,0xAB,0x37,0x87,0x20,0x5B,0x88,0xDF,0xC1,0x23,0xE1,0xB9,0xC0,
+	0xA3,0xF9,0x6A,0x4E,0x0C,0x6A,0xC9,0x0A,0x0F,0x65,0xDE,0xC8,0x9B,0xB6,0x60,0xB4,
+	0xE7,0xD4,0x82,0x33,0x3D,0x92,0x9E,0x89,0x86,0x47,0x6A,0x5E,0x2E,0x61,0x2B,0xAC,
+	0xF0,0x2C,0xF0,0x68,0x6D,0x7E,0x37,0xFB,0x8F,0x01,0x66,0x22,0xC0,0x18,0x74,0xAC,
+	0x59,0x8F,0xC1,0x13,0x0B,0x8B,0x97,0x56,0xBB,0x88,0xDF,0xFE,0x3E,0x1E,0x12,0x36,
+	0xEA,0xB9,0x99,0x47,0x81,0xA7,0xB2,0x85,0xD2,0xE9,0x59,0xE8,0xB7,0x0E,0x20,0x92,
+	0x16,0x49,0x1B,0xA9,0x81,0xF9,0x03,0x4F,0x83,0x87,0xB1,0x4C,0xB0,0x78,0x14,0x78,
+	0xCE,0xBE,0x0D,0xF3,0x94,0x81,0xE4,0x7C,0x4F,0x08,0xB5,0x46,0x84,0xC6,0xE7,0xB0,
+	0x77,0xF1,0x58,0x55,0x03,0x9E,0x11,0xEF,0xC2,0x7B,0x2B,0xB2,0xF5,0xD6,0x93,0x77,
+	0x45,0xA5,0xB0,0x55,0xF7,0x3C,0x0B,0xFD,0x09,0xC8,0xC3,0xC3,0x0E,0x47,0xC8,0x2F,
+	0xE5,0xC9,0x86,0x25,0xE8,0x6E,0xFF,0x02,0xA8,0x1C,0x3B,0xE2,0x4B,0x55,0x35,0x85,
+	0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82,
+};
+
+static void SurvivalTest_EnsureCracksTexture(void) {
+	struct Stream src;
+	struct Bitmap bmp;
+	if (st_cracksTexId) return;
+
+	Stream_ReadonlyMemory(&src, (void*)cracks_png, (cc_uint32)sizeof(cracks_png));
+	if (Png_Decode(&bmp, &src)) { Mem_Free(bmp.scan0); return; }
+
+	st_cracksTexId = Gfx_CreateTexture(&bmp, 0, false);
+	Mem_Free(bmp.scan0);
+}
+
+static void Cracks_AddFace(struct VertexTextured** ptr, Vec3 a, Vec3 b, Vec3 c, Vec3 d,
+							float u0, float u1, PackedCol col) {
+	struct VertexTextured* v = *ptr;
+	v[0].x = a.x; v[0].y = a.y; v[0].z = a.z; v[0].U = u0; v[0].V = 1.0f; v[0].Col = col;
+	v[1].x = b.x; v[1].y = b.y; v[1].z = b.z; v[1].U = u1; v[1].V = 1.0f; v[1].Col = col;
+	v[2].x = c.x; v[2].y = c.y; v[2].z = c.z; v[2].U = u1; v[2].V = 0.0f; v[2].Col = col;
+	v[3].x = d.x; v[3].y = d.y; v[3].z = d.z; v[3].U = u0; v[3].V = 0.0f; v[3].Col = col;
+	*ptr += 4;
+}
+
+/* Minecraft.java's applyCracks()+render(): builds an inflated copy of the */
+/*  targeted block's 6 faces (GL11.glScalef(1.01,1.01,1.01) around its centre, */
+/*  to avoid z-fighting with the block underneath), textured with whichever of */
+/*  the 10 crack stages matches the current mining progress. */
+void SurvivalTest_RenderCracks(float delta, float t) {
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	IVec3 targetPos;
+	float x0, y0, z0, x1, y1, z1, cx, cy, cz;
+	float progress, u0, u1;
+	int stage;
+	PackedCol col = PACKEDCOL_WHITE;
+	const float scale = 1.01f;
+
+	if (!SurvivalTest_Enabled) return;
+	if (!SurvivalTest_BreakTargeted(&targetPos)) return;
+
+	progress = SurvivalTest_BreakProgress();
+	if (progress <= 0.0f) return;
+
+	stage = (int)(progress * 10.0f);
+	if (stage > 9) stage = 9;
+	u0 = stage / 10.0f;
+	u1 = (stage + 1) / 10.0f;
+
+	SurvivalTest_EnsureCracksTexture();
+	if (!st_cracksTexId) return;
+
+	if (!st_cracksVB) {
+		st_cracksVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, CRACKS_NUM_VERTICES);
+		if (!st_cracksVB) return;
+	}
+
+	cx = (Game_SelectedPos.Min.x + Game_SelectedPos.Max.x) * 0.5f;
+	cy = (Game_SelectedPos.Min.y + Game_SelectedPos.Max.y) * 0.5f;
+	cz = (Game_SelectedPos.Min.z + Game_SelectedPos.Max.z) * 0.5f;
+	x0 = cx + (Game_SelectedPos.Min.x - cx) * scale;
+	y0 = cy + (Game_SelectedPos.Min.y - cy) * scale;
+	z0 = cz + (Game_SelectedPos.Min.z - cz) * scale;
+	x1 = cx + (Game_SelectedPos.Max.x - cx) * scale;
+	y1 = cy + (Game_SelectedPos.Max.y - cy) * scale;
+	z1 = cz + (Game_SelectedPos.Max.z - cz) * scale;
+
+	ptr = data = (struct VertexTextured*)Gfx_LockDynamicVb(st_cracksVB, VERTEX_FORMAT_TEXTURED, CRACKS_NUM_VERTICES);
+	Cracks_AddFace(&ptr, Vec3_Create3(x0,y0,z0), Vec3_Create3(x1,y0,z0), Vec3_Create3(x1,y0,z1), Vec3_Create3(x0,y0,z1), u0, u1, col); /* YMin */
+	Cracks_AddFace(&ptr, Vec3_Create3(x0,y1,z0), Vec3_Create3(x0,y1,z1), Vec3_Create3(x1,y1,z1), Vec3_Create3(x1,y1,z0), u0, u1, col); /* YMax */
+	Cracks_AddFace(&ptr, Vec3_Create3(x0,y0,z0), Vec3_Create3(x0,y0,z1), Vec3_Create3(x0,y1,z1), Vec3_Create3(x0,y1,z0), u0, u1, col); /* XMin */
+	Cracks_AddFace(&ptr, Vec3_Create3(x1,y0,z1), Vec3_Create3(x1,y0,z0), Vec3_Create3(x1,y1,z0), Vec3_Create3(x1,y1,z1), u0, u1, col); /* XMax */
+	Cracks_AddFace(&ptr, Vec3_Create3(x1,y0,z0), Vec3_Create3(x0,y0,z0), Vec3_Create3(x0,y1,z0), Vec3_Create3(x1,y1,z0), u0, u1, col); /* ZMin */
+	Cracks_AddFace(&ptr, Vec3_Create3(x0,y0,z1), Vec3_Create3(x1,y0,z1), Vec3_Create3(x1,y1,z1), Vec3_Create3(x0,y1,z1), u0, u1, col); /* ZMax */
+	Gfx_UnlockDynamicVb(st_cracksVB);
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetAlphaBlending(true);
+	Gfx_BindTexture(st_cracksTexId);
+	Gfx_DrawVb_IndexedTris_Range(CRACKS_NUM_VERTICES, 0, DRAW_HINT_NONE);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthWrite(true);
+}
+
+
+/*########################################################################################################################*
 *--------------------------------------------------------Ticking----------------------------------------------------------*
 *#########################################################################################################################*/
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e) {
@@ -2192,6 +2449,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/* Dropped items --------------------------------------------------------- */
 	SurvivalTest_TickDrops(e, delta);
 
+	/* Block breaking --------------------------------------------------------- */
+	SurvivalTest_TickBreaking();
+
 	/* Mobs ----------------------------------------------------------------- */
 	SurvivalTest_TickMobs(delta);
 
@@ -2213,6 +2473,9 @@ static void SurvivalTest_ResetState(void) {
 	st_drownTimer   = 0.0f;
 	st_isDead       = false;
 	st_invincTimer  = 0.0f;
+	st_breaking     = false;
+	st_breakHits    = 0;
+	st_breakDelay   = 0;
 	st_airTimer     = AIR_SUPPLY_SECS;
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
@@ -2248,7 +2511,11 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
-	if (!Gfx.ManagedTextures) Gfx_DeleteTexture(&st_arrowsTexId);
+	Gfx_DeleteDynamicVb(&st_cracksVB);
+	if (!Gfx.ManagedTextures) {
+		Gfx_DeleteTexture(&st_arrowsTexId);
+		Gfx_DeleteTexture(&st_cracksTexId);
+	}
 }
 
 static void SurvivalTest_Init(void) {
@@ -2263,6 +2530,7 @@ static void SurvivalTest_Init(void) {
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	TextureEntry_Register(&arrows_entry);
+	TextureEntry_Register(&cracks_entry);
 }
 
 static void SurvivalTest_Free(void) {
@@ -2273,6 +2541,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
+	Gfx_DeleteDynamicVb(&st_cracksVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {
@@ -2295,6 +2564,9 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 	p->Hacks.CanNoclip = false;
 	p->Hacks.CanSpeed  = false;
 	HacksComp_Update(&p->Hacks);
+
+	/* SurvivalGameMode.getReachDistance() returns 4 blocks, vs 5 for Creative */
+	p->ReachDistance = 4.0f;
 
 	SurvivalTest_SpawnInitialMobs();
 }

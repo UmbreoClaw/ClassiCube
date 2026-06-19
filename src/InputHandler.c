@@ -414,6 +414,11 @@ static void InputHandler_DeleteBlock(void) {
 
 	old = World_GetBlock(pos.x, pos.y, pos.z);
 	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) return;
+	/* In survival, blocks with hardness only break through the continuous */
+	/*  per-tick mining system (SurvivalTest_TickBreaking) - this click-triggered */
+	/*  path only handles the instant case, matching SurvivalGameMode's 3-arg */
+	/*  hitBlock(x,y,z) override (which does nothing for hardness > 0 blocks). */
+	if (!SurvivalTest_CanInstaBreak(old)) return;
 
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);

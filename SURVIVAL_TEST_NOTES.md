@@ -333,11 +333,47 @@ the numbering. Verify each against a running build; don't assume root cause.
   Mobs section (yaw/pitch assignment + target selection per tick).
 -->
 
-### 5. Block breaking not implemented (has textures in code already)
-- Survival should use **progressive block breaking** (multi-stage crack
-  overlay) instead of instant deletion. The destroy-stage/crack textures
-  already exist in the code/texture atlas. Need to implement the dig-timer +
-  crack overlay render and gate instant-break behind it in survival.
+### 5. Block breaking not implemented — FIXED
+- Survival now uses **progressive, per-block-hardness breaking** with a
+  crack overlay, ported directly from the genuine c0.30 decompile
+  (`SurvivalGameMode.hitBlock(x,y,z,side)` + `Block.java`'s hardness table +
+  `Minecraft.java`'s crack-overlay render, all in `/tmp/mcraft_client`). This
+  also corrects the earlier "uniform break timer" note below, which turned
+  out to be wrong — see that entry.
+- `SurvivalTest_Hardness()` (`src/SurvivalTest.c`) ports the full per-block
+  hardness table (in ticks, 20/sec): e.g. dirt 10, grass 12, stone 20,
+  cobble/wood 30, log 50, ore 60, iron 100, obsidian 200, bedrock ~19980
+  (unbreakable), flowers/mushrooms/saplings/TNT 0 (instant). 0-hardness
+  blocks still insta-break through the old click path
+  (`SurvivalTest_CanInstaBreak`); everything else only breaks through the
+  new continuous per-tick system.
+- `SurvivalTest_TickBreaking()` is the continuous 20Hz hits/cooldown state
+  machine (mirrors `hitBlock`/`resetHits()`), hooked into `SurvivalTest_Tick`.
+  Driven by `Input.Pressed[CCMOUSE_L]` + `Game_SelectedPos`, so it reuses the
+  engine's existing mouse/picking state rather than needing new plumbing.
+  `InputHandler_DeleteBlock`'s old 4Hz instant-delete path is now gated by
+  `SurvivalTest_CanInstaBreak()` so it only fires for 0-hardness blocks in
+  survival; creative is untouched.
+- Reach distance corrected to 4 blocks for survival (`LocalPlayer.ReachDistance`
+  in `SurvivalTest_OnNewMapLoaded`), vs creative's 5 — matches
+  `SurvivalGameMode.getReachDistance()`.
+- Crack overlay (`SurvivalTest_RenderCracks`) renders the 10-stage crack
+  texture over whatever block is being mined, scaled 1.01x around its center
+  to avoid z-fighting (matching `Minecraft.java`'s `glScalef`). The genuine
+  client multiply-blends the crack tile (`glBlendFunc(GL_DST_COLOR,
+  GL_SRC_COLOR)`); ClassiCube has no multiply-blend mode, so the crack
+  texture was re-derived as black RGB + alpha = `(255-v)/255` (where `v` is
+  the original grayscale value) — this is mathematically identical to the
+  multiply blend when used with standard `Gfx_SetAlphaBlending(true)`, so no
+  engine/graphics-backend changes were needed.
+- ClassiCube's bundled default texture pack's `terrain.png` is only 256x128
+  and has no crack tiles at all (the genuine c0.30 `terrain.png` is 256x256
+  and has them at indices 240-249). Rather than depend on a texture pack
+  that may not have them, the 10 crack-stage tiles were extracted from the
+  genuine asset and embedded as a small standalone texture (`cracks_png[]`),
+  following the same embedding pattern already used for `arrows_png`
+  (lazy-decoded via `Png_Decode`, overridable by `cracks.png` in a custom
+  texture pack via `TextureEntry_Register`).
 
 ### 6. Drop tables wrong — FIXED
 - Found the genuine c0.30 client's `level/tile/` package in `/tmp/mcraft_client`
@@ -744,17 +780,24 @@ landed, so the next session knows where things stand:
   low priority).
 - `DROP_MAX = 64` pool: oldest-undropped silently skipped once full; fine for now.
 
-### Block-breaking time (CLARIFIED — c0.30-s DID have a break timer)
-Correction (per user, 2026-06): Survival Test blocks did **not** break instantly —
-there was a **hold-to-break timer**, but it was a **single uniform duration for every
-block** (no per-block hardness — dirt, stone, etc. all took the same time). What is
-specifically *Indev* (Feb 2010) is **per-block hardness** (different blocks taking
-different times). The cracking/destroy-stage overlay also belongs to that later lineage.
+### Block-breaking time — CORRECTED (the "CLARIFIED" note below was wrong)
+The note that used to be here (attributed to a prior user statement, 2026-06)
+claimed c0.30-s used a single uniform break duration for every block, with no
+per-block hardness and no crack overlay, and that those were later (Indev-era)
+additions. **This is incorrect** — direct inspection of the genuine decompiled
+c0.30 source (`/tmp/mcraft_client/.../level/tile/Block.java`,
+`SurvivalGameMode.java`, `Minecraft.java`) this session shows c0.30-s already had:
+- **Per-block hardness**, set in `Block.java`'s static init (e.g. dirt 10 ticks,
+  stone 20, cobble 30, obsidian 200, bedrock effectively unbreakable) — not a
+  uniform timer.
+- A real **10-stage crack overlay**, rendered in `Minecraft.java` (multiply-blended,
+  texture indices 240-249), driven by `SurvivalGameMode.hitBlock(x,y,z,side)`'s
+  hits/hardness state machine.
 
-So a **uniform break time** is faithful to c0.30-s and is currently a **divergence**:
-ClassiCube breaks instantly (creative behaviour). Building a single fixed hold-to-break
-timer (same for all blocks, no crack overlay needed) would be the faithful fix.
-Not yet implemented — not started without an explicit go-ahead.
+This has now been implemented faithfully per the genuine source — see "5. Block
+breaking" above. Flagging this correction explicitly since it reverses something
+previously written down as user-clarified; the decompiled source is unambiguous
+on this point across all three independent decompiles checked.
 
 ---
 
