@@ -918,10 +918,25 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
     `Gfx_SetAlphaBlending` via a generic default in `_GraphicsBase.h` (slightly less
     punchy glow, but no breakage) since none of those platforms build from this branch.
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
-- **HUD stack counts**: digits drawn at the natural font size (like the inventory
-  screen) but anchored to each slot's block-icon **bottom-right**
-  (`HUDScreen_BuildCountsMesh`). The original fullscreen bug was *positioning*
-  (left-aligned/detached), not size — manual glyph scaling overshot and was reverted.
+- **HUD stack counts** (`HUDScreen_BuildCountsMesh`) — re-audited & RE-FIXED
+  against the genuine `HUDScreen.java`. The original draws counts with the
+  8px-tall GUI font inside its fixed 240-unit-tall virtual screen, where the
+  hotbar is 22 units tall and each slot cell is 20 wide, right-aligning the
+  count to the cell's right edge (`var26 + 19`) with its top 10 units above the
+  hotbar's bottom (`slotY + 6`). Our `HotbarWidget` bakes that exact scale into
+  its pixels (`height = 22 * hotbarScale * ScaleY`, `slotWidth = 20 * hotbarScale
+  * ScaleX`), so the faithful digit height is `w->height * 8/22` and the right
+  edge is `w->x + slotWidth*(i+1)`, top `(w->y+w->height) - w->height*10/22`.
+  The previous code was wrong on both axes: it sized digits as `slotWidth*0.34`
+  (= `6.8*scaleX`, ~15% too small *and* tied to the X scale, so they came out
+  the wrong size and stretched on non-square DPI), and applied a fabricated
+  `slotWidth*0.1` inset that shoved the text up and to the left, detaching it
+  from the cell edge. Now tied to the hotbar's own height (which carries the
+  same 22-unit scale the original font lives in), so the digits track the
+  hotbar at any GUI scale / fullscreen / DPI. (Digits are still rasterised from
+  CC's TrueType atlas rather than the bitmap font, and have no drop shadow — a
+  possible future fidelity touch, but it'd need the counts vertex budget
+  doubled.)
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
 - **Damage tilt**: every successful hit briefly rolls the camera up to 14°, eased via

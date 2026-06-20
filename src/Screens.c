@@ -480,10 +480,13 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	return (int)(cur - dst);
 }
 
-/* Builds the stack-count digits drawn over each hotbar slot. Uses the */
-/*  unpadded count atlas, scaled per-frame to a fraction of the slot size */
-/*  (so it tracks the hotbar in fullscreen) and anchored to each slot cell's */
-/*  bottom-right corner, like vanilla. Counts of 1 are left implicit. */
+/* Builds the stack-count digits drawn over each hotbar slot. Survival Test */
+/*  (HUDScreen.java) draws these with the 8px-tall GUI font in its 240-unit- */
+/*  tall virtual screen space, where the hotbar is 22 units tall and each slot */
+/*  cell is 20 units wide. Our HotbarWidget bakes that exact scale into its */
+/*  pixel geometry (w->height = 22 * hotbarScale * ScaleY, slotWidth = 20 * */
+/*  hotbarScale * ScaleX), so a faithful digit is (8/22) of the hotbar height, */
+/*  right-aligned to each slot cell's right edge. Counts of 1 are left implicit. */
 static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
 	struct TextAtlas* atlas = &s->countAtlas;
 	struct HotbarWidget* w  = &s->hotbar;
@@ -491,23 +494,27 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 	struct Texture part;
 	char digits[STRING_INT_CHARS];
 	int i, j, count, nDigits, d;
-	int slotRight, slotBottom, inset;
-	float f, digitH, totalW, penX;
+	float f, digitH, totalW, penX, slotRight, top, bottom;
 
 	if (!SurvivalTest_Enabled) return 0;
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
 	if (!atlas->tex.height)    return 0;
 
-	/* Target digit height ~ a third of the slot cell, so it scales with the */
-	/*  hotbar; derive the glyph scale from the (unpadded) atlas height. */
-	digitH = w->slotWidth * 0.34f;
+	/* 8px-tall font glyphs in the original's 22-unit-tall hotbar space. */
+	digitH = w->height * (8.0f / 22.0f);
 	f      = digitH / atlas->tex.height;
-	inset  = (int)(w->slotWidth * 0.1f);
+
+	/* Original font top y = slotY + 6, with slotY = screenBottom - 16, i.e. */
+	/*  10 virtual units above the hotbar's bottom edge (so the digit's bottom */
+	/*  sits 2 units above it). */
+	bottom = (float)(w->y + w->height);
+	top    = bottom - w->height * (10.0f / 22.0f);
 
 	part.ID     = atlas->tex.ID;
 	part.uv.v1  = atlas->tex.uv.v1;
 	part.uv.v2  = atlas->tex.uv.v2;
 	part.height = (cc_uint16)digitH;
+	part.y      = (short)top;
 
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
 		count = SurvivalTest_HotbarCount(i);
@@ -517,13 +524,10 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 		totalW  = 0.0f;
 		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'] * f;
 
-		/* Bottom-right corner of slot i's cell (cells are slotWidth apart, */
-		/*  starting at the hotbar's left edge - see HotbarWidget_PointerDown). */
-		slotRight  = (int)(w->x + w->slotWidth * (i + 1)) - inset;
-		slotBottom = (w->y + w->height) - inset;
-
-		penX     = slotRight - totalW;
-		part.y   = (short)(slotBottom - (int)digitH);
+		/* Right-align to slot i's cell right edge: slotWidth*(i+1) from the */
+		/*  hotbar's left edge, matching var26 + 19 in HUDScreen.java (no inset). */
+		slotRight = w->x + w->slotWidth * (i + 1);
+		penX      = slotRight - totalW;
 
 		/* String_MakeUInt32 writes least-significant first, so emit reversed */
 		for (j = nDigits - 1; j >= 0; j--) {
