@@ -2311,21 +2311,41 @@ void InventoryScreen_Hide(void) {
 /*########################################################################################################################*
 *---------------------------------------------------SurvivalInvScreen----------------------------------------------------*
 *#########################################################################################################################*/
-/* 36-slot grid (3 storage rows + 1 hotbar row) for Classic 0.30 Survival Test.  */
-/* Click a slot to pick it up; click another slot to swap/place; click outside  */
-/* or press the inventory key to close. Storage rows are slots 9-35; hotbar 0-8. */
+/* Indev-style inventory screen for Classic 0.30 Survival Test. NOT faithful to */
+/* c0.30-s (which never had this screen at all) - this is a visual-only redesign */
+/* requested on top of the existing survival inventory, replacing the previous   */
+/* flat-grid look with a classic light-grey panel, recessed slot bevels, and a   */
+/* 3D player-skin paperdoll that turns to face the mouse cursor.                 */
+/*                                                                                */
+/* Only the 27 storage slots (9-35) are shown/clickable here; the hotbar (0-8)   */
+/* is intentionally left to the normal in-world HUD hotbar, which already        */
+/* renders underneath this screen (matching the reference screenshot, where the  */
+/* hotbar sits outside/below the grey panel in the regular HUD style).           */
 
 /* Base slot size (pixels) before display scaling. */
 #define SURVINV_SLOT_BASE     36
-/* Number of rows above the hotbar (storage rows). */
+/* Number of storage rows/columns shown in the panel. */
 #define SURVINV_STORAGE_ROWS  3
-/* Pixel gap (base, before scaling) between the storage grid and the hotbar row. */
-#define SURVINV_HOTBAR_GAP    8
-/* Vertex budget: all 36 slots + 1 extra slot for the held-item cursor overlay. */
-#define SURVINV_MAX_ISO_VERTS  ((SURVIVAL_INV_SLOTS + 1) * ISOMETRICDRAWER_MAXVERTICES)
+#define SURVINV_STORAGE_COLS  SURVIVAL_HOTBAR_SLOTS
+#define SURVINV_STORAGE_SLOTS (SURVIVAL_INV_SLOTS - SURVIVAL_HOTBAR_SLOTS)
+/* Paperdoll preview box size, in slot units (square). */
+#define SURVINV_DOLL_UNITS    3
+/* Pixel gap (base, before scaling) between the doll box and the storage grid. */
+#define SURVINV_GAP_BASE      10
+/* Pixel padding (base, before scaling) around the panel's inner content. */
+#define SURVINV_PAD_BASE      8
+
+/* Vertex budget: all storage slots + 1 extra slot for the held-item cursor overlay. */
+#define SURVINV_MAX_ISO_VERTS  ((SURVINV_STORAGE_SLOTS + 1) * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
-#define SURVINV_MAX_COUNT_VERTS (SURVIVAL_INV_SLOTS * 2 * 4)
+#define SURVINV_MAX_COUNT_VERTS (SURVINV_STORAGE_SLOTS * 2 * 4)
 #define SURVINV_TOTAL_VERTS     (SURVINV_MAX_ISO_VERTS + SURVINV_MAX_COUNT_VERTS)
+
+/* Field of view and camera distance used for the paperdoll preview's own */
+/*  perspective projection (a tighter, portrait-style FOV than the gameplay */
+/*  camera, since it's a close-up of just the player model). */
+#define SURVINV_DOLL_FOV  30.0f
+#define SURVINV_DOLL_DIST  3.4f
 
 static struct SurvivalInvScreen {
 	Screen_Body
@@ -2333,42 +2353,115 @@ static struct SurvivalInvScreen {
 	int  isoVertCount;
 	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
 	int  lastInvVersion;
-	int  gridX, gridY;   /* pixel origin of the top-left storage slot */
-	int  slotSize;        /* current pixel size per slot */
+	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
+	int  slotSize;         /* current pixel size per slot */
+	int  panelX, panelY, panelW, panelH;
+	int  dollBoxX, dollBoxY, dollBoxSize;
+	int  mouseX, mouseY;   /* last known pointer position, or -1 if none yet */
 	int  countVertCount;
 	struct FontDesc  font;
 	struct TextAtlas countAtlas;
 	struct Texture   titleTex;
+	struct Entity    doll;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
-/* Returns the pixel origin (top-left corner) of slot index. */
+/* Returns the pixel origin (top-left corner) of a storage slot (9-35). */
 static void SurvivalInv_SlotXY(struct SurvivalInvScreen* s, int slot, int* ox, int* oy) {
-	int col, row, gap;
-	gap = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
-	if (slot < SURVIVAL_HOTBAR_SLOTS) {
-		/* Hotbar row sits below the storage rows with a small gap */
-		col  = slot;
-		*ox  = s->gridX + col * s->slotSize;
-		*oy  = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap;
-	} else {
-		/* Storage rows: slot 9 = row 0 col 0, slot 35 = row 2 col 8 */
-		int st = slot - SURVIVAL_HOTBAR_SLOTS;
-		col = st % SURVIVAL_HOTBAR_SLOTS;
-		row = st / SURVIVAL_HOTBAR_SLOTS;
-		*ox = s->gridX + col * s->slotSize;
-		*oy = s->gridY + row * s->slotSize;
-	}
+	int st  = slot - SURVIVAL_HOTBAR_SLOTS;
+	int col = st % SURVINV_STORAGE_COLS;
+	int row = st / SURVINV_STORAGE_COLS;
+	*ox = s->gridX + col * s->slotSize;
+	*oy = s->gridY + row * s->slotSize;
 }
 
 /* Returns the slot index under screen coordinates (mx, my), or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 	int i, x, y;
-	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &x, &y);
 		if (mx >= x && mx < x + s->slotSize &&
 		    my >= y && my < y + s->slotSize) return i;
 	}
 	return -1;
+}
+
+/* The paperdoll is a static, unlit preview - just needs a constant base color. */
+static PackedCol SurvivalInvDoll_GetCol(struct Entity* e) { return PACKEDCOL_WHITE; }
+static const struct EntityVTABLE survivalDoll_VTABLE = {
+	NULL, NULL, NULL, SurvivalInvDoll_GetCol, NULL, NULL
+};
+
+static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
+	Entity_Init(&s->doll);
+	s->doll.VTABLE = &survivalDoll_VTABLE;
+}
+
+/* Renders the 3D player-skin paperdoll, confined to the doll preview box, */
+/*  rotating to face the mouse cursor (head fully, body at half strength). */
+/* Based off the classic Indev/Beta inventory screen's mouse-follow paperdoll; */
+/*  not present in c0.30-s, so there's no decompiled source to ground this in - */
+/*  the rotation math is a reasonable approximation from general knowledge of */
+/*  how that effect has always worked, not a verified original formula. */
+static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
+	struct Entity* p = &Entities.CurPlayer->Base;
+	struct Matrix proj, savedView;
+	float aspect, relX, relY, headYaw, headPitch, bodyYaw;
+	int boxX = s->dollBoxX, boxY = s->dollBoxY, boxSize = s->dollBoxSize;
+	if (boxSize <= 0) return;
+
+	s->doll.SkinType     = p->SkinType;
+	s->doll.TextureId    = p->TextureId;
+	s->doll.NonHumanSkin = p->NonHumanSkin;
+	s->doll.uScale       = p->uScale;
+	s->doll.vScale       = p->vScale;
+
+	if (s->mouseX < 0) {
+		relX = 0.0f; relY = 0.0f;
+	} else {
+		relX = (float)(s->mouseX - (boxX + boxSize / 2));
+		relY = (float)(s->mouseY - (boxY + boxSize / 3));
+	}
+	headYaw   =  Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
+	headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
+	bodyYaw   = headYaw * 0.5f;
+
+	s->doll.Yaw   = headYaw;
+	s->doll.Pitch = headPitch;
+	s->doll.RotY  = bodyYaw;
+	s->doll.RotX  = 0.0f;
+	s->doll.RotZ  = 0.0f;
+	s->doll.Position.x = 0.0f;
+	s->doll.Position.y = -(s->doll.Size.y * 0.5f);
+	s->doll.Position.z = -SURVINV_DOLL_DIST;
+
+	aspect = 1.0f; /* doll box is always square */
+	Gfx_CalcPerspectiveMatrix(&proj, SURVINV_DOLL_FOV * MATH_DEG2RAD, aspect, 16.0f);
+
+	savedView   = Gfx.View;
+	Gfx.View    = Matrix_Identity;
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_PROJ, &proj);
+
+	Gfx_SetViewport(boxX, Game.Height - boxY - boxSize, boxSize, boxSize);
+	Gfx_SetScissor (boxX, boxY, boxSize, boxSize);
+	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
+
+	Gfx_SetDepthTest(true);
+	Gfx_SetDepthWrite(true);
+	Gfx_SetAlphaTest(true);
+
+	Model_Render(s->doll.Model, &s->doll);
+
+	Gfx_SetAlphaTest(false);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetDepthTest(false);
+
+	Gfx_SetViewport(0, 0, Game.Width, Game.Height);
+	Gfx_SetScissor (0, 0, Game.Width, Game.Height);
+
+	Gfx.View = savedView;
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
 }
 
 static void SurvivalInvScreen_BuildMesh(void* screen) {
@@ -2383,9 +2476,9 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	data     = Screen_LockVb(s);
 	halfSize = s->slotSize * 0.5f;
 
-	/* ISO block pictures for all occupied slots */
+	/* ISO block pictures for all occupied storage slots */
 	IsometricDrawer_BeginBatch(data, s->isoState);
-	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
 		block = SurvivalTest_SlotBlock(i);
 		if (block == BLOCK_AIR) continue;
 		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
@@ -2399,7 +2492,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	cur = countDst;
 	if (s->countAtlas.tex.ID) {
 		int savedY = s->countAtlas.tex.y;
-		for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
 			count = SurvivalTest_SlotCount(i);
 			if (count <= 1) continue;
 			SurvivalInv_SlotXY(s, i, &slotX, &slotY);
@@ -2417,47 +2510,41 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 
 static void SurvivalInvScreen_Render(void* screen, float delta) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	int i, slotX, slotY, totalW, totalH, gap;
-	int padding, panelX, panelY, panelW, panelH, sepY;
+	int i, slotX, slotY, b;
 
-	/* Classic stone-grey palette, fully opaque */
-	PackedCol panelBorder = PackedCol_Make( 22,  22,  22, 255);
-	PackedCol panelBg     = PackedCol_Make( 50,  50,  50, 255);
-	PackedCol slotBorder  = PackedCol_Make( 64,  64,  64, 255);
-	PackedCol slotFill    = PackedCol_Make( 30,  30,  30, 255);
-	PackedCol heldFill    = PackedCol_Make(140, 140,  35, 230);
-	PackedCol sepCol      = PackedCol_Make( 22,  22,  22, 255);
+	/* Sampled from a reference classic-style inventory screenshot. */
+	PackedCol panelBorder = PackedCol_Make( 55,  55,  55, 255);
+	PackedCol panelBg     = PackedCol_Make(198, 198, 198, 255);
+	PackedCol slotFill    = PackedCol_Make(139, 139, 139, 255);
+	PackedCol heldFill    = PackedCol_Make(255, 255, 150, 220);
+	PackedCol highlight   = PackedCol_Make(255, 255, 255, 255);
+	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
 
-	gap    = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
-	totalW = SURVIVAL_HOTBAR_SLOTS * s->slotSize;
-	totalH = SURVINV_STORAGE_ROWS  * s->slotSize + gap + s->slotSize;
+	/* Panel: outer dark border then light-grey fill */
+	Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
+	Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
 
-	padding = 4;
-	panelX  = s->gridX - padding;
-	panelY  = s->gridY - padding;
-	panelW  = totalW   + padding * 2;
-	panelH  = totalH   + padding * 2;
+	/* Paperdoll preview box: recessed dark square */
+	b = s->dollBoxSize;
+	Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
+	Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
 
-	/* Panel: 2-px dark outer border then fill */
-	Gfx_Draw2DFlat(panelX - 2, panelY - 2, panelW + 4, panelH + 4, panelBorder);
-	Gfx_Draw2DFlat(panelX,     panelY,     panelW,     panelH,     panelBg);
-
-	/* Thin line between storage rows and hotbar row */
-	sepY = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap / 2 - 1;
-	Gfx_Draw2DFlat(s->gridX, sepY, totalW, 2, sepCol);
-
-	/* Slot backgrounds: 1-px border then darker fill */
-	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+	/* Slot backgrounds: recessed bevel (dark border + bottom/right highlight) */
+	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
-		Gfx_Draw2DFlat(slotX,     slotY,     s->slotSize,     s->slotSize,     slotBorder);
-		Gfx_Draw2DFlat(slotX + 1, slotY + 1, s->slotSize - 2, s->slotSize - 2,
-		               i == s->heldSlot ? heldFill : slotFill);
+		Gfx_Draw2DFlat(slotX,     slotY,     s->slotSize,     s->slotSize,
+		               i == s->heldSlot ? heldFill : panelBorder);
+		if (i == s->heldSlot) continue;
+
+		Gfx_Draw2DFlat(slotX + 1, slotY + 1, s->slotSize - 2, s->slotSize - 2, slotFill);
+		Gfx_Draw2DFlat(slotX + 1, slotY + s->slotSize - 2, s->slotSize - 2, 1, highlight);
+		Gfx_Draw2DFlat(slotX + s->slotSize - 2, slotY + 1, 1, s->slotSize - 2, highlight);
 	}
 
 	/* "Inventory" title above the panel */
 	if (s->titleTex.ID) {
-		s->titleTex.x = panelX + (panelW - s->titleTex.width)  / 2;
-		s->titleTex.y = panelY - s->titleTex.height - 4;
+		s->titleTex.x = s->panelX + (s->panelW - s->titleTex.width) / 2;
+		s->titleTex.y = s->panelY - s->titleTex.height - 4;
 		Texture_Render(&s->titleTex);
 	}
 
@@ -2480,6 +2567,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_DrawVb_IndexedTris_Range(s->countVertCount,
 		                             SURVINV_MAX_ISO_VERTS, DRAW_HINT_RECT);
 	}
+
+	/* 3D paperdoll, confined to its preview box and rotated to face the mouse */
+	SurvivalInv_RenderDoll(s);
 }
 
 static void SurvivalInvScreen_Init(void* screen) {
@@ -2488,7 +2578,10 @@ static void SurvivalInvScreen_Init(void* screen) {
 	s->numWidgets  = 0;
 	s->maxWidgets  = 0;
 	s->heldSlot    = -1;
+	s->mouseX      = -1;
+	s->mouseY      = -1;
 	s->maxVertices = SURVINV_TOTAL_VERTS;
+	SurvivalInv_InitDoll(s);
 	/* Force an initial mesh build */
 	s->lastInvVersion = SurvivalTest_InvVersion() - 1;
 }
@@ -2525,17 +2618,31 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 
 static void SurvivalInvScreen_Layout(void* screen) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	int totalW, totalH, gap;
+	int storageW, storageH, gap, pad, topAreaH;
 
 	s->slotSize = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale()));
 	if (s->slotSize < 16) s->slotSize = 16; /* minimum usable size */
 
-	gap    = (int)(SURVINV_HOTBAR_GAP * Gui_GetInventoryScale());
-	totalW = SURVIVAL_HOTBAR_SLOTS * s->slotSize;
-	totalH = SURVINV_STORAGE_ROWS  * s->slotSize + gap + s->slotSize;
+	gap = (int)(SURVINV_GAP_BASE * Gui_GetInventoryScale());
+	pad = (int)(SURVINV_PAD_BASE * Gui_GetInventoryScale());
 
-	s->gridX = (Window_Main.Width  - totalW) / 2;
-	s->gridY = (Window_Main.Height - totalH) / 2;
+	storageW = SURVINV_STORAGE_COLS * s->slotSize;
+	storageH = SURVINV_STORAGE_ROWS * s->slotSize;
+	s->dollBoxSize = SURVINV_DOLL_UNITS * s->slotSize;
+	topAreaH = s->dollBoxSize;
+
+	s->panelW = storageW + pad * 2;
+	s->panelH = pad + topAreaH + gap + storageH + pad;
+
+	s->panelX = (Window_Main.Width  - s->panelW) / 2;
+	s->panelY = (Window_Main.Height - s->panelH) / 2;
+
+	s->dollBoxX = s->panelX + pad;
+	s->dollBoxY = s->panelY + pad;
+
+	s->gridX = s->panelX + pad;
+	s->gridY = s->panelY + pad + topAreaH + gap;
+
 	s->dirty = true;
 }
 
@@ -2575,11 +2682,19 @@ static int SurvivalInvScreen_PointerDown(void* screen, int id, int x, int y) {
 	return TOUCH_TYPE_GUI;
 }
 
+/* Tracks the cursor so the paperdoll can turn to face it. */
+static int SurvivalInvScreen_PointerMove(void* screen, int id, int x, int y) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->mouseX = x;
+	s->mouseY = y;
+	return false;
+}
+
 static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
 	SurvivalInvScreen_Init,        Screen_NullUpdate,           SurvivalInvScreen_Free,
 	SurvivalInvScreen_Render,      SurvivalInvScreen_BuildMesh,
 	SurvivalInvScreen_KeyDown,     Screen_InputUp,              Screen_FKeyPress, Screen_FText,
-	SurvivalInvScreen_PointerDown, Screen_PointerUp,            Screen_FPointer,  Screen_FMouseScroll,
+	SurvivalInvScreen_PointerDown, Screen_PointerUp,            SurvivalInvScreen_PointerMove, Screen_FMouseScroll,
 	SurvivalInvScreen_Layout,      SurvivalInvScreen_ContextLost, SurvivalInvScreen_ContextRecreated,
 	NULL
 };
