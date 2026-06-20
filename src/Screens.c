@@ -2396,8 +2396,8 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 	s->doll.VTABLE = &survivalDoll_VTABLE;
 }
 
-/* Renders the 3D player-skin paperdoll, confined to the doll preview box, */
-/*  rotating to face the mouse cursor (head fully, body at half strength). */
+/* Renders the 3D player-skin paperdoll, confined to the doll preview box. */
+/*  The body always faces forward; only the head turns to track the cursor. */
 /* Based off the classic Indev/Beta inventory screen's mouse-follow paperdoll; */
 /*  not present in c0.30-s, so there's no decompiled source to ground this in - */
 /*  the rotation math is a reasonable approximation from general knowledge of */
@@ -2405,7 +2405,7 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	struct Entity* p = &Entities.CurPlayer->Base;
 	struct Matrix proj, savedView;
-	float aspect, relX, relY, headYaw, headPitch, bodyYaw;
+	float aspect, relX, relY, headYaw, headPitch;
 	int boxX = s->dollBoxX, boxY = s->dollBoxY, boxSize = s->dollBoxSize;
 	if (boxSize <= 0) return;
 
@@ -2423,11 +2423,11 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	}
 	headYaw   =  Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
 	headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
-	bodyYaw   = headYaw * 0.5f;
 
+	/* Body always faces forward towards the camera; only the head tracks the cursor. */
 	s->doll.Yaw   = headYaw;
 	s->doll.Pitch = headPitch;
-	s->doll.RotY  = bodyYaw;
+	s->doll.RotY  = 0.0f;
 	s->doll.RotX  = 0.0f;
 	s->doll.RotZ  = 0.0f;
 	s->doll.Position.x = 0.0f;
