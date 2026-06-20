@@ -553,11 +553,11 @@ void SurvivalTest_RenderDrops(float delta, float t) {
 *----------------------------------------------------Health & damage------------------------------------------------------*
 *#########################################################################################################################*/
 /* Mob.hurt(): hurtDir is the horizontal bearing of the attacker relative to */
-/*  the victim's own yaw - atan2(dx,-dz) matches Yaw's convention elsewhere */
-/*  in this file (e.g. SurvivalTest_TickOneMob's aiming code), then offset by */
-/*  the player's current yaw to get the bearing relative to their facing. */
-/*  No attacker (environmental damage) -> random 0 or 180, matching the */
-/*  original's `hurt(null, damage)` case. */
+/*  the victim's own yaw - Math_Atan2f(-dz, dx) matches Yaw's convention */
+/*  elsewhere in this file (e.g. Mob_DoAttack's aiming code; recall */
+/*  Math_Atan2f(x,y)==atan2(y,x)), then offset by the player's current yaw to */
+/*  get the bearing relative to their facing. No attacker (environmental */
+/*  damage) -> random 0 or 180, matching the original's `hurt(null, damage)`. */
 static float SurvivalTest_CalcHurtDir(const Vec3* attackerPos) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	float dx, dz, dirYaw;
@@ -565,7 +565,7 @@ static float SurvivalTest_CalcHurtDir(const Vec3* attackerPos) {
 
 	dx = attackerPos->x - p->Base.Position.x;
 	dz = attackerPos->z - p->Base.Position.z;
-	dirYaw = Math_Atan2f(dx, -dz) * MATH_RAD2DEG;
+	dirYaw = Math_Atan2f(-dz, dx) * MATH_RAD2DEG;
 	return dirYaw - p->Base.Yaw;
 }
 
@@ -1319,17 +1319,17 @@ static void Mob_DoAttack(struct Mob* m) {
 		return;
 	}
 
-	/* atan2 argument order matters here: this must match Vec3_GetDirVector's */
-	/*  convention (yaw=atan2(dx,-dz), pitch=atan2(-dy,horDist) - see the */
-	/*  commented-out Vec3_GetHeading in Vectors.c, its documented inverse) */
-	/*  since both mob chase movement (via Mob_MoveRelative's sin/cos(Yaw) */
-	/*  basis) and arrow aim (Mob_ShootArrow's Vec3_GetDirVector(Yaw,Pitch)) */
-	/*  depend on Yaw/Pitch actually pointing at the target. The swapped-arg */
-	/*  form atan2(-dz,dx)/atan2(horDist,-dy) looks similar but is wrong by */
-	/*  up to 90 degrees whenever the target isn't at a 45-degree bearing. */
+	/* Face the player. CC's Math_Atan2f(x, y) returns atan2(y, x) - the FIRST */
+	/*  argument is the cosine (x) axis, the SECOND is the sine (y) axis (see */
+	/*  its use in InputHandler's gamepad code: cos(atan2f(x,y))==x). To match */
+	/*  Vec3_GetDirVector's basis (dir.x=sin(Yaw), dir.z=-cos(Yaw)) the yaw */
+	/*  facing (diff.x, diff.z) is Math_Atan2f(-diff.z, diff.x), and the pitch */
+	/*  (dir.y=-sin(Pitch)) is Math_Atan2f(horDist, -diff.y). Both chase */
+	/*  movement (Mob_MoveRelative's sin/cos(Yaw)) and arrow aim */
+	/*  (Mob_ShootArrow's Vec3_GetDirVector) depend on this. */
 	horDist  = Math_SqrtF(diff.x * diff.x + diff.z * diff.z);
-	e->Yaw   = Math_Atan2f(diff.x, -diff.z) * MATH_RAD2DEG;
-	e->Pitch = Math_Atan2f(-diff.y, horDist) * MATH_RAD2DEG;
+	e->Yaw   = Math_Atan2f(-diff.z, diff.x) * MATH_RAD2DEG;
+	e->Pitch = Math_Atan2f(horDist, -diff.y) * MATH_RAD2DEG;
 
 	if (distSq < 4.0f && m->attackDelay <= 0) {
 		/* BasicAttackAI.attack: a solid block between the mob's and player's */
@@ -1371,12 +1371,13 @@ static void Mob_UpdateBodyYaw(struct Mob* m, Vec3 oldPos) {
 
 	if (dist > 0.05f) {
 		/* Java computes this as atan2(dz,dx)-90, but that's in Java's yRot */
-		/*  convention. e->Yaw/e->RotY here are in ClassiCube's convention */
-		/*  (atan2(dx,-dz), matching Mob_DoAttack and Vec3_GetDirVector), so */
-		/*  the body target must use the same form - otherwise it's 180 off */
-		/*  and the body/legs ease toward the OPPOSITE of the travel */
-		/*  direction, making a chasing mob look like it's facing/fleeing away. */
-		targetYaw = Math_Atan2f(dx, -dz) * MATH_RAD2DEG;
+		/*  convention. e->Yaw/e->RotY here are in ClassiCube's convention, so */
+		/*  the body target must match Mob_DoAttack's yaw form exactly: */
+		/*  Math_Atan2f(-dz, dx) (recall Math_Atan2f(x,y)==atan2(y,x), so this */
+		/*  is the inverse of dir.x=sin(Yaw), dir.z=-cos(Yaw)). Using the */
+		/*  swapped form here would ease the body/legs toward the OPPOSITE of */
+		/*  the travel direction, making a chasing mob look like it's fleeing. */
+		targetYaw = Math_Atan2f(-dz, dx) * MATH_RAD2DEG;
 	}
 
 	diff = targetYaw - e->RotY;
