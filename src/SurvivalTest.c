@@ -105,7 +105,6 @@ static void SurvivalTest_ArmTnt(IVec3 coords);
 #define DROP_GRAVITY        20.0f  /* blocks/sec^2 */
 #define DROP_TERMINAL_VEL   10.0f  /* blocks/sec   */
 #define DROP_PICKUP_DELAY    0.5f  /* seconds before a fresh drop can be collected */
-#define DROP_PICKUP_RADIUS   1.0f  /* blocks */
 /* Survival Test items spin about Y at 3 degrees/tick = 60 deg/sec (20 TPS) */
 #define DROP_SPIN_DEG_PER_SEC 60.0f
 /* The spin angle also drives the bob and white-glow pulse, exactly as the */
@@ -397,15 +396,23 @@ static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
 }
 
 static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
-	Vec3 diff;
-	float distSq;
+	struct AABB pbb, ibb;
 	if (d->pickupDelay > 0.0f) return;
 
-	diff.x = d->position.x - pe->Position.x;
-	diff.y = d->position.y - pe->Position.y;
-	diff.z = d->position.z - pe->Position.z;
-	distSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
-	if (distSq > DROP_PICKUP_RADIUS * DROP_PICKUP_RADIUS) return;
+	/* Player.tick(): entities = level.findEntities(this, this.bb.grow(1, 0, 1)) - an */
+	/*  AABB overlap test against the player's own bounding box widened a full block */
+	/*  horizontally (not vertically), not a fixed-radius distance check. That means */
+	/*  reach is generous sideways but limited to the player's own height vertically - */
+	/*  an item resting on an adjacent block is still within reach as long as it sits */
+	/*  somewhere between the player's feet and head. */
+	Entity_GetBounds(pe, &pbb);
+	pbb.Min.x -= 1.0f; pbb.Max.x += 1.0f;
+	pbb.Min.z -= 1.0f; pbb.Max.z += 1.0f;
+
+	ibb.Min.x = d->position.x - DROP_ITEM_HALF; ibb.Max.x = d->position.x + DROP_ITEM_HALF;
+	ibb.Min.y = d->position.y;                  ibb.Max.y = d->position.y + DROP_ITEM_HALF * 2.0f;
+	ibb.Min.z = d->position.z - DROP_ITEM_HALF; ibb.Max.z = d->position.z + DROP_ITEM_HALF;
+	if (!AABB_Intersects(&pbb, &ibb)) return;
 
 	SurvivalTest_AddBlock(d->block);
 	d->active = false;
