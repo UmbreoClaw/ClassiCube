@@ -2289,6 +2289,12 @@ static void SurvivalTest_TickBreaking(void) {
 static GfxResourceID st_cracksTexId;
 static GfxResourceID st_cracksVB;
 #define CRACKS_NUM_VERTICES (4 * 6)
+/* The crack strip is 10 stages x 16px = 160px wide. 160 isn't a power of two, */
+/*  so the bitmap is padded out to CRACKS_TEX_WIDTH before upload (backends like */
+/*  D3D11 abort on non-power-of-two textures) - UVs only ever address the real */
+/*  160px via the per-stage pixel maths below. */
+#define CRACKS_STAGE_PX  16
+#define CRACKS_TEX_WIDTH 256
 
 static void CracksPngProcess(struct Stream* stream, const cc_string* name) {
 	Game_UpdateTexture(&st_cracksTexId, stream, name, NULL, NULL);
@@ -2335,14 +2341,26 @@ static const cc_uint8 cracks_png[] = {
 
 static void SurvivalTest_EnsureCracksTexture(void) {
 	struct Stream src;
-	struct Bitmap bmp;
+	struct Bitmap bmp, pow2;
+	int y;
 	if (st_cracksTexId) return;
 
 	Stream_ReadonlyMemory(&src, (void*)cracks_png, (cc_uint32)sizeof(cracks_png));
 	if (Png_Decode(&bmp, &src)) { Mem_Free(bmp.scan0); return; }
 
-	st_cracksTexId = Gfx_CreateTexture(&bmp, 0, false);
+	/* Pad the 160px-wide strip up to a power-of-two width (transparent filler */
+	/*  on the right) so it uploads on every backend, not just ones that allow */
+	/*  non-power-of-two textures. */
+	Bitmap_Allocate(&pow2, CRACKS_TEX_WIDTH, bmp.height);
+	Mem_Set(pow2.scan0, 0, Bitmap_DataSize(pow2.width, pow2.height));
+	for (y = 0; y < bmp.height; y++) {
+		Mem_Copy(Bitmap_GetRow(&pow2, y), Bitmap_GetRow(&bmp, y),
+				 (cc_uint32)bmp.width * BITMAPCOLOR_SIZE);
+	}
+
+	st_cracksTexId = Gfx_CreateTexture(&pow2, 0, false);
 	Mem_Free(bmp.scan0);
+	Mem_Free(pow2.scan0);
 }
 
 static void Cracks_AddFace(struct VertexTextured** ptr, Vec3 a, Vec3 b, Vec3 c, Vec3 d,
@@ -2377,8 +2395,8 @@ void SurvivalTest_RenderCracks(float delta, float t) {
 
 	stage = (int)(progress * 10.0f);
 	if (stage > 9) stage = 9;
-	u0 = stage / 10.0f;
-	u1 = (stage + 1) / 10.0f;
+	u0 = (stage       * CRACKS_STAGE_PX) / (float)CRACKS_TEX_WIDTH;
+	u1 = ((stage + 1) * CRACKS_STAGE_PX) / (float)CRACKS_TEX_WIDTH;
 
 	SurvivalTest_EnsureCracksTexture();
 	if (!st_cracksTexId) return;

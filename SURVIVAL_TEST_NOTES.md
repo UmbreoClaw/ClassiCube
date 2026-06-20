@@ -374,6 +374,15 @@ the numbering. Verify each against a running build; don't assume root cause.
   following the same embedding pattern already used for `arrows_png`
   (lazy-decoded via `Png_Decode`, overridable by `cracks.png` in a custom
   texture pack via `TextureEntry_Register`).
+- **Crash fix (NPOT cracks texture)**: the embedded crack strip is 160×16
+  (10 stages × 16px). 160 isn't a power of two, so `Gfx_CreateTexture` aborts
+  on backends that reject non-power-of-two textures ("Textures must have power
+  of two dimensions" — hit on D3D11 the instant a block started cracking, and
+  also when meleeing a mob, since holding left-click cracks the block behind
+  it). Fixed in `SurvivalTest_EnsureCracksTexture` by padding the decoded
+  bitmap out to a 256-wide power-of-two texture (transparent filler on the
+  right); the crack UVs now address the real 160px via per-stage pixel maths
+  (`stage*16/256`) instead of `stage/10` over the full width.
 
 ### 6. Drop tables wrong — FIXED
 - Found the genuine c0.30 client's `level/tile/` package in `/tmp/mcraft_client`
