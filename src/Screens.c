@@ -436,7 +436,12 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 
 	if (!SurvivalTest_Enabled) return 0;
 
-	scale     = Gui_GetHotbarScale();
+	/* Match the hotbar's TRUE on-screen scale (Gui_GetHotbarScale bakes out */
+	/*  DPI, then HotbarWidget_Reposition multiplies it back in via */
+	/*  DisplayInfo.ScaleY). Using the bare hotbar scale here left the hearts */
+	/*  smaller than the hotbar on HiDPI/fullscreen; folding ScaleY back in */
+	/*  keeps the whole survival HUD scaling as one unit. No-op when ScaleY==1. */
+	scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
 	heartSize = (int)(9.0f * scale);
 
 	/* Survival Test draws the heart row flush with the hotbar's left edge */
@@ -560,7 +565,10 @@ static int HUDScreen_BuildArrowsMesh(struct HUDScreen* s, struct VertexTextured*
 	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
 	if (!atlas->tex.height)    return 0;
 
-	scale     = Gui_GetHotbarScale();
+	/* Same DPI-aware scale as the heart row this count sits beside (see */
+	/*  HUDScreen_BuildHeartsMesh) - keeps the arrow count aligned with the */
+	/*  hearts at any GUI scale / fullscreen / DPI. */
+	scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
 	heartSize = (int)(9.0f * scale);
 	y         = w->y - heartSize - (int)(2.0f * scale);
 

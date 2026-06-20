@@ -918,6 +918,18 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
     `Gfx_SetAlphaBlending` via a generic default in `_GraphicsBase.h` (slightly less
     punchy glow, but no breakage) since none of those platforms build from this branch.
 - **HUD hearts**: left-aligned to the hotbar's left edge (matches c0.30-s), not centred.
+- **HUD fullscreen/DPI scaling**: the hearts and arrow count previously sized
+  themselves with the bare `Gui_GetHotbarScale()`, which has DPI factored *out*
+  (`GetWindowScale` divides by `DisplayInfo.ScaleX/Y`); the hotbar widget then
+  multiplies it back in (`scaleY = hotbarScale * DisplayInfo.ScaleY`). So on a
+  HiDPI display in fullscreen the hearts/arrow count rendered smaller than the
+  hotbar they sit on. Both now use `Gui_GetHotbarScale() * DisplayInfo.ScaleY`
+  to match the hotbar's true on-screen scale (a no-op when `ScaleY == 1`, i.e.
+  ordinary non-HiDPI displays, so existing setups are unchanged). The stack
+  counts were already correct here since they derive from `w->height`/
+  `w->slotWidth`, which already bake in DPI + GUI scale and reflow on every
+  resize / fullscreen toggle (`HUDScreen_Layout` → `LayoutHotbar` →
+  `Widget_Layout` → `HotbarWidget_Reposition`).
 - **HUD stack counts** (`HUDScreen_BuildCountsMesh`) — re-audited & RE-FIXED
   against the genuine `HUDScreen.java`. The original draws counts with the
   8px-tall GUI font inside its fixed 240-unit-tall virtual screen, where the
