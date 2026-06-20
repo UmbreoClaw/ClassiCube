@@ -1260,7 +1260,13 @@ static void Mob_UpdateBodyYaw(struct Mob* m, Vec3 oldPos) {
 	float diff;
 
 	if (dist > 0.05f) {
-		targetYaw = Math_Atan2f(dz, dx) * MATH_RAD2DEG - 90.0f;
+		/* Java computes this as atan2(dz,dx)-90, but that's in Java's yRot */
+		/*  convention. e->Yaw/e->RotY here are in ClassiCube's convention */
+		/*  (atan2(dx,-dz), matching Mob_DoAttack and Vec3_GetDirVector), so */
+		/*  the body target must use the same form - otherwise it's 180 off */
+		/*  and the body/legs ease toward the OPPOSITE of the travel */
+		/*  direction, making a chasing mob look like it's facing/fleeing away. */
+		targetYaw = Math_Atan2f(dx, -dz) * MATH_RAD2DEG;
 	}
 
 	diff = targetYaw - e->RotY;
@@ -2385,7 +2391,14 @@ void SurvivalTest_RenderCracks(float delta, float t) {
 	float progress, u0, u1;
 	int stage;
 	PackedCol col = PACKEDCOL_WHITE;
-	const float scale = 1.01f;
+	/* Inflate the overlay just enough to win the depth test against the block */
+	/*  face without z-fighting. The genuine client uses 1.01 (0.005-block */
+	/*  overhang) because its multiply blend makes the part that pokes out past */
+	/*  the block invisible; our black+alpha approximation instead shows that */
+	/*  overhang as dark slivers against the air/neighbouring blocks, so the */
+	/*  overhang is kept minimal (cracks only ever draw on the block you're */
+	/*  right next to, so a tiny offset is plenty to avoid flicker). */
+	const float scale = 1.002f;
 
 	if (!SurvivalTest_Enabled) return;
 	if (!SurvivalTest_BreakTargeted(&targetPos)) return;

@@ -374,6 +374,14 @@ the numbering. Verify each against a running build; don't assume root cause.
   following the same embedding pattern already used for `arrows_png`
   (lazy-decoded via `Png_Decode`, overridable by `cracks.png` in a custom
   texture pack via `TextureEntry_Register`).
+- **Black-sliver artifacts outside the block — FIXED (this session).** The
+  overlay quad was inflated 1.01x around the block centre (0.005-block
+  overhang past every face). The genuine client uses 1.01 too, but its
+  multiply blend makes the overhang invisible; our black+alpha approximation
+  rendered that overhang as dark slivers against the air/adjacent blocks.
+  Reduced to 1.002 (0.001-block overhang) — still enough to win the depth
+  test against the block face without z-fighting (cracks only ever draw on
+  the block you're right next to), but the overhang is no longer visible.
 - **Crash fix (NPOT cracks texture)**: the embedded crack strip is 160×16
   (10 stages × 16px). 160 isn't a power of two, so `Gfx_CreateTexture` aborts
   on backends that reject non-power-of-two textures ("Textures must have power
@@ -521,6 +529,19 @@ transparency and their texture alignment looks "lightly fucked up".
   position delta for the movement-direction target; `e->RotY` is reused
   directly as the persistent `yBodyRot` state (nothing else needs Entity's
   RotY semantics for mobs).
+- **Body-yaw convention bug — FIXED (this session, live-test feedback).**
+  `Mob_UpdateBodyYaw` computed its body-target yaw with Java's `yRot`
+  formula `atan2(dz,dx)-90`, but `e->Yaw`/`e->RotY` are in ClassiCube's
+  convention (`atan2(dx,-dz)`, matching `Mob_DoAttack` and
+  `Vec3_GetDirVector`). Those two conventions are 180 apart, so the body
+  eased toward the **opposite** of the travel direction and got clamped 75
+  off the head — a mob that was actually walking toward the player rendered
+  with its body/legs facing away, reading as "won't chase / runs away".
+  Java doesn't hit this because its head `yRot` uses the *same* convention
+  as the body target; our port mixed the two. Fixed to `atan2(dx,-dz)` so
+  the body target matches the head/movement convention. NOTE: the chase
+  *velocity* was always correct (it's driven by `e->Yaw` via
+  `Mob_MoveRelative`); this was purely the visible model orientation.
 - **Walking bob — confirmed ALREADY implemented generically, one real bug
   found (spiders).** ClassiCube's model system already has a universal
   walk-bob: `model->bobbing` defaults to `true` for every `Model`
