@@ -562,6 +562,36 @@ transparency and their texture alignment looks "lightly fucked up".
   yd/=2; yd += 0.4; if (yd>0.4) yd=0.4;` - our existing code already does
   exactly this (halve current velocity, then push away from the attacker
   on X/Z and up on Y, capped at 0.4). No discrepancy found.
+- **Mob movement jitter ("looked like lower fps") — FIXED (this session,
+  live-test feedback).** Root cause: mobs were the only entity-like things
+  in the game with no prev/next double-buffered position/orientation.
+  `SurvivalTest_TickOneMob` mutated `Base.Position`/`Yaw`/`Pitch`/`RotY`
+  directly once per game tick (default 20/sec), and `SurvivalTest_RenderMobs`
+  rendered straight from those fields every render frame with no
+  interpolation - so a mob's visible position only changed 20 times a
+  second no matter the framerate, while everything else in the game (the
+  local player via `LocalPlayer_SetInterpPosition`, and `NetPlayer` via
+  `NetPlayer_RenderModel`) blends `Base.prev`/`Base.next` by the partial-tick
+  `t` every frame for buttery movement between ticks. Not a client/engine
+  limitation - the engine already has exactly the machinery needed
+  (`Entity.prev`/`next`, `Entity_LerpAngles`, `Vec3_Lerp`), mobs just never
+  hooked into it. Fixed by giving mobs the same treatment as `NetPlayer`:
+  `SurvivalTest_TickOneMob` now starts each tick with
+  `e->prev = e->next; e->Position = e->prev.pos;` (plus yaw/pitch/rotY),
+  runs AI/movement exactly as before, then ends by snapshotting the result
+  into `e->next`. `SurvivalTest_RenderMobs` now calls
+  `Vec3_Lerp(&e->Position, &e->prev.pos, &e->next.pos, t)` and
+  `Entity_LerpAngles(e, t)` before `Model_Render`, mirroring
+  `NetPlayer_RenderModel` exactly. `SurvivalTest_SpawnMobAt` also seeds
+  `prev`/`next` to the spawn position/yaw/rotY so a freshly-spawned mob's
+  first tick interpolates from its real spawn point instead of warping in
+  from a zeroed-out `prev`. All other per-tick readers of mob `Base.Position`
+  (AI distance checks, arrow-hit checks, despawn roll, fall-damage tracking)
+  are unaffected since they all run during `SurvivalTest_TickMobs` /
+  `SurvivalTest_TickArrows` (which runs right after `TickMobs` in
+  `SurvivalTest_Tick`), by which point every mob's `Base.Position` for that
+  tick has already been reset to its fresh, fully-resolved value - only the
+  *render-frame* reads (between ticks) ever see the interpolated value.
 - Verified via `gcc -fsyntax-only` and a full `make PLAT=linux -j$(nproc)`
   build (`Model.c` + `SurvivalTest.c`) - zero errors/warnings. Not render-
   tested here (no display in this container) - **user: please re-check

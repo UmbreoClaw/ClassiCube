@@ -886,9 +886,10 @@ struct Mob {
 
 	/* Fall damage tracking (Mob.causeFallDamage), mirrors the player's */
 	/*  st_falling/st_fallPeakY pair but per-mob since several can be */
-	/*  airborne at once. Unlike the player, mobs have no prev/next double- */
-	/*  buffered position (Mob.Base.Position is mutated directly, never reset */
-	/*  for interpolation), so reading it straight after Mob_Travel is safe. */
+	/*  airborne at once. Reads e->Position straight after Mob_Travel each */
+	/*  tick, before that tick's result is snapshotted into Base.next for */
+	/*  render-time interpolation (see TickOneMob/RenderMobs), so this always */
+	/*  sees the fresh, fully-resolved tick position. */
 	cc_bool falling;
 	float   fallPeakY;
 
@@ -1293,6 +1294,19 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	if (!m->active) return;
 	info = &mobTypeInfo[m->type];
 
+	/* Double-buffer position/orientation exactly like LocalInterpComp_AdvanceState */
+	/*  does for the player: last tick's resolved state (next) becomes this */
+	/*  tick's starting point (prev), and the working fields are reset to it */
+	/*  before any AI/movement runs. RenderMobs then blends prev->next by the */
+	/*  partial-tick t every frame, same as NetPlayer_RenderModel - without */
+	/*  this, mobs only visually moved once per game tick instead of once per */
+	/*  render frame, which is what caused the reported stuttery "lower fps" look. */
+	e->prev     = e->next;
+	e->Position = e->prev.pos;
+	e->Yaw      = e->prev.yaw;
+	e->Pitch    = e->prev.pitch;
+	e->RotY     = e->prev.rotY;
+
 	if (m->invincTicks > 0) m->invincTicks--;
 	if (m->hurtTicks   > 0) m->hurtTicks--;
 
@@ -1376,7 +1390,8 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 
 	/* Fall damage (Mob.causeFallDamage) - same peak-tracking approach as the */
 	/*  player's SurvivalTest_UpdateFall, but using e->Position directly since */
-	/*  it's already fresh here (no prev/next double-buffering for mobs). */
+	/*  it's already this tick's fresh, fully-resolved value here (the prev/ */
+	/*  next double-buffering below is only for render-time interpolation). */
 	/*  Touching liquid cushions the landing, same as for the player. */
 	if (inWater || inLava) m->falling = false;
 
@@ -1396,6 +1411,13 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		}
 		if (e->Position.y > m->fallPeakY) m->fallPeakY = e->Position.y;
 	}
+
+	/* Snapshot this tick's final, fully-resolved state as the interpolation */
+	/*  target - RenderMobs blends prev->next by the partial-tick t every frame. */
+	e->next.pos   = e->Position;
+	e->next.yaw   = e->Yaw;
+	e->next.pitch = e->Pitch;
+	e->next.rotY  = e->RotY;
 }
 
 /* Ground-validity check shared by both the outer spawn-point roll and the */
@@ -1450,6 +1472,13 @@ static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->Base.Position = pos;
 	m->Base.Yaw      = Random_Float(&st_mobRng) * 360.0f;
 	m->Base.RotY     = m->Base.Yaw; /* body faces the same way as the head (see TickOneMob) */
+
+	/* Seed prev/next to the spawn state so the first tick's interpolation */
+	/*  (see TickOneMob/RenderMobs) blends from the real spawn point, rather */
+	/*  than warping in from Entity_Init's zeroed-out prev/next. */
+	m->Base.prev.pos = m->Base.Position; m->Base.next.pos = m->Base.Position;
+	m->Base.prev.yaw   = m->Base.Yaw;   m->Base.next.yaw   = m->Base.Yaw;
+	m->Base.prev.rotY  = m->Base.RotY;  m->Base.next.rotY  = m->Base.RotY;
 
 	m->Collisions.Entity   = &m->Base;
 	m->Collisions.StepSize = 0.5f; /* matches LocalPlayer's default step size */
@@ -1565,6 +1594,13 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 		m = &st_mobs[i];
 		if (!m->active) continue;
 		e = &m->Base;
+
+		/* Blend prev->next by the partial-tick t, exactly like NetPlayer_RenderModel - */
+		/*  mobs only update prev/next once per game tick (TickOneMob), so without */
+		/*  this they'd visibly step to a new position/orientation only once per */
+		/*  tick instead of every render frame. */
+		Vec3_Lerp(&e->Position, &e->prev.pos, &e->next.pos, t);
+		Entity_LerpAngles(e, t);
 
 		AnimatedComp_GetCurrent(e, t);
 		e->ShouldRender = Model_ShouldRender(e);
