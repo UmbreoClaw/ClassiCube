@@ -125,6 +125,7 @@ struct DropItem {
 	float age;       /* seconds alive - drives spin/bob/glow */
 	float rot0;      /* random initial spin angle (degrees) */
 	cc_bool active;
+	cc_bool onGround; /* set by DropPhysics's collision pass, drives the Item.tick() ground damping below */
 };
 static struct DropItem st_drops[DROP_MAX];
 
@@ -345,34 +346,48 @@ static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, dropBlock); }
 }
 
-static float SurvivalTest_DropGroundY(int x, int y, int z) {
-	BlockID b;
-	if (!World_Contains(x, y, z)) return -100000.0f;
-
-	b = World_GetBlock(x, y, z);
-	if (Blocks.Collide[b] != COLLIDE_SOLID) return -100000.0f;
-	return (float)y + Blocks.MaxBB[b].y;
-}
-
+/* Item.tick()'s move() - a proper swept-AABB collision against every block */
+/*  the drop's box overlaps, not just the single block beneath it. Reuses the */
+/*  same Collisions_MoveAndWallSlide the player and mobs use (Mob_TravelGround), */
+/*  via a throwaway scratch Entity, so drops get real wall/ledge collision on */
+/*  X and Z instead of only ever checking the ground column. Previously, a drop */
+/*  that drifted sideways into a taller neighbouring block would just get */
+/*  vertically warped onto its top the instant the single-block ground check */
+/*  passed, instead of being stopped by the block like a wall - that's what */
+/*  made drops look like they clipped into terrain and rest out of pickup */
+/*  reach unless you stood almost on top of them. StepSize = 0 matches */
+/*  Item.java's footSize (defaults to 0, i.e. no auto step-up - genuine items */
+/*  stop dead against any obstacle, never climb it). */
 static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
-	float groundY;
-	int x, y, z;
+	struct Entity scratch;
+	struct CollisionsComp coll;
 
 	d->velocity.y -= DROP_GRAVITY * delta;
 	if (d->velocity.y < -DROP_TERMINAL_VEL) d->velocity.y = -DROP_TERMINAL_VEL;
 
-	d->position.x += d->velocity.x * delta;
-	d->position.y += d->velocity.y * delta;
-	d->position.z += d->velocity.z * delta;
+	Mem_Set(&scratch, 0, sizeof(scratch));
+	scratch.Position = d->position;
+	Vec3_Set(scratch.Size, DROP_ITEM_HALF * 2.0f, DROP_ITEM_HALF * 2.0f, DROP_ITEM_HALF * 2.0f);
+	scratch.OnGround = d->onGround;
+	/* Velocity here is the per-tick displacement Collisions_MoveAndWallSlide */
+	/*  expects (see Mob_TravelGround) - d->velocity is a blocks/sec rate, so */
+	/*  scale by delta going in and back out afterwards. */
+	scratch.Velocity.x = d->velocity.x * delta;
+	scratch.Velocity.y = d->velocity.y * delta;
+	scratch.Velocity.z = d->velocity.z * delta;
 
-	x = Math_Floor(d->position.x);
-	z = Math_Floor(d->position.z);
-	y = Math_Floor(d->position.y - 0.01f);
-	groundY = SurvivalTest_DropGroundY(x, y, z);
+	coll.Entity   = &scratch;
+	coll.StepSize = 0.0f;
+	Collisions_MoveAndWallSlide(&coll);
+	Vec3_AddBy(&scratch.Position, &scratch.Velocity);
 
-	if (groundY > -1000.0f && d->position.y <= groundY) {
-		d->position.y = groundY;
-		d->velocity.y = 0.0f;
+	d->position  = scratch.Position;
+	d->onGround  = scratch.OnGround;
+	d->velocity.x = scratch.Velocity.x / delta;
+	d->velocity.y = scratch.Velocity.y / delta;
+	d->velocity.z = scratch.Velocity.z / delta;
+
+	if (d->onGround) {
 		d->velocity.x *= 0.7f;
 		d->velocity.z *= 0.7f;
 		if (Math_AbsF(d->velocity.x) < 0.01f) d->velocity.x = 0.0f;

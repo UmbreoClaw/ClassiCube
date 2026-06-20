@@ -949,6 +949,35 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
   CC's TrueType atlas rather than the bitmap font, and have no drop shadow — a
   possible future fidelity touch, but it'd need the counts vertex budget
   doubled.)
+- **Dropped item physics ("stuck in blocks", reported this session) — FIXED.**
+  Checked against the genuine `Item.java`/`Entity.java`: confirmed c0.30-s has
+  **no pickup magnetism at all** — `playerTouch()` only fires from `Entity.move()`'s
+  plain AABB-touch test, there's no pull-toward-player anywhere in the original.
+  The actual bug was in `SurvivalTest_DropPhysics` (`SurvivalTest.c`): X/Z position
+  was updated every tick with **zero horizontal collision** — the only "collision"
+  was `SurvivalTest_DropGroundY` re-checking a single block directly below the
+  *new* (x,z) column every tick. So a drop drifting sideways into a taller
+  neighbouring block wasn't stopped by it like a wall; instead it got vertically
+  warped straight up onto that block's top the instant the ground check passed —
+  looking like it clipped into terrain, and landing elevated just enough that the
+  1-block pickup radius mostly got eaten by the vertical offset, forcing the
+  player to stand almost on top of it. Fixed by replacing the single-block
+  vertical-only check with a real swept-AABB collision: a throwaway scratch
+  `struct Entity` (`Position`/`Size`/`Velocity`/`OnGround` only) run through the
+  same `Collisions_MoveAndWallSlide` the player and mobs already use
+  (`Mob_TravelGround`'s exact apply-velocity → collide → `Vec3_AddBy` pattern),
+  with `StepSize = 0` to match `Item.java`'s `footSize` (defaults to 0 — genuine
+  items get no auto step-up and stop dead against obstacles, never climb them).
+  `d->velocity` is a blocks/sec rate (pre-existing design, unlike mobs' native
+  blocks/tick), so it's scaled by `delta` into a displacement going into the
+  collision call and back out of it afterwards; `SurvivalTest_DropGroundY` was
+  removed (subsumed by the real collision). Ground damping (`Item.tick()`'s
+  `xd*=0.7; zd*=0.7` while `onGround`) now keys off the collision's own
+  `OnGround` flag (new `struct DropItem.onGround` field) instead of the deleted
+  single-block check. The 1-block-radius pickup test itself (`Euclidean distSq`,
+  more forgiving than genuine's plain touch-test) was left as-is — it wasn't the
+  root cause, and already approximates the "doesn't need to be pixel-perfect"
+  feel the user expected without inventing actual magnetism.
 - **Damage**: fall (peak-tracking, `floor(dist)-3`, ~1 HP/block past 3 safe blocks),
   lava (4 HP / 0.5s), drowning (2 HP/s after 15s air), 0.5s invincibility frames.
 - **Damage tilt**: every successful hit briefly rolls the camera up to 14°, eased via
