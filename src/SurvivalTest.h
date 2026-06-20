@@ -40,6 +40,12 @@ void SurvivalTest_Heal(int amount);
 /* Gets the player's current score (Player.getScore() - awarded on credited mob kills). */
 int SurvivalTest_Score(void);
 
+/* Whether the player's head is underwater (Player.isUnderWater()), i.e. whether */
+/*  the HUD should draw the depleting air bubble row. */
+cc_bool SurvivalTest_HeadUnderwater(void);
+/* Remaining air, on the genuine Player.airSupply 0..300 scale (300 = full). */
+int SurvivalTest_AirSupply(void);
+
 /* Gets the block held in the given inventory slot (0 to SURVIVAL_INV_SLOTS-1). */
 BlockID SurvivalTest_SlotBlock(int slot);
 /* Gets how many blocks are stacked in the given inventory slot. */

@@ -84,12 +84,16 @@ static struct HUDScreen {
 	int lastFov;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
+	/* Survival HUD text labels, rasterised on change like line1/line2: */
+	/*  "Score: &eN" top-right and "Arrows: N" beside the heart row. */
+	struct TextWidget score, arrows;
 	int heartCount;     /* number of heart vertices built last frame */
 	int countVertices;  /* number of stack-count vertices built last frame */
-	int arrowVertices;  /* number of arrow-count digit vertices built last frame */
+	int bubbleCount;    /* number of air-bubble vertices built last frame */
 	int lastHealth;     /* SurvivalTest_Health value from last rebuild */
 	int lastInvVersion; /* SurvivalTest_InvVersion() from last rebuild */
 	int lastArrows;     /* SurvivalTest_ArrowCount() value from last rebuild */
+	int lastScore;      /* SurvivalTest_Score() value from last rebuild */
 } HUDScreen_Instance CC_BIG_VAR;
 
 /* Each integer can be at most 10 digits + minus prefix */
@@ -100,9 +104,26 @@ static struct HUDScreen {
 #define SURVIVAL_HEARTS_MAX_VERTICES 80
 /* Up to 2 digits per hotbar slot for stack counts (4 vertices per digit) */
 #define SURVIVAL_COUNTS_MAX_VERTICES (SURVIVAL_HOTBAR_SLOTS * 2 * 4)
-/* Arrow count display: up to 2 digits (4 vertices per digit) */
-#define SURVIVAL_ARROWS_MAX_VERTICES (2 * 4)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES + SURVIVAL_ARROWS_MAX_VERTICES)
+/* Air bubble row when the head is underwater: up to 10 bubbles (4 verts each) */
+#define SURVIVAL_BUBBLES_MAX_VERTICES (10 * 4)
+
+/* Absolute vertex offsets of each region within the HUD vertex buffer. The */
+/*  crosshair (4) + line1 (4) + line2 (4) + hotbar are built sequentially up */
+/*  front (4 + TEXTWIDGET_MAX*2 + HOTBAR_MAX_VERTICES vertices); the survival */
+/*  regions after that live at these fixed offsets. The Score and Arrows */
+/*  labels are one textured quad each (TEXTWIDGET_MAX vertices). */
+#define HUD_OFS_POSITION (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES)
+#define HUD_OFS_HEARTS   (HUD_OFS_POSITION + POSITION_HUD_CHARS * 4)
+#define HUD_OFS_COUNTS   (HUD_OFS_HEARTS   + SURVIVAL_HEARTS_MAX_VERTICES)
+#define HUD_OFS_BUBBLES  (HUD_OFS_COUNTS   + SURVIVAL_COUNTS_MAX_VERTICES)
+#define HUD_OFS_SCORE    (HUD_OFS_BUBBLES  + SURVIVAL_BUBBLES_MAX_VERTICES)
+#define HUD_OFS_ARROWS   (HUD_OFS_SCORE    + TEXTWIDGET_MAX)
+#define HUD_MAX_VERTICES (HUD_OFS_ARROWS   + TEXTWIDGET_MAX)
+
+/* Defined further down (beside the survival mesh builders), forward-declared */
+/*  here since ContextRecreated rebuilds these label textures. */
+static void HUDScreen_RemakeScore(struct HUDScreen* s);
+static void HUDScreen_RemakeArrows(struct HUDScreen* s);
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -217,6 +238,8 @@ static void HUDScreen_ContextLost(void* screen) {
 	Elem_Free(&s->hotbar);
 	Elem_Free(&s->line1);
 	Elem_Free(&s->line2);
+	Elem_Free(&s->score);
+	Elem_Free(&s->arrows);
 }
 
 static void HUDScreen_ContextRecreated(void* screen) {
@@ -242,6 +265,11 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	Font_Make(&countFont, 16, FONT_FLAGS_NONE);
 	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
 	Font_Free(&countFont);
+
+	/* Survival Score / Arrows label textures (rebuilt here since ContextLost */
+	/*  freed them); their text is refreshed on change in HUDScreen_Update. */
+	HUDScreen_RemakeScore(s);
+	HUDScreen_RemakeArrows(s);
 }
 
 int HUDScreen_LayoutHotbar(void) {
@@ -335,7 +363,9 @@ static void HUDScreen_Init(void* screen) {
 	HotbarWidget_Create(&s->hotbar);
 	TextWidget_Init(&s->line1);
 	TextWidget_Init(&s->line2);
-	
+	TextWidget_Init(&s->score);
+	TextWidget_Init(&s->arrows);
+
 	s->line1.flags  |= WIDGET_FLAG_MAINSCREEN;
 	s->line2.flags  |= WIDGET_FLAG_MAINSCREEN;
 
@@ -394,8 +424,19 @@ static void HUDScreen_Update(void* screen, float delta) {
 	}
 
 	if (SurvivalTest_Enabled && SurvivalTest_ArrowCount() != s->lastArrows) {
-		s->lastArrows = SurvivalTest_ArrowCount();
+		HUDScreen_RemakeArrows(s); /* updates lastArrows */
 		s->dirty      = true;
+	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_Score() != s->lastScore) {
+		HUDScreen_RemakeScore(s);  /* updates lastScore */
+		s->dirty      = true;
+	}
+
+	/* Air bubbles deplete continuously while the head is underwater, so keep */
+	/*  rebuilding the HUD to animate them (like the low-health heart shake). */
+	if (SurvivalTest_Enabled && SurvivalTest_HeadUnderwater()) {
+		s->dirty = true;
 	}
 }
 
@@ -548,68 +589,88 @@ static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured*
 	return (int)(cur - dst);
 }
 
-/* Builds the player's current arrow count, drawn to the right of the heart */
-/*  row (right-aligned to the hotbar's right edge), using the same digit */
-/*  atlas as the hotbar stack counts. */
-static int HUDScreen_BuildArrowsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
-	struct TextAtlas* atlas = &s->countAtlas;
-	struct HotbarWidget* w  = &s->hotbar;
+/* UV coordinates for the air bubbles in icons.png (HUDScreen.java): a full */
+/*  bubble at pixel (16,18) and a bursting one at (25,18), both 9x9. */
+#define BUBBLE_FULL_U1 (16/256.0f)
+#define BUBBLE_FULL_U2 (25/256.0f)
+#define BUBBLE_POP_U1  (25/256.0f)
+#define BUBBLE_POP_U2  (34/256.0f)
+#define BUBBLE_V1      (18/64.0f)
+#define BUBBLE_V2      (27/64.0f)
+
+/* Builds the depleting air bubble row shown above the hearts while the head */
+/*  is underwater (HUDScreen.java's isUnderWater() block). The full/bursting */
+/*  split is the original's: full = ceil((air-2)*10/300), and one extra */
+/*  bursting bubble appears as the current one drains, total = ceil(air*10/300). */
+static int HUDScreen_BuildBubblesMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct Texture tex;
 	struct VertexTextured* cur = dst;
-	struct Texture part;
-	char digits[STRING_INT_CHARS];
-	int i, nDigits, d, count;
-	int right, y, heartSize;
-	float scale, f, digitH, penX;
+	int air, full, total, i, x, y, size;
+	float scale;
 
-	if (!SurvivalTest_Enabled) return 0;
-	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
-	if (!atlas->tex.height)    return 0;
+	if (!SurvivalTest_Enabled)         return 0;
+	if (!SurvivalTest_HeadUnderwater()) return 0;
+	if (!Gui.IconsTex)                 return 0;
 
-	/* Same DPI-aware scale as the heart row this count sits beside (see */
-	/*  HUDScreen_BuildHeartsMesh) - keeps the arrow count aligned with the */
-	/*  hearts at any GUI scale / fullscreen / DPI. */
-	scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
-	heartSize = (int)(9.0f * scale);
-	y         = w->y - heartSize - (int)(2.0f * scale);
+	scale = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
+	size  = (int)(9.0f * scale);
 
-	digitH = heartSize * 0.9f;
-	f      = digitH / atlas->tex.height;
+	air   = SurvivalTest_AirSupply();
+	full  = Math_Ceil((air - 2) * 10.0f / 300.0f);
+	total = Math_Ceil( air      * 10.0f / 300.0f);
+	if (full  < 0)  full  = 0;
+	if (total > 10) total = 10;
 
-	part.ID     = atlas->tex.ID;
-	part.uv.v1  = atlas->tex.uv.v1;
-	part.uv.v2  = atlas->tex.uv.v2;
-	part.height = (cc_uint16)digitH;
-	part.y      = (short)(y + (heartSize - (int)digitH) / 2);
+	/* Sit one bubble-height above the heart row (which is itself above the */
+	/*  hotbar), matching the original's height-32-9 vs hearts at height-32. */
+	x = s->hotbar.x;
+	y = s->hotbar.y - size - (int)(2.0f * scale) - size;
 
-	count   = SurvivalTest_ArrowCount();
-	nDigits = String_MakeUInt32((cc_uint32)count, digits);
-	right   = w->x + w->width;
-
-	penX = (float)right;
-	for (i = 0; i < nDigits; i++) penX -= atlas->widths[digits[i] - '0'] * f;
-
-	/* String_MakeUInt32 writes least-significant first, so emit reversed */
-	for (i = nDigits - 1; i >= 0; i--) {
-		d           = digits[i] - '0';
-		part.x      = (short)penX;
-		part.width  = (cc_uint16)(atlas->widths[d] * f);
-		part.uv.u1  = atlas->offsets[d] * atlas->uScale;
-		part.uv.u2  = part.uv.u1 + atlas->widths[d] * atlas->uScale;
-		Gfx_Make2DQuad(&part, PACKEDCOL_WHITE, &cur);
-		penX += part.width;
+	tex.ID = Gui.IconsTex;
+	for (i = 0; i < total; i++) {
+		if (i < full) {
+			Tex_SetUV(tex, BUBBLE_FULL_U1, BUBBLE_V1, BUBBLE_FULL_U2, BUBBLE_V2);
+		} else {
+			Tex_SetUV(tex, BUBBLE_POP_U1,  BUBBLE_V1, BUBBLE_POP_U2,  BUBBLE_V2);
+		}
+		Tex_SetRect(tex, x + i * size, y, size, size);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 	return (int)(cur - dst);
 }
 
+/* HUDScreen.java's SurvivalGameMode labels, rasterised on change like the FPS */
+/*  line: "Score: &eN" (yellow number) and "Arrows: N". Their on-screen */
+/*  positions are pinned per-frame in HUDScreen_BuildMesh. */
+static void HUDScreen_RemakeScore(struct HUDScreen* s) {
+	cc_string str; char buf[STRING_SIZE];
+	int score = SurvivalTest_Score();
+	String_InitArray(str, buf);
+	String_Format1(&str, "Score: &e%i", &score);
+	TextWidget_Set(&s->score, &str, &s->font);
+	s->lastScore = score;
+}
+
+static void HUDScreen_RemakeArrows(struct HUDScreen* s) {
+	cc_string str; char buf[STRING_SIZE];
+	int arrows = SurvivalTest_ArrowCount();
+	String_InitArray(str, buf);
+	String_Format1(&str, "Arrows: %i", &arrows);
+	TextWidget_Set(&s->arrows, &str, &s->font);
+	s->lastArrows = arrows;
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
+	struct VertexTextured* base;
 	struct VertexTextured* data;
 	struct VertexTextured** ptr;
-	struct VertexTextured* heartsDst;
-	struct VertexTextured* countsDst;
-	struct VertexTextured* arrowsDst;
+	struct VertexTextured* p;
+	float scale;
+	int heartSize, rowY;
 
-	data = Screen_LockVb(s);
+	base = Screen_LockVb(s);
+	data = base;
 	ptr  = &data;
 
 	HUDScreen_BuildCrosshairsMesh(ptr);
@@ -618,17 +679,28 @@ static void HUDScreen_BuildMesh(void* screen) {
 	Widget_BuildMesh(&s->hotbar, ptr);
 
 	if (!Game_ClassicMode)
-		HUDScreen_BuildPosition(s, data);
+		HUDScreen_BuildPosition(s, base + HUD_OFS_POSITION);
 
-	/* data now points to offset (12 + HOTBAR_MAX_VERTICES) in the VB. */
-	/* The position display occupies POSITION_HUD_CHARS * 4 vertices after */
-	/*  that, then hearts, then hotbar stack counts, then arrow count. */
-	heartsDst     = data + POSITION_HUD_CHARS * 4;
-	countsDst     = heartsDst + SURVIVAL_HEARTS_MAX_VERTICES;
-	arrowsDst     = countsDst + SURVIVAL_COUNTS_MAX_VERTICES;
-	s->heartCount    = HUDScreen_BuildHeartsMesh(s, heartsDst);
-	s->countVertices = HUDScreen_BuildCountsMesh(s, countsDst);
-	s->arrowVertices = HUDScreen_BuildArrowsMesh(s, arrowsDst);
+	s->heartCount    = HUDScreen_BuildHeartsMesh (s, base + HUD_OFS_HEARTS);
+	s->countVertices = HUDScreen_BuildCountsMesh (s, base + HUD_OFS_COUNTS);
+	s->bubbleCount   = HUDScreen_BuildBubblesMesh(s, base + HUD_OFS_BUBBLES);
+
+	/* Survival Score / Arrows labels: pin them by pixel (like the hearts) so */
+	/*  they track the hotbar exactly, overriding the anchored position that */
+	/*  TextWidget_Set baked in. Score top-right, Arrows beside the heart row. */
+	if (SurvivalTest_Enabled) {
+		scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
+		heartSize = (int)(9.0f * scale);
+		rowY      = s->hotbar.y - heartSize - (int)(2.0f * scale);
+
+		s->score.tex.x  = Window_Main.Width - s->score.tex.width - 2;
+		s->score.tex.y  = 2;
+		s->arrows.tex.x = s->hotbar.x + s->hotbar.width / 2 + (int)(8.0f * scale);
+		s->arrows.tex.y = rowY;
+
+		p = base + HUD_OFS_SCORE;  Widget_BuildMesh(&s->score,  &p);
+		p = base + HUD_OFS_ARROWS; Widget_BuildMesh(&s->arrows, &p);
+	}
 	Gfx_UnlockDynamicVb(s->vb);
 }
 
@@ -647,7 +719,7 @@ static void HUDScreen_Render(void* screen, float delta) {
 	} else if (IsOnlyChatActive() && Gui.ShowFPS) {
 		Widget_Render2(&s->line2, 8);
 		Gfx_BindTexture(s->posAtlas.tex.ID);
-		Gfx_DrawVb_IndexedTris_Range(s->posCount, 12 + HOTBAR_MAX_VERTICES, DRAW_HINT_RECT);
+		Gfx_DrawVb_IndexedTris_Range(s->posCount, HUD_OFS_POSITION, DRAW_HINT_RECT);
 		/* TODO swap these two lines back */
 	}
 
@@ -665,27 +737,31 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (SurvivalTest_Enabled && s->heartCount > 0 && Gui.IconsTex) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb);
-			Gfx_DrawVb_IndexedTris_Range(s->heartCount,
-				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4,
-				DRAW_HINT_SPRITE);
+			Gfx_DrawVb_IndexedTris_Range(s->heartCount, HUD_OFS_HEARTS, DRAW_HINT_SPRITE);
 		}
 
 		/* Draw survival hotbar stack counts (digit atlas) */
 		if (SurvivalTest_Enabled && s->countVertices > 0 && s->countAtlas.tex.ID) {
 			Gfx_BindTexture(s->countAtlas.tex.ID);
 			Gfx_BindDynamicVb(s->vb);
-			Gfx_DrawVb_IndexedTris_Range(s->countVertices,
-				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES,
-				DRAW_HINT_RECT);
+			Gfx_DrawVb_IndexedTris_Range(s->countVertices, HUD_OFS_COUNTS, DRAW_HINT_RECT);
 		}
 
-		/* Draw survival arrow count (digit atlas) */
-		if (SurvivalTest_Enabled && s->arrowVertices > 0 && s->countAtlas.tex.ID) {
-			Gfx_BindTexture(s->countAtlas.tex.ID);
+		/* Draw survival air bubbles (icons.png) above the hearts when underwater */
+		if (SurvivalTest_Enabled && s->bubbleCount > 0 && Gui.IconsTex) {
+			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb);
-			Gfx_DrawVb_IndexedTris_Range(s->arrowVertices,
-				12 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4 + SURVIVAL_HEARTS_MAX_VERTICES + SURVIVAL_COUNTS_MAX_VERTICES,
-				DRAW_HINT_RECT);
+			Gfx_DrawVb_IndexedTris_Range(s->bubbleCount, HUD_OFS_BUBBLES, DRAW_HINT_SPRITE);
+		}
+
+		/* Draw survival Score / Arrows labels (each binds its own text texture) */
+		if (SurvivalTest_Enabled && s->score.tex.ID) {
+			Gfx_BindDynamicVb(s->vb);
+			Widget_Render2(&s->score, HUD_OFS_SCORE);
+		}
+		if (SurvivalTest_Enabled && s->arrows.tex.ID) {
+			Gfx_BindDynamicVb(s->vb);
+			Widget_Render2(&s->arrows, HUD_OFS_ARROWS);
 		}
 	}
 

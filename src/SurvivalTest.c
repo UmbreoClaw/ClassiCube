@@ -55,6 +55,7 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 #define HURT_TILT_MAX_DEG  14.0f
 
 static float st_airTimer;
+static cc_bool st_headInWater; /* whether the player's head is submerged (drives the HUD air bubbles) */
 static float st_invincTimer;
 static float st_lavaTimer;
 static float st_drownTimer;
@@ -641,6 +642,13 @@ void SurvivalTest_Heal(int amount) {
 /* Player.getScore() */
 int SurvivalTest_Score(void) { return st_score; }
 
+/* Player.isUnderWater() - drives whether the HUD draws the air bubble row. */
+cc_bool SurvivalTest_HeadUnderwater(void) { return SurvivalTest_Enabled && st_headInWater; }
+
+/* Player.airSupply, rescaled to the genuine 0..300 range the HUD bubble */
+/*  formula expects (this port tracks air as 0..AIR_SUPPLY_SECS seconds). */
+int SurvivalTest_AirSupply(void) { return (int)(st_airTimer / AIR_SUPPLY_SECS * 300.0f); }
+
 /* level.explode's blast radius - shared by TNT and the creeper's death blast */
 /*  (both derive from the same original explosion code). */
 #define EXPLOSION_RADIUS 4
@@ -653,43 +661,10 @@ static cc_bool SurvivalTest_ExplosionImmune(BlockID b) {
 		(Blocks.ExtendedCollide[b] == COLLIDE_SOLID && (Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE));
 }
 
-/* level.explode(null, x, y, z, radius) - destroys a sphere of blocks around */
-/*  center and damages the player with linear falloff if within range. Used */
-/*  by both TNT (PrimedTnt's expiry) and the creeper's death blast. The exact */
-/*  player-damage falloff curve wasn't recovered, so a simple linear falloff */
-/*  is used. */
-static void SurvivalTest_Explode(Vec3 center, int radius) {
-	struct LocalPlayer* p = Entities.CurPlayer;
-	int x = Math_Floor(center.x);
-	int y = Math_Floor(center.y);
-	int z = Math_Floor(center.z);
-	int dx, dy, dz, xx, yy, zz;
-	BlockID block;
-	Vec3 diff;
-	float dist;
-
-	for (dy = -radius; dy <= radius; dy++) {
-	for (dz = -radius; dz <= radius; dz++) {
-	for (dx = -radius; dx <= radius; dx++) {
-		if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
-		xx = x + dx; yy = y + dy; zz = z + dz;
-		if (!World_Contains(xx, yy, zz)) continue;
-
-		block = World_GetBlock(xx, yy, zz);
-		if (block == BLOCK_AIR || SurvivalTest_ExplosionImmune(block)) continue;
-		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
-	}}}
-
-	if (!p) return;
-	diff.x = p->Base.Position.x - center.x;
-	diff.y = p->Base.Position.y - center.y;
-	diff.z = p->Base.Position.z - center.z;
-	dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z);
-	if (dist < (float)radius) {
-		int dmg = (int)((1.0f - dist / (float)radius) * SURVIVAL_MAX_HEALTH * 0.6f);
-		SurvivalTest_Hurt(dmg);
-	}
-}
+/* level.explode(attacker, x, y, z, radius) - destroys a sphere of blocks and */
+/*  damages every entity in range. Defined after Mob_Hurt/st_mobs (it damages */
+/*  mobs as well as the player); forward-declared here since TNT calls it. */
+static void SurvivalTest_Explode(Vec3 center, int radius);
 
 
 /*########################################################################################################################*
@@ -1107,7 +1082,10 @@ static void Mob_SkeletonDeathBurst(struct Mob* m) {
 /*  see Mob_Hurt). Shares its block-destruction/player-damage logic with TNT */
 /*  via SurvivalTest_Explode, since both derive from the same original code. */
 static void Mob_CreeperExplode(struct Mob* m) {
-	SurvivalTest_Explode(m->Base.Position, EXPLOSION_RADIUS);
+	/* Genuine centres the blast on mob.y (the bbox centre), not the feet */
+	Vec3 center = m->Base.Position;
+	center.y += m->Base.Size.y * 0.5f;
+	SurvivalTest_Explode(center, EXPLOSION_RADIUS);
 }
 
 /* hurt(Entity attacker, int damage) - simplified to a single flat */
@@ -1174,6 +1152,64 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	}
 }
 
+/* level.explode(attacker, x, y, z, radius) - destroys a sphere of blocks */
+/*  around center, then damages every entity (player + mobs) whose centre is */
+/*  within the blast, using the genuine falloff (int)((1 - dist/radius)*15 + 1): */
+/*  16 HP point-blank, tapering to 1 HP at the rim, 0 beyond. Recovered from */
+/*  the decompiled Level.explode - the earlier note that the curve was */
+/*  unrecoverable was wrong, it's the same (1-d)*15+1 the original always used, */
+/*  and it hits mobs too, not just the player. Distance is measured to each */
+/*  entity's vertical centre (Position.y + Size.y/2), matching Entity.distanceTo */
+/*  (genuine Entity.y is the bbox centre, CC's Position.y is the feet). Used by */
+/*  both TNT (PrimedTnt's expiry) and the creeper's death blast. */
+/* Explosion kills never credit the player's score: attacker is null for TNT */
+/*  and the creeper itself for a creeper blast, and awardKillScore only fires */
+/*  for a Player attacker - so mobs are hurt with playerCredit=false. attacker */
+/*  is passed null (no knockback), matching TNT, the common case; the only */
+/*  nuance dropped is a creeper blast knocking surviving mobs back. */
+static void SurvivalTest_Explode(Vec3 center, int radius) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Mob* m;
+	int x = Math_Floor(center.x);
+	int y = Math_Floor(center.y);
+	int z = Math_Floor(center.z);
+	int dx, dy, dz, xx, yy, zz, i;
+	BlockID block;
+	Vec3 diff;
+	float dist, inv = 1.0f / (float)radius;
+
+	for (dy = -radius; dy <= radius; dy++) {
+	for (dz = -radius; dz <= radius; dz++) {
+	for (dx = -radius; dx <= radius; dx++) {
+		if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
+		xx = x + dx; yy = y + dy; zz = z + dz;
+		if (!World_Contains(xx, yy, zz)) continue;
+
+		block = World_GetBlock(xx, yy, zz);
+		if (block == BLOCK_AIR || SurvivalTest_ExplosionImmune(block)) continue;
+		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+	}}}
+
+	if (p) {
+		diff.x =  p->Base.Position.x                          - center.x;
+		diff.y = (p->Base.Position.y + p->Base.Size.y * 0.5f) - center.y;
+		diff.z =  p->Base.Position.z                          - center.z;
+		dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) * inv;
+		if (dist <= 1.0f) SurvivalTest_Hurt((int)((1.0f - dist) * 15.0f + 1.0f));
+	}
+
+	for (i = 0; i < MOB_MAX; i++) {
+		m = &st_mobs[i];
+		if (!m->active || m->health <= 0) continue;
+
+		diff.x =  m->Base.Position.x                          - center.x;
+		diff.y = (m->Base.Position.y + m->Base.Size.y * 0.5f) - center.y;
+		diff.z =  m->Base.Position.z                          - center.z;
+		dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) * inv;
+		if (dist <= 1.0f) Mob_Hurt(m, NULL, (int)((1.0f - dist) * 15.0f + 1.0f), false);
+	}
+}
+
 /* BasicAI.update() - the shared wander/turn logic used by every mob, plus */
 /*  the chase override applied once a mob has acquired a target (only ever */
 /*  true for attack-type mobs - BasicAttackAI is what actually sets hasTarget). */
@@ -1200,14 +1236,64 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	}
 }
 
+/* Faithful port of Level.clip's voxel DDA: walks the grid cells the segment */
+/*  from->to passes through (the original's 20-step cap included) and reports */
+/*  the first solid, non-liquid block hit. Used as the BasicAttackAI.attack */
+/*  line-of-sight gate below. The original also handled non-cube blocks via */
+/*  Block.clip (flowers/sprites etc.), but those are COLLIDE_NONE here and */
+/*  don't block the ray, which is the same end result. Liquids never block. */
+static cc_bool Mob_SightBlocked(Vec3 from, Vec3 to) {
+	int x1 = Math_Floor(to.x),   y1 = Math_Floor(to.y),   z1 = Math_Floor(to.z);
+	int x0 = Math_Floor(from.x), y0 = Math_Floor(from.y), z0 = Math_Floor(from.z);
+	int steps = 20, face;
+	float xb, yb, zb, tx, ty, tz, dx, dy, dz;
+	BlockID b;
+
+	while (steps-- >= 0) {
+		if (x0 == x1 && y0 == y1 && z0 == z1) return false; /* reached target cell: clear */
+
+		xb = yb = zb = 999.0f;
+		if (x1 > x0) xb = (float)x0 + 1.0f;
+		if (x1 < x0) xb = (float)x0;
+		if (y1 > y0) yb = (float)y0 + 1.0f;
+		if (y1 < y0) yb = (float)y0;
+		if (z1 > z0) zb = (float)z0 + 1.0f;
+		if (z1 < z0) zb = (float)z0;
+
+		dx = to.x - from.x; dy = to.y - from.y; dz = to.z - from.z;
+		tx = ty = tz = 999.0f;
+		if (xb != 999.0f) tx = (xb - from.x) / dx;
+		if (yb != 999.0f) ty = (yb - from.y) / dy;
+		if (zb != 999.0f) tz = (zb - from.z) / dz;
+
+		/* advance to whichever axis boundary is nearest (genuine face codes: */
+		/*  the -X/-Y/-Z faces 5/1/3 need the entered cell nudged back by one) */
+		if (tx < ty && tx < tz) {
+			face = x1 > x0 ? 4 : 5;
+			from.x = xb; from.y += dy * tx; from.z += dz * tx;
+		} else if (ty < tz) {
+			face = y1 > y0 ? 0 : 1;
+			from.x += dx * ty; from.y = yb; from.z += dz * ty;
+		} else {
+			face = z1 > z0 ? 2 : 3;
+			from.x += dx * tz; from.y += dy * tz; from.z = zb;
+		}
+
+		x0 = Math_Floor(from.x); if (face == 5) x0--;
+		y0 = Math_Floor(from.y); if (face == 1) y0--;
+		z0 = Math_Floor(from.z); if (face == 3) z0--;
+
+		if (!World_Contains(x0, y0, z0)) continue;
+		b = World_GetBlock(x0, y0, z0);
+		if (b != BLOCK_AIR && Blocks.Collide[b] == COLLIDE_SOLID) return true;
+	}
+	return false;
+}
+
 /* BasicAttackAI.doAttack() - acquires/loses the player as a target based on */
 /*  distance, faces them, and lands a hit once in range and off cooldown. */
 /*  Facing uses CC's own atan2-based formula (re-derived/verified against */
 /*  Entity_GetEyePosition/Vec3_GetDirVector), not Java's raw yRot formula. */
-/* NOTE: Java's BasicAttackAI.attack() also does a level.clip() line-of-sight */
-/*  check and aborts (no damage to either side) if a block is in the way; */
-/*  that raycast-against-arbitrary-points isn't ported here, so a mob can */
-/*  land a hit through a sufficiently thin wall if within the 2-block range. */
 static void Mob_DoAttack(struct Mob* m) {
 	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
 	struct Entity* e = &m->Base;
@@ -1246,6 +1332,14 @@ static void Mob_DoAttack(struct Mob* m) {
 	e->Pitch = Math_Atan2f(-diff.y, horDist) * MATH_RAD2DEG;
 
 	if (distSq < 4.0f && m->attackDelay <= 0) {
+		/* BasicAttackAI.attack: a solid block between the mob's and player's */
+		/*  centres blocks the hit entirely - no damage to either side, and */
+		/*  attackDelay is left at 0 so it retries next tick once line of sight */
+		/*  clears (clip is between entity centres, not feet, hence Size.y/2). */
+		Vec3 mc = e->Position;  mc.y  += e->Size.y  * 0.5f;
+		Vec3 pc = pe->Position; pc.y  += pe->Size.y * 0.5f;
+		if (Mob_SightBlocked(mc, pc)) return;
+
 		m->attackDelay  = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
 		m->noActionTime = 0; /* BasicAttackAI.attack: landing a hit also resets the despawn timer */
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
@@ -2513,8 +2607,11 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e) {
 	z = Math_Floor(eye.z);
 	if (!World_Contains(x, y, z)) return false;
 
+	/* Blocks.Collide reduces COLLIDE_WATER/COLLIDE_LAVA down to the simpler */
+	/*  COLLIDE_LIQUID for movement purposes - ExtendedCollide keeps the two */
+	/*  distinct, which is what's needed here to tell water apart from lava. */
 	b = World_GetBlock(x, y, z);
-	return Blocks.Collide[b] == COLLIDE_WATER;
+	return Blocks.ExtendedCollide[b] == COLLIDE_WATER;
 }
 
 static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_bool onGround) {
@@ -2598,6 +2695,7 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	}
 
 	/* Drowning ----------------------------------------------------------- */
+	st_headInWater = headInWater; /* exposed to the HUD for the air bubbles */
 	if (headInWater) {
 		st_airTimer -= delta;
 		if (st_airTimer <= 0.0f) {
