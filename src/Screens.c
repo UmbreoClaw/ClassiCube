@@ -2346,6 +2346,10 @@ void InventoryScreen_Hide(void) {
 /*  camera, since it's a close-up of just the player model). */
 #define SURVINV_DOLL_FOV  30.0f
 #define SURVINV_DOLL_DIST  3.4f
+/* Widens the doll's horizontal FOV relative to vertical, so the body sits */
+/*  with comfortable side margin instead of its shoulders touching the box */
+/*  edges (matching the reference Indev/Beta paperdoll's proportions). */
+#define SURVINV_DOLL_ASPECT 1.2f
 
 static struct SurvivalInvScreen {
 	Screen_Body
@@ -2434,7 +2438,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	s->doll.Position.y = -(s->doll.Size.y * 0.5f);
 	s->doll.Position.z = -SURVINV_DOLL_DIST;
 
-	aspect = 1.0f; /* doll box is always square */
+	aspect = SURVINV_DOLL_ASPECT;
 	Gfx_CalcPerspectiveMatrix(&proj, SURVINV_DOLL_FOV * MATH_DEG2RAD, aspect, 16.0f);
 
 	savedView   = Gfx.View;
@@ -2442,8 +2446,10 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Gfx_LoadMatrix(MATRIX_PROJ, &proj);
 
-	Gfx_SetViewport(boxX, Game.Height - boxY - boxSize, boxSize, boxSize);
-	Gfx_SetScissor (boxX, boxY, boxSize, boxSize);
+	/* Matches the 1px-inset black square drawn in SurvivalInvScreen_Render, */
+	/*  so the 3D render area never overflows into the box's border pixels. */
+	Gfx_SetViewport(boxX + 1, Game.Height - boxY - boxSize + 1, boxSize - 2, boxSize - 2);
+	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxSize - 2);
 	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
 
 	Gfx_SetDepthTest(true);
