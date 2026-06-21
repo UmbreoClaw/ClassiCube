@@ -2927,6 +2927,50 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 	SurvivalTest_SpawnInitialMobs();
 }
 
+/*########################################################################################################################*
+*-------------------------------------------------Debug/testing tools---------------------------------------------------*
+*#########################################################################################################################*/
+/* See SurvivalTest.h - not part of genuine c0.30-s parity, just manual-testing aids. */
+
+void SurvivalTest_DebugSpawnMob(int type) {
+	struct LocalPlayer* p;
+	struct Entity* e;
+	Vec3 dir, pos;
+	if (!SurvivalTest_Enabled) return;
+	if (type < 0 || type >= SURVIVAL_DEBUG_MOB_COUNT) return;
+
+	p = Entities.CurPlayer;
+	if (!p) return;
+	e = &p->Base;
+
+	dir = Vec3_GetDirVector(e->Yaw * MATH_DEG2RAD, 0.0f);
+	pos.x = e->Position.x + dir.x * 3.0f;
+	pos.y = e->Position.y + 0.5f;
+	pos.z = e->Position.z + dir.z * 3.0f;
+
+	SurvivalTest_SpawnMobAt((cc_uint8)type, pos);
+}
+
+void SurvivalTest_DebugKillAllMobs(void) {
+	struct Mob* m;
+	int i;
+	if (!SurvivalTest_Enabled) return;
+
+	for (i = 0; i < MOB_MAX; i++) {
+		m = &st_mobs[i];
+		if (!m->active || m->health <= 0) continue;
+		Mob_Hurt(m, NULL, m->health, false);
+	}
+}
+
+void SurvivalTest_DebugSetArrows(int count) {
+	if (!SurvivalTest_Enabled) return;
+	if (count < 0) count = 0;
+	if (count > ARROW_PLAYER_MAX) count = ARROW_PLAYER_MAX;
+	st_playerArrows = count;
+}
+
+
 struct IGameComponent SurvivalTest_Component = {
 	SurvivalTest_Init,          /* Init           */
 	SurvivalTest_Free,          /* Free           */

@@ -37,6 +37,7 @@
 #include "Lighting.h"
 #include "InputHandler.h"
 #include "Protocol.h"
+#include "SurvivalTest.h"
 
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
@@ -2990,6 +2991,100 @@ void NostalgiaMenuScreen_Show(void) {
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &NostalgiaMenuScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
+}
+
+
+/*########################################################################################################################*
+*----------------------------------------------------SurvivalDebugScreen--------------------------------------------------*
+*#########################################################################################################################*/
+/* A debug/testing-only menu for survival mode (mob spawning and other quick state tweaks), */
+/*  opened with F9 - see InputHandler.c. Not part of genuine c0.30-s parity; this entire */
+/*  section, its SurvivalTest_Debug* counterparts in SurvivalTest.c/h, and the F9 hook can */
+/*  all be deleted later without affecting parity. */
+#define DEBUG_MAX_BTNS 10
+static struct SurvivalDebugScreen {
+	Screen_Body
+	struct TextWidget title;
+	struct ButtonWidget btns[DEBUG_MAX_BTNS];
+	struct ButtonWidget done;
+	struct Widget* __widgets[1 + DEBUG_MAX_BTNS + 1];
+} SurvivalDebugScreen;
+
+static void SurvivalDebugScreen_Close(void* a, void* b) { Gui_Remove((struct Screen*)&SurvivalDebugScreen); }
+
+static void SurvivalDebugScreen_SpawnZombie(void* a, void* b)   { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_ZOMBIE); }
+static void SurvivalDebugScreen_SpawnSkeleton(void* a, void* b) { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SKELETON); }
+static void SurvivalDebugScreen_SpawnSpider(void* a, void* b)   { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SPIDER); }
+static void SurvivalDebugScreen_SpawnCreeper(void* a, void* b)  { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_CREEPER); }
+static void SurvivalDebugScreen_SpawnPig(void* a, void* b)      { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_PIG); }
+static void SurvivalDebugScreen_SpawnSheep(void* a, void* b)    { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SHEEP); }
+
+static void SurvivalDebugScreen_HealFull(void* a, void* b)     { SurvivalTest_Heal(SURVIVAL_MAX_HEALTH); }
+static void SurvivalDebugScreen_Hurt(void* a, void* b)         { SurvivalTest_Hurt(5); }
+static void SurvivalDebugScreen_KillAllMobs(void* a, void* b)  { SurvivalTest_DebugKillAllMobs(); }
+static void SurvivalDebugScreen_RefillArrows(void* a, void* b) { SurvivalTest_DebugSetArrows(99); }
+
+static const struct SimpleButtonDesc survivalDebug_descs[DEBUG_MAX_BTNS] = {
+	{ -160, -120, "Spawn Zombie",   SurvivalDebugScreen_SpawnZombie },
+	{  160, -120, "Spawn Skeleton", SurvivalDebugScreen_SpawnSkeleton },
+	{ -160,  -70, "Spawn Spider",   SurvivalDebugScreen_SpawnSpider },
+	{  160,  -70, "Spawn Creeper",  SurvivalDebugScreen_SpawnCreeper },
+	{ -160,  -20, "Spawn Pig",      SurvivalDebugScreen_SpawnPig },
+	{  160,  -20, "Spawn Sheep",    SurvivalDebugScreen_SpawnSheep },
+	{ -160,   40, "Heal to full",   SurvivalDebugScreen_HealFull },
+	{  160,   40, "Hurt (-5 HP)",   SurvivalDebugScreen_Hurt },
+	{ -160,   90, "Kill all mobs",  SurvivalDebugScreen_KillAllMobs },
+	{  160,   90, "Refill arrows",  SurvivalDebugScreen_RefillArrows },
+};
+
+static void SurvivalDebugScreen_ContextRecreated(void* screen) {
+	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
+	struct FontDesc titleFont;
+	Screen_UpdateVb(screen);
+	Gui_MakeTitleFont(&titleFont);
+
+	TextWidget_SetConst(&s->title, "Survival debug menu (F9)", &titleFont);
+	Menu_SetButtons(s->btns, &titleFont, survivalDebug_descs, DEBUG_MAX_BTNS);
+	ButtonWidget_SetConst(&s->done, "Close", &titleFont);
+
+	Font_Free(&titleFont);
+}
+
+static void SurvivalDebugScreen_Layout(void* screen) {
+	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -170);
+	Menu_LayoutButtons(s->btns, survivalDebug_descs, DEBUG_MAX_BTNS);
+	Menu_LayoutBack(&s->done);
+}
+
+static void SurvivalDebugScreen_Init(void* screen) {
+	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
+	s->widgets    = s->__widgets;
+	s->numWidgets = 0;
+	s->maxWidgets = Array_Elems(s->__widgets);
+
+	TextWidget_Add(s, &s->title);
+	Menu_AddButtons(s, s->btns, 140, survivalDebug_descs, DEBUG_MAX_BTNS);
+	ButtonWidget_Add(s, &s->done, 120, SurvivalDebugScreen_Close);
+
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+}
+
+static const struct ScreenVTABLE SurvivalDebugScreen_VTABLE = {
+	SurvivalDebugScreen_Init,   Screen_NullUpdate, Screen_NullFunc,
+	MenuScreen_Render2,         Screen_BuildMesh,
+	Menu_InputDown,             Screen_InputUp,    Screen_TKeyPress, Screen_TText,
+	Menu_PointerDown,           Screen_PointerUp,  Menu_PointerMove, Screen_TMouseScroll,
+	SurvivalDebugScreen_Layout, Screen_ContextLost, SurvivalDebugScreen_ContextRecreated,
+	Menu_PadAxis
+};
+void SurvivalDebugScreen_Show(void) {
+	struct SurvivalDebugScreen* s = &SurvivalDebugScreen;
+	if (!SurvivalTest_Enabled) return;
+	s->grabsInput = true;
+	s->closable   = true;
+	s->VTABLE     = &SurvivalDebugScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
 }
 #else

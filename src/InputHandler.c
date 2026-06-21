@@ -916,6 +916,8 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	} else if (key == CCKEY_F5 && Game_ClassicMode) {
 		int weather = Env.Weather == WEATHER_SUNNY ? WEATHER_RAINY : WEATHER_SUNNY;
 		Env_SetWeather(weather);
+	} else if (key == CCKEY_F9 && SurvivalTest_Enabled) {
+		SurvivalDebugScreen_Show();
 	} else { HandleHotkeyDown(key); }
 }
 

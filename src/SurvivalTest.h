@@ -134,5 +134,28 @@ void SurvivalTest_RenderCracks(float delta, float t);
 /*  after the camera's view matrix is computed (e.g. in Render3DFrame). */
 void SurvivalTest_ApplyHurtTilt(struct Matrix* view, float t);
 
+/* ----------------------------------------- Debug/testing tools ------------------------------------------ */
+/* Everything below exists purely to make manual testing of survival mode easier (spawning */
+/*  mobs on demand, instant heal/kill, etc.) - none of it is part of the genuine c0.30-s */
+/*  feature set, and it can all be ripped out later without affecting parity. */
+
+/* Mob type constants for SurvivalTest_DebugSpawnMob - order matches the internal MobType enum. */
+enum SurvivalDebugMobType {
+	SURVIVAL_DEBUG_MOB_ZOMBIE, SURVIVAL_DEBUG_MOB_SKELETON, SURVIVAL_DEBUG_MOB_PIG,
+	SURVIVAL_DEBUG_MOB_CREEPER, SURVIVAL_DEBUG_MOB_SPIDER, SURVIVAL_DEBUG_MOB_SHEEP,
+	SURVIVAL_DEBUG_MOB_COUNT
+};
+
+/* Spawns a mob of the given SurvivalDebugMobType a few blocks in front of the player, */
+/*  along their current look direction. No-op if survival is disabled or the mob slot */
+/*  table (SurvivalTest_RenderMobs et al) is full. */
+void SurvivalTest_DebugSpawnMob(int type);
+/* Instantly kills every currently active mob in the world (no death-score credit, */
+/*  matching a debug/console kill rather than a real player kill). No-op when survival */
+/*  mode is disabled. */
+void SurvivalTest_DebugKillAllMobs(void);
+/* Sets the player's arrow count directly (clamped 0-99). No-op when survival mode is disabled. */
+void SurvivalTest_DebugSetArrows(int count);
+
 CC_END_HEADER
 #endif
