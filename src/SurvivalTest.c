@@ -36,10 +36,14 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
 /* How long (seconds) the player is invincible after taking damage */
 #define INVINCIBILITY_SECS 0.5f
-/* Lava damages this often (seconds) while the player is touching it */
+/* Lava damages this often (seconds) while the player is touching it. */
+/*  Mob.tick() calls hurt(null,10) every tick in lava, but the 20-tick (1s) */
+/*  invulnerability window only lets a real hit land once it has decayed past */
+/*  its halfway point (~10 ticks), so a fresh 10-damage hit effectively lands */
+/*  every ~0.5s - i.e. 20 HP/sec, draining a full 20-HP player in one second. */
 #define LAVA_DMG_INTERVAL  0.5f
-/* Damage dealt per lava damage tick */
-#define LAVA_DAMAGE        4
+/* Damage dealt per lava damage tick (Mob.tick: hurt(null, 10)) */
+#define LAVA_DAMAGE        10
 /* Drowning damages this often (seconds) once air is depleted */
 #define DROWN_DMG_INTERVAL 1.0f
 /* Damage dealt per drowning tick (2 HP/sec, matching Survival Test) */
@@ -251,9 +255,9 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 	return -1;
 }
 
-/* Spawns one physical item drop at the centre of the given block coords, */
-/*  with a small random scatter-pop velocity (matches Survival Test's look). */
-static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
+/* Spawns one physical item drop at the given world position, with a small */
+/*  random scatter-pop velocity (matches Survival Test's look). */
+static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	struct DropItem* d;
 	float ang, speed;
 	int slot = SurvivalTest_FindFreeDropSlot();
@@ -262,9 +266,7 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	d = &st_drops[slot];
 	Mem_Set(d, 0, sizeof(struct DropItem));
 
-	d->position.x = coords.x + 0.5f;
-	d->position.y = coords.y + 0.3f;
-	d->position.z = coords.z + 0.5f;
+	d->position = pos;
 
 	ang   = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
 	speed = 0.6f + Random_Float(&st_dropRng) * 0.6f;
@@ -277,6 +279,15 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	d->age         = 0.0f;
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
 	d->active      = true;
+}
+
+/* Spawns one physical item drop at the centre of the given block coords. */
+static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
+	Vec3 pos;
+	pos.x = coords.x + 0.5f;
+	pos.y = coords.y + 0.3f;
+	pos.z = coords.z + 0.5f;
+	SurvivalTest_SpawnDropAt(pos, block);
 }
 
 /* Decides what physically drops when a block is mined (Survival Test rules). */
@@ -576,6 +587,23 @@ static float SurvivalTest_CalcHurtDir(const Vec3* attackerPos) {
 	return dirYaw - p->Base.Yaw;
 }
 
+/* Player.die(): scatters one item drop per non-empty inventory slot at the */
+/*  player's position. c0.30-s has no respawn (death ends the world), so these */
+/*  are never re-collected - they're spawned for parity with the genuine death */
+/*  behaviour. Java spawns one Item entity per slot carrying its full count; */
+/*  our drops are single blocks, so a slot becomes one tumbling block here. */
+static void SurvivalTest_DropInventory(void) {
+	struct Entity* p = &Entities.CurPlayer->Base;
+	Vec3 pos = p->Position;
+	int i;
+	pos.y += 1.0f; /* pop from around chest height rather than the feet */
+
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		if (st_inv[i].block == BLOCK_AIR || st_inv[i].count <= 0) continue;
+		SurvivalTest_SpawnDropAt(pos, st_inv[i].block);
+	}
+}
+
 /* Applies damage. When ignoreInvinc is set the invincibility window is */
 /*  bypassed and not refreshed (used for self-inflicted poison damage). */
 /*  attackerPos is NULL for environmental damage (fall/lava/drown/poison/ */
@@ -595,6 +623,7 @@ static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc, const Vec3* at
 	if (SurvivalTest_Health <= 0) {
 		SurvivalTest_Health = 0;
 		st_isDead = true;
+		SurvivalTest_DropInventory();
 		/* Classic 0.30-s had no respawn: death ends the world. The Game */
 		/*  Over screen offers generating a fresh level or quitting. */
 		GameOverScreen_Show();
@@ -894,6 +923,11 @@ struct Mob {
 	/*  arrow/other source) against a furred sheep shears it instead of */
 	/*  dealing damage - drops 1-3 white wool, matching Sheep.hurt(). */
 	cc_bool hasFur;
+	/* Sheep-only grazing state (Sheep.SheepAI): when a sheep is over grass it */
+	/*  stops to graze; after 60 ticks the grass becomes dirt and it has a 1/5 */
+	/*  chance to regrow its fur (so a sheared sheep can become shearable again). */
+	cc_bool grazing;
+	int     grazingTime;
 };
 static struct Mob st_mobs[MOB_MAX];
 
@@ -1243,6 +1277,41 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	}
 }
 
+/* Sheep.SheepAI.update(): a sheep standing over grass stops to graze. After 60 */
+/*  ticks the grass turns to dirt and there's a 1/5 chance it regrows its fur, */
+/*  so a sheared sheep can eventually be shearable again. While grazing it holds */
+/*  still; the original also bobs the head down, which is cosmetic and omitted. */
+/*  The grass block sampled is one in front (0.7 blocks along the body yaw) and */
+/*  one below the feet, matching the original's (mob.x+xDiff, mob.y-2, mob.z+zDiff). */
+static void Mob_SheepUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	struct Entity* e = &m->Base;
+	float sinYaw = Math_SinF(e->Yaw * MATH_DEG2RAD);
+	float cosYaw = Math_CosF(e->Yaw * MATH_DEG2RAD);
+	int x = Math_Floor(e->Position.x + 0.7f * sinYaw);
+	int y = Math_Floor(e->Position.y) - 1;
+	int z = Math_Floor(e->Position.z - 0.7f * cosYaw);
+	cc_bool overGrass = World_Contains(x, y, z) && World_GetBlock(x, y, z) == BLOCK_GRASS;
+
+	if (m->grazing) {
+		if (!overGrass) {
+			m->grazing = false;
+		} else {
+			if (m->grazingTime++ == 60) {
+				Game_UpdateBlock(x, y, z, BLOCK_DIRT);
+				if (Random_Next(&st_mobRng, 5) == 0) m->hasFur = true;
+			}
+			m->moveStrafe  = 0.0f;
+			m->moveForward = 0.0f;
+		}
+	} else {
+		if (overGrass) {
+			m->grazing     = true;
+			m->grazingTime = 0;
+		}
+		Mob_BasicAIUpdate(m, inWater, inLava);
+	}
+}
+
 /* Faithful port of Level.clip's voxel DDA: walks the grid cells the segment */
 /*  from->to passes through (the original's 20-step cap included) and reports */
 /*  the first solid, non-liquid block hit. Used as the BasicAttackAI.attack */
@@ -1484,7 +1553,11 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 			}
 		}
 
-		Mob_BasicAIUpdate(m, inWater, inLava);
+		if (m->type == MOB_TYPE_SHEEP) {
+			Mob_SheepUpdate(m, inWater, inLava);
+		} else {
+			Mob_BasicAIUpdate(m, inWater, inLava);
+		}
 		if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
 
 		/* SkeletonAI.tick(): on top of (not instead of) the melee attack above, */
