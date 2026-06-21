@@ -2420,13 +2420,18 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	s->doll.vScale       = p->vScale;
 
 	if (s->mouseX < 0) {
-		relX = 0.0f; relY = 0.0f;
+		/* No PointerMove event has reached this screen yet (e.g. the very first */
+		/*  frame after opening, before the mouse has moved at all) - atan2 of a */
+		/*  zero offset against boxSize below would hit the same singularity as */
+		/*  an offset of exactly 0, returning a full 90 degrees and turning the */
+		/*  head edge-on to the camera. Look straight ahead instead. */
+		headYaw = 0.0f; headPitch = 0.0f;
 	} else {
 		relX = (float)(s->mouseX - (boxX + boxSize / 2));
 		relY = (float)(s->mouseY - (boxY + boxSize / 3));
+		headYaw   =  Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
+		headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
 	}
-	headYaw   =  Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
-	headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
 
 	/* Body always faces forward towards the camera; only the head tracks the cursor. */
 	/* RotY 0 makes an entity face -Z (its own look direction), but the camera sits */
