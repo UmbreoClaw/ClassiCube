@@ -32,6 +32,7 @@
 */
 
 cc_bool SurvivalTest_Enabled;
+cc_bool SurvivalTest_Enhanced;
 int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
 /* How long (seconds) the player is invincible after taking damage */
@@ -2870,6 +2871,10 @@ static void SurvivalTest_OnContextLost(void* obj) {
 }
 
 static void SurvivalTest_Init(void) {
+	/* Loaded unconditionally so the inventory screen can read it even before */
+	/*  any survival logic runs (it gates a UI choice, not a gameplay rule). */
+	SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
+
 	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false);
 	if (!SurvivalTest_Enabled) return;
 

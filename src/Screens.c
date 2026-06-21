@@ -2711,7 +2711,9 @@ static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
 
 void SurvivalInvScreen_Show(void) {
 	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
-	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
+	/* The paperdoll screen is an Enhanced-only extra; Classic survival (and */
+	/*  non-survival) use the authentic flat block-grid inventory instead. */
+	if (!SurvivalTest_Enabled || !SurvivalTest_Enhanced) { InventoryScreen_Show(); return; }
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &SurvivalInvScreen_VTABLE;

@@ -33,6 +33,7 @@
 #include "Input.h"
 #include "Utils.h"
 #include "Errors.h"
+#include "SurvivalTest.h"
 #include "SystemFonts.h"
 
 typedef void (*Button_GetText)(struct ButtonWidget* btn, cc_string* raw);
@@ -1148,6 +1149,12 @@ static void    MiO_SetPhysics(cc_bool v) {
 	Options_SetBool(OPT_BLOCK_PHYSICS, v);
 }
 
+static cc_bool MiO_GetSurvivalEnhanced(void) { return SurvivalTest_Enhanced; }
+static void    MiO_SetSurvivalEnhanced(cc_bool v) {
+	SurvivalTest_Enhanced = v;
+	Options_SetBool(OPT_SURVIVAL_ENHANCED, v);
+}
+
 static cc_bool MiO_GetInvert(void) { return Camera.Invert; }
 static void    MiO_SetInvert(cc_bool v) { 
 	Camera.Invert = v;
@@ -1185,19 +1192,24 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			MiO_GetViewBob, MiO_SetViewBob, NULL);
 		MenuOptionsScreen_AddBool(s, "Invert mouse",
 			MiO_GetInvert,  MiO_SetInvert, NULL);
-		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity", 
+		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity",
 #ifdef CC_BUILD_WIN
 			   1, 200, 40,
 #else
 			   1, 200, 30,
 #endif
 			MiO_GetSensitivity, MiO_SetSensitivity, NULL);
+		MenuOptionsScreen_AddBool(s, "Enhanced survival",
+			MiO_GetSurvivalEnhanced, MiO_SetSurvivalEnhanced,
+			"&eAdds non-classic survival extras, like the 3D\n&einventory paperdoll. Off keeps survival faithful\n&eto Minecraft Classic 0.30.");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 
 	/* Disable certain options */
 	if (!Server.IsSinglePlayer) Menu_Remove(s, 0);
 	if (!Server.IsSinglePlayer) Menu_Remove(s, 4);
+	/* "Enhanced survival" only applies while survival mode is active */
+	if (!SurvivalTest_Enabled)  Menu_Remove(s, 9);
 }
 
 void MiscOptionsScreen_Show(void) {

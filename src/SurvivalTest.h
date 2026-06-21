@@ -15,6 +15,12 @@ extern struct IGameComponent SurvivalTest_Component;
 /*  completely unaffected. This MUST be checked before any survival logic. */
 extern cc_bool SurvivalTest_Enabled;
 
+/* Whether the non-authentic "Enhanced" survival extras are enabled (off by */
+/*  default). Classic mode stays faithful to c0.30-s; Enhanced adds decorative */
+/*  niceties like the Indev/Beta-style paperdoll inventory screen. Faithful */
+/*  c0.30-s mechanics are unaffected and apply in both modes. */
+extern cc_bool SurvivalTest_Enhanced;
+
 /* Player's current health points (0 to SURVIVAL_MAX_HEALTH). 0 = dead. */
 extern int SurvivalTest_Health;
 /* Maximum health points (10 hearts * 2 HP). */
