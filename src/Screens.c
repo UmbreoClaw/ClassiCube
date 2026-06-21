@@ -2429,9 +2429,13 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
 
 	/* Body always faces forward towards the camera; only the head tracks the cursor. */
-	s->doll.Yaw   = headYaw;
+	/* RotY 0 makes an entity face -Z (its own look direction), but the camera sits */
+	/*  behind the doll looking down -Z, so RotY must be 180 to turn the body to */
+	/*  face +Z (towards the camera) instead of showing its back. Yaw is offset by */
+	/*  the same 180 so head tracking (Yaw - RotY) keeps the same relative motion. */
+	s->doll.Yaw   = 180.0f + headYaw;
 	s->doll.Pitch = headPitch;
-	s->doll.RotY  = 0.0f;
+	s->doll.RotY  = 180.0f;
 	s->doll.RotX  = 0.0f;
 	s->doll.RotZ  = 0.0f;
 	s->doll.Position.x = 0.0f;
