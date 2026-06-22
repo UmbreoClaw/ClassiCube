@@ -26,6 +26,7 @@
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
+#include "Particle.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -781,6 +782,77 @@ static void SurvivalTest_Explode(Vec3 center, int radius);
 struct TntFuse { IVec3 coords; int ticksLeft; cc_bool active; };
 static struct TntFuse st_tnt[TNT_MAX];
 
+/* SmokeParticle.java: each lit TNT puffs out one smoke particle per tick that */
+/*  drifts up and fades, which is the obvious "this is about to blow" visual */
+/*  cue (the white flash overlay below is far subtler in daylight). Genuine */
+/*  c0.30 turns the block into a PrimedTnt entity that physically hops and */
+/*  smokes; we keep the block static (see above) but reproduce the smoke as a */
+/*  small self-contained particle pool, rendered as billboards off the shared */
+/*  particles.png atlas - the same texture and frames the real client used. */
+#define TNT_SMOKE_MAX 96
+struct TntSmoke {
+	Vec3  pos, prevPos;
+	Vec3  vel;        /* per-tick displacement, exactly as in Particle.java */
+	int   age, life;  /* in ticks; tex frame = 7 - (age*8)/life */
+	float gray;       /* SmokeParticle's random 0..0.3 grey tint */
+	cc_bool active;
+};
+static struct TntSmoke st_tntSmoke[TNT_SMOKE_MAX];
+
+/* Particle.java's constructor, with the (0,0,0) base velocity SmokeParticle */
+/*  passes in, then SmokeParticle's own *0.1 damping and grey/lifetime setup. */
+static void SurvivalTest_SpawnTntSmoke(float x, float y, float z) {
+	struct TntSmoke* s = NULL;
+	float xd, yd, zd, mag, scale;
+	int i;
+
+	for (i = 0; i < TNT_SMOKE_MAX; i++) {
+		if (!st_tntSmoke[i].active) { s = &st_tntSmoke[i]; break; }
+	}
+	if (!s) return; /* pool full - skip this puff, oldest keep playing out */
+
+	xd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
+	yd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
+	zd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
+	scale = (Random_Float(&st_dropRng) + Random_Float(&st_dropRng) + 1.0f) * 0.15f;
+	mag   = Math_SqrtF(xd * xd + yd * yd + zd * zd);
+	if (mag < 0.0001f) mag = 0.0001f;
+	/* Particle base velocity, then SmokeParticle multiplies x/y/z by 0.1. */
+	s->vel.x = (xd / mag * scale * 0.4f)         * 0.1f;
+	s->vel.y = (yd / mag * scale * 0.4f + 0.1f)  * 0.1f;
+	s->vel.z = (zd / mag * scale * 0.4f)         * 0.1f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray = Random_Float(&st_dropRng) * 0.3f;
+	s->life = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
+	if (s->life < 1) s->life = 1;
+	s->age  = 0;
+	s->active = true;
+}
+
+/* SmokeParticle.tick()/Particle.tick() with noPhysics=true (smoke ignores */
+/*  block collision): integrate position, gently accelerate upward, damp. */
+static void SurvivalTest_TickTntSmoke(void) {
+	struct TntSmoke* s;
+	int i;
+	for (i = 0; i < TNT_SMOKE_MAX; i++) {
+		s = &st_tntSmoke[i];
+		if (!s->active) continue;
+
+		s->prevPos = s->pos;
+		if (++s->age >= s->life) { s->active = false; continue; }
+
+		s->vel.y += 0.004f;
+		s->pos.x += s->vel.x;
+		s->pos.y += s->vel.y;
+		s->pos.z += s->vel.z;
+		s->vel.x *= 0.96f;
+		s->vel.y *= 0.96f;
+		s->vel.z *= 0.96f;
+	}
+}
+
 /* PrimedTnt.hurt(): hitting an already-lit TNT (mining it again) destroys it */
 /*  without exploding, dropping a normal pickup item instead - so mining is a */
 /*  way to "defuse" TNT, at the cost of losing it back into your inventory. */
@@ -820,8 +892,17 @@ static void SurvivalTest_TickTnt(void) {
 	int i;
 	Vec3 center;
 
+	SurvivalTest_TickTntSmoke();
+
 	for (i = 0; i < TNT_MAX; i++) {
 		if (!st_tnt[i].active) continue;
+
+		/* PrimedTnt.tick(): one smoke puff per remaining fuse tick, at the */
+		/*  entity centre + 0.6 (i.e. just above the top of the block). */
+		SurvivalTest_SpawnTntSmoke(st_tnt[i].coords.x + 0.5f,
+								   st_tnt[i].coords.y + 1.1f,
+								   st_tnt[i].coords.z + 0.5f);
+
 		if (--st_tnt[i].ticksLeft > 0) continue;
 
 		st_tnt[i].active = false;
@@ -852,6 +933,10 @@ static float TntFuse_GlowAlpha(int ticksLeft) {
 #define TNT_GLOW_MAX_VERTICES (TNT_MAX * TNT_GLOW_VERTICES_PER_BLOCK)
 static GfxResourceID st_tntGlowVB;
 
+/* One camera-facing quad per smoke puff, textured from particles.png. */
+#define TNT_SMOKE_MAX_VERTICES (TNT_SMOKE_MAX * 4)
+static GfxResourceID st_tntSmokeVB;
+
 static void TntFuse_BuildGlowCube(IVec3 coords, PackedCol col, struct VertexColoured** vertices) {
 	struct VertexColoured* v = *vertices;
 	float x0 = (float)coords.x, x1 = x0 + 1.0f;
@@ -869,14 +954,14 @@ static void TntFuse_BuildGlowCube(IVec3 coords, PackedCol col, struct VertexColo
 	*vertices = v;
 }
 
-void SurvivalTest_RenderTnt(float delta, float t) {
+/* The flashing white overlay - one additive shell per lit TNT block. */
+static void SurvivalTest_RenderTntGlow(void) {
 	struct VertexColoured* data;
 	struct VertexColoured* ptr;
 	PackedCol col;
 	int i, count = 0;
 	cc_bool any = false;
 
-	if (!SurvivalTest_Enabled) return;
 	for (i = 0; i < TNT_MAX; i++) { if (st_tnt[i].active) { any = true; break; } }
 	if (!any) return;
 
@@ -906,6 +991,78 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 	Gfx_SetAlphaBlendingAdditive(false);
 	Gfx_SetDepthWrite(true);
 	Gfx_SetFaceCulling(false);
+}
+
+/* The rising smoke puffs - drawn as alpha-tested billboards off particles.png, */
+/*  exactly like the original SmokeParticle (greyed by the world's lighting). */
+static void SurvivalTest_RenderTntSmoke(float t) {
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	struct TntSmoke* s;
+	GfxResourceID tex;
+	TextureRec rec;
+	Vec3 pos;
+	Vec2 size;
+	PackedCol lit, col;
+	int i, frame, count = 0;
+	cc_bool any = false;
+
+	tex = Particles_TexId();
+	if (!tex) return; /* particles.png not loaded yet - no smoke until it is */
+
+	for (i = 0; i < TNT_SMOKE_MAX; i++) { if (st_tntSmoke[i].active) { any = true; break; } }
+	if (!any) return;
+
+	if (!st_tntSmokeVB) {
+		st_tntSmokeVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, TNT_SMOKE_MAX_VERTICES);
+		if (!st_tntSmokeVB) return;
+	}
+
+	/* Vertex format set before locking - see SurvivalTest_RenderDropBlocks for why. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_tntSmokeVB, VERTEX_FORMAT_TEXTURED, TNT_SMOKE_MAX_VERTICES);
+	ptr  = data;
+	for (i = 0; i < TNT_SMOKE_MAX; i++) {
+		s = &st_tntSmoke[i];
+		if (!s->active) continue;
+
+		Vec3_Lerp(&pos, &s->prevPos, &s->pos, t);
+
+		/* SmokeParticle: tex = 7 - (age*8)/life, walking the 8 smoke frames in */
+		/*  the top row of the 16-wide atlas from densest puff (7) to wisp (0). */
+		frame = 7 - (s->age * 8) / s->life;
+		if (frame < 0) frame = 0;
+		rec.u1 = frame / 16.0f;
+		rec.u2 = rec.u1 + 0.0624375f;
+		rec.v1 = 0.0f;
+		rec.v2 = 0.0624375f;
+
+		/* rCol=gCol=bCol (the random 0..0.3 grey) * the block's brightness. */
+		lit = DropItem_WorldColor(&pos);
+		col = PackedCol_Make((cc_uint8)(PackedCol_R(lit) * s->gray),
+							 (cc_uint8)(PackedCol_G(lit) * s->gray),
+							 (cc_uint8)(PackedCol_B(lit) * s->gray), 255);
+
+		size.x = 0.15f; size.y = 0.15f;
+		Particle_DoRender(&size, &pos, &rec, col, ptr);
+		ptr   += 4;
+		count += 4;
+	}
+	Gfx_BindTexture(tex);
+	Gfx_UnlockDynamicVb(st_tntSmokeVB);
+	if (!count) return;
+
+	Gfx_SetAlphaTest(true);
+	Gfx_DrawVb_IndexedTris(count);
+	Gfx_SetAlphaTest(false);
+}
+
+void SurvivalTest_RenderTnt(float delta, float t) {
+	if (!SurvivalTest_Enabled) return;
+	SurvivalTest_RenderTntGlow();
+	/* Smoke renders independently of live fuses: puffs spawned just before the */
+	/*  blast keep drifting and fading for a moment after the block is gone. */
+	SurvivalTest_RenderTntSmoke(t);
 }
 
 
@@ -2967,6 +3124,9 @@ static void SurvivalTest_ResetState(void) {
 	for (i = 0; i < TNT_MAX; i++) {
 		st_tnt[i].active = false;
 	}
+	for (i = 0; i < TNT_SMOKE_MAX; i++) {
+		st_tntSmoke[i].active = false;
+	}
 }
 
 /* The item vertex buffer is a GPU resource and must be dropped/recreated */
@@ -2976,6 +3136,7 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
+	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 	if (!Gfx.ManagedTextures) {
 		Gfx_DeleteTexture(&st_arrowsTexId);
@@ -3010,6 +3171,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
+	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 }
 
