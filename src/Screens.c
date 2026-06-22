@@ -685,21 +685,42 @@ static void HUDScreen_BuildMesh(void* screen) {
 	s->countVertices = HUDScreen_BuildCountsMesh (s, base + HUD_OFS_COUNTS);
 	s->bubbleCount   = HUDScreen_BuildBubblesMesh(s, base + HUD_OFS_BUBBLES);
 
-	/* Survival Score / Arrows labels: pin them by pixel (like the hearts) so */
-	/*  they track the hotbar exactly, overriding the anchored position that */
-	/*  TextWidget_Set baked in. Score top-right, Arrows beside the heart row. */
+	/* Survival Score / Arrows labels. The text textures are rasterised once (on */
+	/*  change) at a fixed font size, but the hotbar/hearts scale with the GUI */
+	/*  scale, so at a large scale the labels looked tiny next to them. Stretch */
+	/*  each label's quad to the SAME on-screen height the original HUDScreen */
+	/*  draws its 8px font at - (8/22) of the hotbar height, exactly like the */
+	/*  stack-count digits - so they track the hotbar at any scale/DPI. Built as */
+	/*  a scaled copy of the widget's texture rather than mutating the widget */
+	/*  (which persists across frames and would compound the scaling). */
 	if (SurvivalTest_Enabled) {
+		struct Texture lbl;
+		float labelH = s->hotbar.height * (8.0f / 22.0f);
 		scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
 		heartSize = (int)(9.0f * scale);
 		rowY      = s->hotbar.y - heartSize - (int)(2.0f * scale);
 
-		s->score.tex.x  = Window_Main.Width - s->score.tex.width - 2;
-		s->score.tex.y  = 2;
-		s->arrows.tex.x = s->hotbar.x + s->hotbar.width / 2 + (int)(8.0f * scale);
-		s->arrows.tex.y = rowY;
+		/* Score: top-right corner */
+		lbl = s->score.tex;
+		if (lbl.height) {
+			lbl.width  = (cc_uint16)(lbl.width * labelH / lbl.height);
+			lbl.height = (cc_uint16)labelH;
+		}
+		lbl.x = Window_Main.Width - lbl.width - (int)(2.0f * scale);
+		lbl.y = (int)(2.0f * scale);
+		p = base + HUD_OFS_SCORE;
+		Gfx_Make2DQuad(&lbl, s->score.color, &p);
 
-		p = base + HUD_OFS_SCORE;  Widget_BuildMesh(&s->score,  &p);
-		p = base + HUD_OFS_ARROWS; Widget_BuildMesh(&s->arrows, &p);
+		/* Arrows: beside the heart row, vertically centred on it */
+		lbl = s->arrows.tex;
+		if (lbl.height) {
+			lbl.width  = (cc_uint16)(lbl.width * labelH / lbl.height);
+			lbl.height = (cc_uint16)labelH;
+		}
+		lbl.x = s->hotbar.x + s->hotbar.width / 2 + (int)(8.0f * scale);
+		lbl.y = rowY + (heartSize - (int)labelH) / 2;
+		p = base + HUD_OFS_ARROWS;
+		Gfx_Make2DQuad(&lbl, s->arrows.color, &p);
 	}
 	Gfx_UnlockDynamicVb(s->vb);
 }
