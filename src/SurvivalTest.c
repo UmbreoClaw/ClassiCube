@@ -124,6 +124,10 @@ static void SurvivalTest_ArmTnt(IVec3 coords);
 
 struct DropItem {
 	Vec3 position;
+	Vec3 prevPos;    /* position as of the end of the previous tick - RenderDropBlocks blends */
+	                 /*  prevPos->position by the partial-tick t so drops (especially the fast */
+	                 /*  pickup fly-in, which only steps ~3 ticks) move smoothly every frame */
+	                 /*  instead of at the 20 Hz tick rate. */
 	Vec3 velocity;
 	BlockID block;
 	float pickupDelay;
@@ -199,27 +203,27 @@ static void DropItem_RotatedCorners(float half, float cx, float cz, float angleR
 
 /* Computes the world-space geometry (top/bottom Y and the 4 spun XZ corners) */
 /*  shared by the item cube, its glow shell, and the sprite-quad drop variant. */
-static void DropItem_ComputeGeometry(struct DropItem* d, float* yLo, float* yHi,
+static void DropItem_ComputeGeometry(struct DropItem* d, Vec3 pos, float* yLo, float* yHi,
 									  Vec3* a, Vec3* b, Vec3* c, Vec3* e) {
 	float var3 = DropItem_Phase(d);
 	float bob  = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
-	*yLo = d->position.y + bob;
+	*yLo = pos.y + bob;
 	*yHi = *yLo + DROP_ITEM_HALF * 2.0f;
 
-	DropItem_RotatedCorners(DROP_ITEM_HALF, d->position.x, d->position.z,
+	DropItem_RotatedCorners(DROP_ITEM_HALF, pos.x, pos.z,
 							 var3 * MATH_DEG2RAD, a, b, c, e);
 }
 
 /* Appends the 6-face, 24-vertex textured cube for one drop (cropped to the */
 /*  given UV rect on every face, matching the decompiled ItemModel exactly). */
-static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol col,
+static void DropItem_BuildItemCube(struct DropItem* d, Vec3 pos, TextureRec rec, PackedCol col,
 									struct VertexTextured** vertices) {
 	struct VertexTextured* v = *vertices;
 	float yLo, yHi;
 	float u1 = rec.u1, v1 = rec.v1, u2 = rec.u2, v2 = rec.v2;
 	Vec3 a, b, c, e;
 
-	DropItem_ComputeGeometry(d, &yLo, &yHi, &a, &b, &c, &e);
+	DropItem_ComputeGeometry(d, pos, &yLo, &yHi, &a, &b, &c, &e);
 
 	#define ITEM_V(p, py, uu, vv) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v->U = (uu); v->V = (vv); v++;
 	ITEM_V(a,yLo, u1,v1) ITEM_V(b,yLo, u2,v1) ITEM_V(c,yLo, u2,v2) ITEM_V(e,yLo, u1,v2) /* bottom */
@@ -238,13 +242,13 @@ static void DropItem_BuildItemCube(struct DropItem* d, TextureRec rec, PackedCol
 /*  culling on (the cube's winding is consistent, see DropItem_RotatedCorners */
 /*  callers) so only the front faces blend - without culling, the unseen back */
 /*  faces would also blend in, doubling up and producing a boxy flash. */
-static void DropItem_BuildGlowCube(struct DropItem* d, PackedCol col,
+static void DropItem_BuildGlowCube(struct DropItem* d, Vec3 pos, PackedCol col,
 									struct VertexColoured** vertices) {
 	struct VertexColoured* v = *vertices;
 	float yLo, yHi;
 	Vec3 a, b, c, e;
 
-	DropItem_ComputeGeometry(d, &yLo, &yHi, &a, &b, &c, &e);
+	DropItem_ComputeGeometry(d, pos, &yLo, &yHi, &a, &b, &c, &e);
 
 	#define GLOW_V(p, py) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v++;
 	GLOW_V(a,yLo) GLOW_V(b,yLo) GLOW_V(c,yLo) GLOW_V(e,yLo) /* bottom   */
@@ -277,6 +281,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	Mem_Set(d, 0, sizeof(struct DropItem));
 
 	d->position = pos;
+	d->prevPos  = pos; /* seed so the first frame doesn't lerp in from (0,0,0) */
 
 	ang   = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
 	speed = 0.6f + Random_Float(&st_dropRng) * 0.6f;
@@ -453,6 +458,9 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 		d = &st_drops[i];
 		if (!d->active) continue;
 
+		/* Interpolation source for RenderDropBlocks - see DropItem.prevPos. */
+		d->prevPos = d->position;
+
 		if (d->pickingUp) {
 			/* TakeEntityAnim.tick(): distance = (time/3)^2, eased towards the */
 			/*  player's current position every tick, removed once time >= 3. */
@@ -497,7 +505,7 @@ static void SurvivalTest_UpdateItem1DCounts(void) {
 /* Renders the lit, textured item cubes - cropped to the middle 50% of the */
 /*  block's tile on every face, spinning about Y and bobbing up/down, with a */
 /*  brief white glint (~1 Hz) applied as a colour lerp toward white. */
-static void SurvivalTest_RenderDropBlocks(void) {
+static void SurvivalTest_RenderDropBlocks(float t) {
 	struct DropItem* d;
 	struct VertexTextured* data;
 	struct VertexTextured* ptr;
@@ -506,6 +514,7 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	TextureLoc loc;
 	TextureRec base, rec;
 	PackedCol col, glowCol;
+	Vec3 renderPos;
 	float du, dv;
 	int i, index, texIndex, offset, glowCount;
 	cc_bool any = false;
@@ -551,8 +560,10 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
 		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
 
-		col = DropItem_WorldColor(&d->position);
-		DropItem_BuildItemCube(d, rec, col, &ptr);
+		/* Blend prevPos->position by the partial-tick t - see DropItem.prevPos. */
+		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
+		col = DropItem_WorldColor(&renderPos);
+		DropItem_BuildItemCube(d, renderPos, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_itemVB);
@@ -580,8 +591,9 @@ static void SurvivalTest_RenderDropBlocks(void) {
 		d = &st_drops[i];
 		if (!d->active) continue;
 
+		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
 		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d)));
-		DropItem_BuildGlowCube(d, glowCol, &glowPtr);
+		DropItem_BuildGlowCube(d, renderPos, glowCol, &glowPtr);
 		glowCount += GLOW_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_glowVB);
@@ -599,7 +611,7 @@ static void SurvivalTest_RenderDropBlocks(void) {
 
 void SurvivalTest_RenderDrops(float delta, float t) {
 	if (!SurvivalTest_Enabled) return;
-	SurvivalTest_RenderDropBlocks();
+	SurvivalTest_RenderDropBlocks(t);
 }
 
 
@@ -1143,7 +1155,12 @@ static void Mob_ShootArrow(struct Mob* m) {
 static void Mob_SkeletonDeathBurst(struct Mob* m) {
 	struct Entity* e = &m->Base;
 	int count = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) * 3.0f + 4.0f);
-	Vec3 pos  = e->Position;
+	/* Java's parent.y is the eye/camera position (the bbox hangs below it), so */
+	/*  the burst originates up around the body. CC's e->Position is the feet, */
+	/*  so spawning there (let alone 0.2 below it) births every arrow inside the */
+	/*  ground block, where it instantly collides and sticks invisibly - the same */
+	/*  feet-vs-eye bug Mob_ShootArrow documents. Use the eye position instead. */
+	Vec3 pos  = Entity_GetEyePosition(e);
 	float yaw, pitch;
 	int i;
 
