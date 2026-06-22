@@ -11,9 +11,21 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 ## SESSION LOG — combat/mob fixes, render smoothing, TNT entity, inventory direction (latest)
 
 Catch-up entry covering the work between the "stuck drops" fix (last commit that
-touched this file, `3394a81`) and `919e57b`. All in `src/SurvivalTest.c` unless
+touched this file, `3394a81`) and `0b1df4e`. All in `src/SurvivalTest.c` unless
 noted, all cross-referenced to the decompiled Java, all built with `-Werror`.
 Newest first.
+
+### HUD
+- **Score/Arrows labels now scale with the hotbar** (`0b1df4e`, `src/Screens.c`).
+  They were `TextWidget`s rasterised at a fixed 16px font and drawn at native
+  pixel height, so at large window/GUI scales they looked tiny next to the
+  scaling hotbar/hearts. `HUDScreen_BuildMesh` now builds each label's quad as a
+  **scaled copy** of its text texture (not the persistent widget tex — that would
+  compound every frame), stretched to `hotbar.height * 8/22` — the same on-screen
+  height the original HUDScreen draws its 8px font at, identical to the stack-count
+  digits. Arrows is vertically centred on the heart row; margins scale too. NOTE:
+  the top-left FPS/position text is stock ClassiCube (intentionally fixed-size,
+  not GUI-scaled) and was left alone — revisit only if the user asks.
 
 ### Combat & damage fidelity
 - **`Mob.hurt()` dual-threshold invulnerability** (`919e57b`). The old code used a
