@@ -2654,7 +2654,9 @@ static const cc_uint8 cracks_png[] = {
 static void SurvivalTest_EnsureCracksTexture(void) {
 	struct Stream src;
 	struct Bitmap bmp, pow2;
-	int y;
+	BitmapCol* srcRow;
+	BitmapCol* dstRow;
+	int x, y, a;
 	if (st_cracksTexId) return;
 
 	Stream_ReadonlyMemory(&src, (void*)cracks_png, (cc_uint32)sizeof(cracks_png));
@@ -2666,8 +2668,21 @@ static void SurvivalTest_EnsureCracksTexture(void) {
 	Bitmap_Allocate(&pow2, CRACKS_TEX_WIDTH, bmp.height);
 	Mem_Set(pow2.scan0, 0, Bitmap_DataSize(pow2.width, pow2.height));
 	for (y = 0; y < bmp.height; y++) {
-		Mem_Copy(Bitmap_GetRow(&pow2, y), Bitmap_GetRow(&bmp, y),
-				 (cc_uint32)bmp.width * BITMAPCOLOR_SIZE);
+		srcRow = Bitmap_GetRow(&bmp,  y);
+		dstRow = Bitmap_GetRow(&pow2, y);
+		for (x = 0; x < bmp.width; x++) {
+			/* The embedded asset's alpha was baked as (255 - grayscale), which */
+			/*  is the inverse of a plain dst*src multiply (neutral = white). But */
+			/*  genuine c0.30 draws cracks with glBlendFunc(GL_DST_COLOR, */
+			/*  GL_SRC_COLOR) = 2*src*dst, whose neutral point is 50% grey - so */
+			/*  the tiles have a 50% grey background that left every pixel at */
+			/*  alpha 128, tinting the whole face half-black instead of only the */
+			/*  crack lines. Re-derive the correct alpha for a black-source blend: */
+			/*  out = dst*(1-a) must equal 2*src*dst, so a = 1 - 2*src = 2*aOld-1. */
+			a = 2 * BitmapCol_A(srcRow[x]) - 255;
+			if (a < 0) a = 0;
+			dstRow[x] = BitmapCol_Make(0, 0, 0, a);
+		}
 	}
 
 	st_cracksTexId = Gfx_CreateTexture(&pow2, 0, false);
