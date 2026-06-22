@@ -500,6 +500,12 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	/*  and the unlock uploads it), so the item VB must be fully locked, built, */
 	/*  unlocked and drawn before the glow VB is touched. The unlock also binds */
 	/*  its VB, so each pass's draw reads from the right buffer. */
+	/* Vertex format must be set before locking - some backends (e.g. D3D11) */
+	/*  rebind the VB's stride as part of unlocking it, using whatever format */
+	/*  is currently active, so setting it only after the lock/unlock (as the */
+	/*  draw call below needs) would bind with a stale stride left over from */
+	/*  whatever was drawn just before this (e.g. Entities_RenderModels). */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemVB, VERTEX_FORMAT_TEXTURED, ITEM_MAX_VERTICES);
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
@@ -522,7 +528,6 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	}
 	Gfx_UnlockDynamicVb(st_itemVB);
 
-	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_SetAlphaTest(true);
 	offset = 0;
 	for (i = 0; i < Atlas1D.Count; i++) {
@@ -537,6 +542,8 @@ static void SurvivalTest_RenderDropBlocks(void) {
 
 	/* PASS 2 - the white glow shell, drawn over the items with alpha blending */
 	/*  and face culling (so only front faces blend, no boxy double-blend). */
+	/* Vertex format set before locking, same reason as PASS 1 above. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 	glowData = (struct VertexColoured*)Gfx_LockDynamicVb(st_glowVB, VERTEX_FORMAT_COLOURED, GLOW_MAX_VERTICES);
 	glowPtr  = glowData;
 	glowCount = 0;
@@ -551,7 +558,6 @@ static void SurvivalTest_RenderDropBlocks(void) {
 	Gfx_UnlockDynamicVb(st_glowVB);
 
 	if (glowCount > 0) {
-		Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 		Gfx_SetFaceCulling(true);
 		Gfx_SetDepthWrite(false);
 		Gfx_SetAlphaBlendingAdditive(true);
@@ -826,6 +832,8 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 		if (!st_tntGlowVB) return;
 	}
 
+	/* Vertex format set before locking - see SurvivalTest_RenderDropBlocks for why. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 	data = (struct VertexColoured*)Gfx_LockDynamicVb(st_tntGlowVB, VERTEX_FORMAT_COLOURED, TNT_GLOW_MAX_VERTICES);
 	ptr  = data;
 	for (i = 0; i < TNT_MAX; i++) {
@@ -838,7 +846,6 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 	Gfx_UnlockDynamicVb(st_tntGlowVB);
 	if (!count) return;
 
-	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 	Gfx_SetFaceCulling(true);
 	Gfx_SetDepthWrite(false);
 	Gfx_SetAlphaBlendingAdditive(true);
@@ -2243,6 +2250,8 @@ void SurvivalTest_RenderArrows(float delta, float t) {
 		if (!st_arrowVB) return;
 	}
 
+	/* Vertex format set before locking - see SurvivalTest_RenderDropBlocks for why. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	ptr = data = (struct VertexTextured*)Gfx_LockDynamicVb(st_arrowVB, VERTEX_FORMAT_TEXTURED, ARROW_MAX_VERTICES);
 	for (i = 0; i < ARROW_MAX; i++) {
 		a = &st_arrows[i];
@@ -2254,7 +2263,6 @@ void SurvivalTest_RenderArrows(float delta, float t) {
 	}
 	Gfx_UnlockDynamicVb(st_arrowVB);
 
-	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_SetAlphaTest(true);
 	Gfx_BindTexture(st_arrowsTexId);
 	Gfx_DrawVb_IndexedTris_Range(count, 0, DRAW_HINT_NONE);
@@ -2656,6 +2664,14 @@ void SurvivalTest_RenderCracks(float delta, float t) {
 	y1 = cy + (Game_SelectedPos.Max.y - cy) * scale;
 	z1 = cz + (Game_SelectedPos.Max.z - cz) * scale;
 
+	/* Vertex format must be set before locking the VB, not after - some backends */
+	/*  (e.g. D3D11) rebind the dynamic VB's stride as part of unlocking it, using */
+	/*  whatever vertex format is currently active. Since SelOutlineRenderer (drawn */
+	/*  right before this) leaves the format set to VERTEX_FORMAT_COLOURED, setting */
+	/*  our own format only after the lock/unlock would bind this VB with the wrong */
+	/*  (smaller) stride, scrambling every vertex past the first. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+
 	ptr = data = (struct VertexTextured*)Gfx_LockDynamicVb(st_cracksVB, VERTEX_FORMAT_TEXTURED, CRACKS_NUM_VERTICES);
 	Cracks_AddFace(&ptr, Vec3_Create3(x0,y0,z0), Vec3_Create3(x1,y0,z0), Vec3_Create3(x1,y0,z1), Vec3_Create3(x0,y0,z1), u0, u1, col); /* YMin */
 	Cracks_AddFace(&ptr, Vec3_Create3(x0,y1,z0), Vec3_Create3(x0,y1,z1), Vec3_Create3(x1,y1,z1), Vec3_Create3(x1,y1,z0), u0, u1, col); /* YMax */
@@ -2665,7 +2681,6 @@ void SurvivalTest_RenderCracks(float delta, float t) {
 	Cracks_AddFace(&ptr, Vec3_Create3(x0,y0,z1), Vec3_Create3(x1,y0,z1), Vec3_Create3(x1,y1,z1), Vec3_Create3(x0,y1,z1), u0, u1, col); /* ZMax */
 	Gfx_UnlockDynamicVb(st_cracksVB);
 
-	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Gfx_SetDepthWrite(false);
 	Gfx_SetAlphaBlending(true);
 	Gfx_BindTexture(st_cracksTexId);
