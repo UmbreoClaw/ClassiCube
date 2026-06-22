@@ -15,29 +15,36 @@ touched this file, `3394a81`) and `0b1df4e`. All in `src/SurvivalTest.c` unless
 noted, all cross-referenced to the decompiled Java, all built with `-Werror`.
 Newest first.
 
-### Player model attack/punch swing (non-authentic cosmetic)
-- **Third-person arm swing on mine/attack/place** (`src/EntityComponents.c/.h`,
-  `src/HeldBlockRenderer.c`). c0.30-s has no model swing at all (genuine
-  `HumanoidModel.setRotationAngles` only does walk + idle; Survival Test also has
-  no third person), so this is a deliberate Enhanced-style nicety the user asked
-  for, visible only in F5. Added a one-shot punch to the shared `AnimatedComp`:
-  fields `Punching` + `PunchO/PunchN` (linear 0..1 progress, per-tick snapshots),
-  advanced ~6 ticks (0.3s) in `AnimatedComp_Update`, and applied at the very END
-  of `AnimatedComp_GetCurrent` (AFTER `CalcHumanAnim`, which otherwise overwrites
-  `RightArmX/Z` for human models) as `RightArmX += sin(progress*PI)*85deg` (+ a
-  small Z splay). **Sign note:** positive arm X = forward/up swing because
-  `Model_RotateX` resolves to a *standard* +angle rotation (it negates the angle
-  twice — `Math_CosF(-a)` in the setup and the macro's own form cancel out); the
-  arm tip at (0,-L,0) rotates toward -Z = the model's facing direction. If it ever
-  looks like it swings backward, flip the two `+=` to `-=`.
-  - Triggered from `HeldBlockRenderer_ClickAnim` (one place that already fires on
-    mining clicks ~4/s while held, mob attacks, and block placement), gated on
-    `SurvivalTest_Enabled` so **creative's third-person model is untouched**.
-    `StartPunch` ignores re-triggers while a swing is mid-flight, so holding to
-    mine yields clean back-to-back full swings instead of a frozen half-swing.
-  - Inert for all other entities/creative: `PunchN` only ever leaves 0 via
-    `StartPunch`, which is only called in survival, so the new GetCurrent block is
-    a no-op everywhere else.
+### Player model attack/punch swing (non-authentic cosmetic) — DISABLED, deferred
+- **Status: disabled by user request.** The trigger call
+  `AnimatedComp_StartPunch(&Entities.CurPlayer->Base.Anim)` in
+  `HeldBlockRenderer_ClickAnim` (`src/HeldBlockRenderer.c`) has been removed (and
+  the now-unused `#include "SurvivalTest.h"` in that file removed with it), so the
+  player model no longer swings its arm in third person on mine/attack/place.
+  User said "we will fix it later sometime" — i.e. revisit, not abandon.
+- **The shared `AnimatedComp` infrastructure is left in place, inert**, for that
+  future follow-up: fields `Punching`/`PunchO`/`PunchN` in `EntityComponents.h`,
+  the per-tick advance in `AnimatedComp_Update`, the render-time layering at the
+  end of `AnimatedComp_GetCurrent`, and `AnimatedComp_StartPunch` itself
+  (`EntityComponents.c`) are all still there and compile clean, but nothing in the
+  codebase calls `AnimatedComp_StartPunch` anymore, so `PunchN` never leaves 0 and
+  the GetCurrent block is permanently a no-op until something calls it again.
+  Original design notes (sign convention, timing, why it was layered after
+  `CalcHumanAnim`) are preserved in git history (commit `aa87aae`) for when this
+  is picked back up.
+- **Checked the "zombies have it when attacking" claim**: there is no separate
+  attack/punch-swing mechanism for mobs anywhere in `SurvivalTest.c`. Mobs only
+  ever drive `AnimatedComp` through the normal walk-cycle path (`Mob_Tick` calls
+  `AnimatedComp_Update`/`AnimatedComp_GetCurrent` just like players, just the
+  movement-distance-based `Swing`, not a discrete punch), and `Mob_DoAttack`
+  (line ~1783) deals damage on contact with no extra animation call — it doesn't
+  even call `AnimatedComp_StartPunch` (nothing does, post-removal). What likely
+  looks like an "attack swing" is zombies' arms naturally swinging from the walk
+  cycle as they lunge/close distance to hit the player, not a dedicated punch
+  animation. Worth keeping in mind for the future redo: if a real mob punch is
+  wanted too, `Mob_DoAttack`'s hit branch (where it currently just calls
+  `Mob_Hurt`/damages the player) is the right place to also call
+  `AnimatedComp_StartPunch(&m->Base.Anim)`.
 
 ### HUD
 - **Score/Arrows labels now scale with the hotbar** (`0b1df4e`, `src/Screens.c`).
