@@ -621,7 +621,10 @@ static int HotbarWidget_PointerDown(void* widget, int id, int x, int y) {
 
 		if (Gui_TouchUI) {
 			if (i == HOTBAR_MAX_INDEX) {
-				InventoryScreen_Show(); return TOUCH_TYPE_GUI;
+				/* Routed through SurvivalInvScreen_Show so survival rules apply: */
+				/*  faithful c0.30-s opens nothing, Enhanced opens the paperdoll */
+				/*  screen, and non-survival opens the normal block-grid inventory. */
+				SurvivalInvScreen_Show(); return TOUCH_TYPE_GUI;
 			} else {
 				w->touchId[i]   = id;
 				w->touchTime[i] = 0;

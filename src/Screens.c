@@ -2716,9 +2716,12 @@ static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
 
 void SurvivalInvScreen_Show(void) {
 	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
-	/* The paperdoll screen is an Enhanced-only extra; Classic survival (and */
-	/*  non-survival) use the authentic flat block-grid inventory instead. */
-	if (!SurvivalTest_Enabled || !SurvivalTest_Enhanced) { InventoryScreen_Show(); return; }
+	/* Non-survival modes use the normal creative block-grid inventory. */
+	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
+	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
+	/*  fixed hotbar - so opening the inventory does nothing at all. The paperdoll */
+	/*  storage screen below is an Enhanced-only extra, not authentic to c0.30-s. */
+	if (!SurvivalTest_Enhanced) return;
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &SurvivalInvScreen_VTABLE;
