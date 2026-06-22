@@ -768,18 +768,29 @@ static void SurvivalTest_Explode(Vec3 center, int radius);
 *----------------------------------------------------------TNT-------------------------------------------------------------*
 *#########################################################################################################################*/
 /* PrimedTnt.java: mining a placed TNT block (TNTPhysics.onBreak, since */
-/*  TNTBlock.getDropCount()==0) doesn't explode it instantly - it ignites a */
-/*  fuse, then explodes life=40 ticks (2 seconds @ 20 TPS) later. Placing */
-/*  TNT does nothing special (TNTPhysics.onPlace is a no-op); that's only */
-/*  BlockPhysics.c's separate, older classic-multiplayer "place TNT to */
-/*  explode instantly" feature, which Physics_HandleTnt now skips while in */
-/*  survival mode. PrimedTnt is really a separate flashing/falling entity in */
-/*  the original, but the block is simply left in the world ticking down */
-/*  here instead, to avoid needing a whole new entity-rendering path. */
+/*  TNTBlock.getDropCount()==0) doesn't explode it instantly - it removes the */
+/*  block and spawns a PrimedTnt *entity* in its place that pops up off the */
+/*  ground, falls/bounces under gravity, smokes and flashes for life=40 ticks */
+/*  (2 seconds @ 20 TPS), then explodes. Placing TNT does nothing special */
+/*  (TNTPhysics.onPlace is a no-op); that's only BlockPhysics.c's separate, */
+/*  older classic-multiplayer "place TNT to explode instantly" feature, which */
+/*  Physics_HandleTnt now skips while in survival mode. */
+/* Like drops/arrows/mobs, the entity is simulated by hand in a fixed array */
+/*  (never a real Entities.List[] entry) and rendered as a textured cube. */
 #define TNT_MAX        8
-#define TNT_FUSE_TICKS 40 /* PrimedTnt's default life */
+#define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
+#define TNT_SIZE       0.98f /* PrimedTnt.setSize(0.98, 0.98) */
+#define TNT_HALF       (TNT_SIZE * 0.5f)
+#define TNT_HEIGHT_OFF (TNT_SIZE * 0.5f) /* heightOffset = bbHeight/2; pos is the centre */
 
-struct TntFuse { IVec3 coords; int ticksLeft; cc_bool active; };
+struct TntFuse {
+	Vec3 pos;       /* entity centre (PrimedTnt's x/y/z) */
+	Vec3 prevPos;   /* centre as of the previous tick - render interpolates by t */
+	Vec3 vel;       /* per-tick displacement, exactly as in PrimedTnt.tick() (xd/yd/zd) */
+	int  ticksLeft; /* PrimedTnt.life */
+	cc_bool active;
+	cc_bool onGround;
+};
 static struct TntFuse st_tnt[TNT_MAX];
 
 /* SmokeParticle.java: each lit TNT puffs out one smoke particle per tick that */
@@ -853,65 +864,132 @@ static void SurvivalTest_TickTntSmoke(void) {
 	}
 }
 
-/* PrimedTnt.hurt(): hitting an already-lit TNT (mining it again) destroys it */
-/*  without exploding, dropping a normal pickup item instead - so mining is a */
-/*  way to "defuse" TNT, at the cost of losing it back into your inventory. */
-static cc_bool SurvivalTest_DefuseTnt(IVec3 coords) {
-	int i;
-	for (i = 0; i < TNT_MAX; i++) {
-		if (!st_tnt[i].active) continue;
-		if (st_tnt[i].coords.x != coords.x || st_tnt[i].coords.y != coords.y || st_tnt[i].coords.z != coords.z) continue;
-
-		st_tnt[i].active = false;
-		SurvivalTest_SpawnDrop(coords, BLOCK_TNT);
-		return true;
-	}
-	return false;
-}
-
 static void SurvivalTest_ArmTnt(IVec3 coords) {
+	struct TntFuse* tnt;
+	float ang;
 	int i, slot = -1;
-	if (SurvivalTest_DefuseTnt(coords)) return;
 
 	for (i = 0; i < TNT_MAX; i++) {
 		if (!st_tnt[i].active) { slot = i; break; }
 	}
 	if (slot < 0) return; /* no free slot - block just vanishes, untracked */
+	tnt = &st_tnt[slot];
 
-	st_tnt[slot].coords    = coords;
-	st_tnt[slot].ticksLeft = TNT_FUSE_TICKS;
-	st_tnt[slot].active    = true;
+	/* InputHandler_DeleteBlock already cleared the block to air; unlike before */
+	/*  we leave it that way - the PrimedTnt entity now stands in for the block, */
+	/*  drawn as its own cube (see SurvivalTest_RenderTntCubes). */
+	tnt->pos.x = coords.x + 0.5f;
+	tnt->pos.y = coords.y + 0.5f;
+	tnt->pos.z = coords.z + 0.5f;
+	tnt->prevPos = tnt->pos;
 
-	/* InputHandler_DeleteBlock already cleared this to air - restore it */
-	/*  without raising BlockChanged, which would otherwise make */
-	/*  SurvivalTest_BlockChanged think the player just placed it. */
-	Game_UpdateBlock(coords.x, coords.y, coords.z, BLOCK_TNT);
+	/* PrimedTnt ctor: a small upward pop (yd=0.2) with a tiny random horizontal */
+	/*  drift. Note the original's xd/zd use sin/cos of an angle that's ALREADY */
+	/*  in radians but then multiplied by PI/180 again - a Notch double-convert */
+	/*  that makes the drift minuscule; reproduced verbatim for fidelity. */
+	ang = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
+	tnt->vel.x = -Math_SinF(ang * MATH_DEG2RAD) * 0.02f;
+	tnt->vel.y = 0.2f;
+	tnt->vel.z = -Math_CosF(ang * MATH_DEG2RAD) * 0.02f;
+
+	tnt->ticksLeft = TNT_FUSE_TICKS;
+	tnt->onGround  = false;
+	tnt->active    = true;
+}
+
+/* PrimedTnt.hurt() when the attacker is the Player: the lit TNT is removed */
+/*  without exploding and drops back into a pickup item - so meleeing a primed */
+/*  TNT "defuses" it (at the cost of losing it to the ground). Routed through */
+/*  the melee ray-cast (SurvivalTest_TryAttackMob), since there's no longer a */
+/*  block to mine. Returns true if a primed TNT was hit and defused. */
+static cc_bool SurvivalTest_TryDefuseTnt(Vec3 eyePos, Vec3 dir, float reach) {
+	struct TntFuse* tnt;
+	Vec3 invDir, min, max;
+	float t0, t1, bestT = 1.0e30f;
+	int i, best = -1;
+
+	invDir.x = Math_SafeDiv(1.0f, dir.x);
+	invDir.y = Math_SafeDiv(1.0f, dir.y);
+	invDir.z = Math_SafeDiv(1.0f, dir.z);
+
+	for (i = 0; i < TNT_MAX; i++) {
+		tnt = &st_tnt[i];
+		if (!tnt->active) continue;
+
+		min.x = tnt->pos.x - TNT_HALF; max.x = tnt->pos.x + TNT_HALF;
+		min.y = tnt->pos.y - TNT_HALF; max.y = tnt->pos.y + TNT_HALF;
+		min.z = tnt->pos.z - TNT_HALF; max.z = tnt->pos.z + TNT_HALF;
+		if (!Intersection_RayIntersectsBox(eyePos, invDir, min, max, &t0, &t1)) continue;
+		if (t0 > reach) continue;
+		if (t0 < bestT) { bestT = t0; best = i; }
+	}
+	if (best < 0) return false;
+
+	tnt = &st_tnt[best];
+	tnt->active = false;
+	SurvivalTest_SpawnDropAt(tnt->pos, BLOCK_TNT);
+	return true;
+}
+
+/* PrimedTnt.tick()'s physics: gravity, a swept move with real block collision, */
+/*  air drag, and a damped bounce when it lands. vel stays the *intended* */
+/*  per-tick velocity (as in Java, where move() never touches xd/yd/zd) so the */
+/*  yd*=-0.5 bounce uses the full impact speed, not the collision-clamped one. */
+static void SurvivalTest_TntPhysics(struct TntFuse* tnt) {
+	struct Entity scratch;
+	struct CollisionsComp coll;
+
+	tnt->vel.y -= 0.04f;
+
+	Mem_Set(&scratch, 0, sizeof(scratch));
+	scratch.Position.x = tnt->pos.x;
+	scratch.Position.y = tnt->pos.y - TNT_HEIGHT_OFF; /* CC Position is the bbox feet */
+	scratch.Position.z = tnt->pos.z;
+	Vec3_Set(scratch.Size, TNT_SIZE, TNT_SIZE, TNT_SIZE);
+	scratch.OnGround   = tnt->onGround;
+	scratch.Velocity   = tnt->vel; /* already a per-tick displacement */
+
+	coll.Entity   = &scratch;
+	coll.StepSize = 0.0f;
+	Collisions_MoveAndWallSlide(&coll);
+	Vec3_AddBy(&scratch.Position, &scratch.Velocity);
+
+	tnt->pos.x   = scratch.Position.x;
+	tnt->pos.y   = scratch.Position.y + TNT_HEIGHT_OFF;
+	tnt->pos.z   = scratch.Position.z;
+	tnt->onGround = scratch.OnGround;
+
+	tnt->vel.x *= 0.98f;
+	tnt->vel.y *= 0.98f;
+	tnt->vel.z *= 0.98f;
+	if (tnt->onGround) {
+		tnt->vel.x *= 0.7f;
+		tnt->vel.z *= 0.7f;
+		tnt->vel.y *= -0.5f;
+	}
 }
 
 static void SurvivalTest_TickTnt(void) {
+	struct TntFuse* tnt;
 	int i;
-	Vec3 center;
 
 	SurvivalTest_TickTntSmoke();
 
 	for (i = 0; i < TNT_MAX; i++) {
-		if (!st_tnt[i].active) continue;
+		tnt = &st_tnt[i];
+		if (!tnt->active) continue;
+
+		tnt->prevPos = tnt->pos;
+		SurvivalTest_TntPhysics(tnt);
 
 		/* PrimedTnt.tick(): one smoke puff per remaining fuse tick, at the */
-		/*  entity centre + 0.6 (i.e. just above the top of the block). */
-		SurvivalTest_SpawnTntSmoke(st_tnt[i].coords.x + 0.5f,
-								   st_tnt[i].coords.y + 1.1f,
-								   st_tnt[i].coords.z + 0.5f);
+		/*  entity centre + 0.6 (drifts up off the top of the cube). */
+		SurvivalTest_SpawnTntSmoke(tnt->pos.x, tnt->pos.y + 0.6f, tnt->pos.z);
 
-		if (--st_tnt[i].ticksLeft > 0) continue;
+		if (--tnt->ticksLeft > 0) continue;
 
-		st_tnt[i].active = false;
-		Game_UpdateBlock(st_tnt[i].coords.x, st_tnt[i].coords.y, st_tnt[i].coords.z, BLOCK_AIR);
-
-		center.x = st_tnt[i].coords.x + 0.5f;
-		center.y = st_tnt[i].coords.y + 0.5f;
-		center.z = st_tnt[i].coords.z + 0.5f;
-		SurvivalTest_Explode(center, EXPLOSION_RADIUS);
+		tnt->active = false;
+		SurvivalTest_Explode(tnt->pos, EXPLOSION_RADIUS);
 	}
 }
 
@@ -926,22 +1004,27 @@ static float TntFuse_GlowAlpha(int ticksLeft) {
 	return alpha;
 }
 
-/* Untextured white glow shell, drawn additively over a lit TNT block - same */
+/* Untextured white glow shell, drawn additively over the lit TNT cube - same */
 /*  technique as the dropped-item twinkle (DropItem_BuildGlowCube), just an */
 /*  axis-aligned full block instead of a small spinning item cube. */
 #define TNT_GLOW_VERTICES_PER_BLOCK 24
 #define TNT_GLOW_MAX_VERTICES (TNT_MAX * TNT_GLOW_VERTICES_PER_BLOCK)
 static GfxResourceID st_tntGlowVB;
 
+/* The textured cube faces of the PrimedTnt entity itself (6 faces * 4 verts). */
+#define TNT_CUBE_VERTICES_PER_BLOCK 24
+#define TNT_CUBE_MAX_VERTICES (TNT_MAX * TNT_CUBE_VERTICES_PER_BLOCK)
+static GfxResourceID st_tntCubeVB;
+
 /* One camera-facing quad per smoke puff, textured from particles.png. */
 #define TNT_SMOKE_MAX_VERTICES (TNT_SMOKE_MAX * 4)
 static GfxResourceID st_tntSmokeVB;
 
-static void TntFuse_BuildGlowCube(IVec3 coords, PackedCol col, struct VertexColoured** vertices) {
+static void TntFuse_BuildGlowCube(float ox, float oy, float oz, PackedCol col, struct VertexColoured** vertices) {
 	struct VertexColoured* v = *vertices;
-	float x0 = (float)coords.x, x1 = x0 + 1.0f;
-	float y0 = (float)coords.y, y1 = y0 + 1.0f;
-	float z0 = (float)coords.z, z1 = z0 + 1.0f;
+	float x0 = ox, x1 = ox + 1.0f;
+	float y0 = oy, y1 = oy + 1.0f;
+	float z0 = oz, z1 = oz + 1.0f;
 
 	#define TNT_GLOW_V(px, py, pz) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v++;
 	TNT_GLOW_V(x0,y0,z0) TNT_GLOW_V(x1,y0,z0) TNT_GLOW_V(x1,y0,z1) TNT_GLOW_V(x0,y0,z1) /* bottom */
@@ -954,11 +1037,96 @@ static void TntFuse_BuildGlowCube(IVec3 coords, PackedCol col, struct VertexColo
 	*vertices = v;
 }
 
-/* The flashing white overlay - one additive shell per lit TNT block. */
-static void SurvivalTest_RenderTntGlow(void) {
+/* Appends one textured face of the PrimedTnt cube (unit cube with min corner */
+/*  at ox,oy,oz), tinted by a single uniform brightness - matching the original */
+/*  model.renderAll(x-0.5, y-0.5, z-0.5, brightness), which does no per-face */
+/*  shading. The four corners per face are wound so the tile sits upright. */
+static void TntCube_BuildFace(float ox, float oy, float oz, int face,
+							   TextureRec r, PackedCol col, struct VertexTextured** vertices) {
+	struct VertexTextured* v = *vertices;
+	float x0 = ox, x1 = ox + 1.0f;
+	float y0 = oy, y1 = oy + 1.0f;
+	float z0 = oz, z1 = oz + 1.0f;
+
+	#define TNT_TV(px, py, pz, uu, vv) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v->U = (uu); v->V = (vv); v++;
+	switch (face) {
+	case FACE_XMIN:
+		TNT_TV(x0,y1,z1, r.u1,r.v1) TNT_TV(x0,y0,z1, r.u1,r.v2) TNT_TV(x0,y0,z0, r.u2,r.v2) TNT_TV(x0,y1,z0, r.u2,r.v1) break;
+	case FACE_XMAX:
+		TNT_TV(x1,y1,z0, r.u1,r.v1) TNT_TV(x1,y0,z0, r.u1,r.v2) TNT_TV(x1,y0,z1, r.u2,r.v2) TNT_TV(x1,y1,z1, r.u2,r.v1) break;
+	case FACE_ZMIN:
+		TNT_TV(x0,y1,z0, r.u1,r.v1) TNT_TV(x0,y0,z0, r.u1,r.v2) TNT_TV(x1,y0,z0, r.u2,r.v2) TNT_TV(x1,y1,z0, r.u2,r.v1) break;
+	case FACE_ZMAX:
+		TNT_TV(x1,y1,z1, r.u1,r.v1) TNT_TV(x1,y0,z1, r.u1,r.v2) TNT_TV(x0,y0,z1, r.u2,r.v2) TNT_TV(x0,y1,z1, r.u2,r.v1) break;
+	case FACE_YMIN:
+		TNT_TV(x0,y0,z1, r.u1,r.v1) TNT_TV(x1,y0,z1, r.u2,r.v1) TNT_TV(x1,y0,z0, r.u2,r.v2) TNT_TV(x0,y0,z0, r.u1,r.v2) break;
+	case FACE_YMAX:
+		TNT_TV(x0,y1,z0, r.u1,r.v1) TNT_TV(x1,y1,z0, r.u2,r.v1) TNT_TV(x1,y1,z1, r.u2,r.v2) TNT_TV(x0,y1,z1, r.u1,r.v2) break;
+	}
+	#undef TNT_TV
+	*vertices = v;
+}
+
+/* Draws the falling/bouncing TNT cubes themselves. Faces are batched by the */
+/*  1D atlas their texture lives in (TNT's top/bottom/side tiles can land in */
+/*  different atlases), one lock+draw per atlas - the same scheme the drops and */
+/*  the world builder use. */
+static void SurvivalTest_RenderTntCubes(float t) {
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	struct TntFuse* tnt;
+	TextureLoc loc;
+	TextureRec rec;
+	PackedCol col;
+	Vec3 pos;
+	int i, f, atlas, idx, count;
+	cc_bool any = false;
+
+	for (i = 0; i < TNT_MAX; i++) { if (st_tnt[i].active) { any = true; break; } }
+	if (!any) return;
+
+	if (!st_tntCubeVB) {
+		st_tntCubeVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, TNT_CUBE_MAX_VERTICES);
+		if (!st_tntCubeVB) return;
+	}
+
+	Gfx_SetAlphaTest(true);
+	/* Vertex format set before locking - see SurvivalTest_RenderDropBlocks for why. */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	for (atlas = 0; atlas < Atlas1D.Count; atlas++) {
+		count = 0;
+		data  = (struct VertexTextured*)Gfx_LockDynamicVb(st_tntCubeVB, VERTEX_FORMAT_TEXTURED, TNT_CUBE_MAX_VERTICES);
+		ptr   = data;
+		for (i = 0; i < TNT_MAX; i++) {
+			tnt = &st_tnt[i];
+			if (!tnt->active) continue;
+
+			Vec3_Lerp(&pos, &tnt->prevPos, &tnt->pos, t);
+			col = DropItem_WorldColor(&pos);
+			for (f = 0; f < FACE_COUNT; f++) {
+				loc = Block_Tex(BLOCK_TNT, f);
+				if (Atlas1D_Index(loc) != atlas) continue;
+				rec = Atlas1D_TexRec(loc, 1, &idx);
+				TntCube_BuildFace(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f, f, rec, col, &ptr);
+				count += 4;
+			}
+		}
+		Gfx_UnlockDynamicVb(st_tntCubeVB);
+		if (count) {
+			Atlas1D_Bind(atlas);
+			Gfx_DrawVb_IndexedTris(count);
+		}
+	}
+	Gfx_SetAlphaTest(false);
+}
+
+/* The flashing white overlay - one additive shell per lit TNT cube. */
+static void SurvivalTest_RenderTntGlow(float t) {
 	struct VertexColoured* data;
 	struct VertexColoured* ptr;
+	struct TntFuse* tnt;
 	PackedCol col;
+	Vec3 pos;
 	int i, count = 0;
 	cc_bool any = false;
 
@@ -975,10 +1143,12 @@ static void SurvivalTest_RenderTntGlow(void) {
 	data = (struct VertexColoured*)Gfx_LockDynamicVb(st_tntGlowVB, VERTEX_FORMAT_COLOURED, TNT_GLOW_MAX_VERTICES);
 	ptr  = data;
 	for (i = 0; i < TNT_MAX; i++) {
-		if (!st_tnt[i].active) continue;
+		tnt = &st_tnt[i];
+		if (!tnt->active) continue;
 
-		col = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * TntFuse_GlowAlpha(st_tnt[i].ticksLeft)));
-		TntFuse_BuildGlowCube(st_tnt[i].coords, col, &ptr);
+		Vec3_Lerp(&pos, &tnt->prevPos, &tnt->pos, t);
+		col = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * TntFuse_GlowAlpha(tnt->ticksLeft)));
+		TntFuse_BuildGlowCube(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f, col, &ptr);
 		count += TNT_GLOW_VERTICES_PER_BLOCK;
 	}
 	Gfx_UnlockDynamicVb(st_tntGlowVB);
@@ -1059,9 +1229,10 @@ static void SurvivalTest_RenderTntSmoke(float t) {
 
 void SurvivalTest_RenderTnt(float delta, float t) {
 	if (!SurvivalTest_Enabled) return;
-	SurvivalTest_RenderTntGlow();
+	SurvivalTest_RenderTntCubes(t);  /* the opaque cube first... */
+	SurvivalTest_RenderTntGlow(t);   /* ...then the additive flash over it */
 	/* Smoke renders independently of live fuses: puffs spawned just before the */
-	/*  blast keep drifting and fading for a moment after the block is gone. */
+	/*  blast keep drifting and fading for a moment after the entity is gone. */
 	SurvivalTest_RenderTntSmoke(t);
 }
 
@@ -2064,6 +2235,15 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 		if (!Intersection_RayIntersectsRotatedBox(eyePos, dir, &m->Base, &t0, &t1)) continue;
 		if (t0 > p->ReachDistance) continue;
 		if (t0 < bestT) { bestT = t0; best = m; }
+	}
+
+	/* PrimedTnt is pickable too (PrimedTnt.isPickable()), so a melee swing can */
+	/*  hit a lit TNT and defuse it (hurt() with a Player attacker) instead of a */
+	/*  mob. Only if it's closer than the best mob though (cap the reach at that */
+	/*  mob's distance), so whichever the crosshair actually lands on wins. */
+	if (SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
+		HeldBlockRenderer_ClickAnim(true);
+		return true;
 	}
 	if (!best) return false;
 
@@ -3136,6 +3316,7 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
+	Gfx_DeleteDynamicVb(&st_tntCubeVB);
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 	if (!Gfx.ManagedTextures) {
@@ -3171,6 +3352,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);
+	Gfx_DeleteDynamicVb(&st_tntCubeVB);
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 }
