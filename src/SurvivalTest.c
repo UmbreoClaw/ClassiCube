@@ -131,8 +131,17 @@ struct DropItem {
 	float rot0;      /* random initial spin angle (degrees) */
 	cc_bool active;
 	cc_bool onGround; /* set by DropPhysics's collision pass, drives the Item.tick() ground damping below */
+
+	/* TakeEntityAnim: once collected, the item isn't removed immediately - it */
+	/*  eases towards the player over a few ticks first (the classic "zip into */
+	/*  you" pickup effect), instead of just vanishing in place. */
+	cc_bool pickingUp;
+	float   pickupTime;  /* seconds into the pickup-fly animation */
+	Vec3    pickupFrom;  /* position captured the instant pickup started */
 };
 static struct DropItem st_drops[DROP_MAX];
+/* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
+#define DROP_PICKUP_ANIM_SECS (3.0f / 20.0f)
 
 /* Vertex buffer for the textured item cubes */
 #define ITEM_VERTICES_PER_DROP 24
@@ -427,16 +436,36 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	if (!AABB_Intersects(&pbb, &ibb)) return;
 
 	SurvivalTest_AddBlock(d->block);
-	d->active = false;
+	/* Item.playerTouch(): addResource() happens immediately, but the item */
+	/*  entity itself isn't removed until the TakeEntityAnim finishes - start */
+	/*  the fly-to-player animation instead of vanishing right away. */
+	d->pickingUp  = true;
+	d->pickupTime = 0.0f;
+	d->pickupFrom = d->position;
 }
 
 static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 	struct DropItem* d;
+	float distance;
 	int i;
 
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
 		if (!d->active) continue;
+
+		if (d->pickingUp) {
+			/* TakeEntityAnim.tick(): distance = (time/3)^2, eased towards the */
+			/*  player's current position every tick, removed once time >= 3. */
+			d->pickupTime += delta;
+			if (d->pickupTime >= DROP_PICKUP_ANIM_SECS) { d->active = false; continue; }
+
+			distance = d->pickupTime / DROP_PICKUP_ANIM_SECS;
+			distance = distance * distance;
+			d->position.x = d->pickupFrom.x + (pe->Position.x - d->pickupFrom.x) * distance;
+			d->position.y = d->pickupFrom.y + (pe->Position.y - d->pickupFrom.y) * distance;
+			d->position.z = d->pickupFrom.z + (pe->Position.z - d->pickupFrom.z) * distance;
+			continue;
+		}
 
 		d->age += delta;
 		SurvivalTest_DropPhysics(d, delta);
@@ -1610,6 +1639,19 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		if (e->Position.y > m->fallPeakY) m->fallPeakY = e->Position.y;
 	}
 
+	/* Mob.render(): once dead, the model rolls onto its side over the death */
+	/*  window - (deathTicks/20)^2*800 degrees, capped at 90 (a fast keel-over */
+	/*  that eases to a stop), via the same RotZ roll Entity_GetTransform */
+	/*  already applies for the paperdoll. Reset to upright while alive in */
+	/*  case a future change ever lets a mob's health recover after dying. */
+	if (m->health <= 0) {
+		float deathT = (float)m->deathTicks;
+		float roll   = deathT * deathT * 2.0f; /* (deathT/20)^2 * 800, simplified */
+		e->next.rotZ = min(roll, 90.0f);
+	} else {
+		e->next.rotZ = 0.0f;
+	}
+
 	/* Snapshot this tick's final, fully-resolved state as the interpolation */
 	/*  target - RenderMobs blends prev->next by the partial-tick t every frame. */
 	e->next.pos   = e->Position;
@@ -1876,6 +1918,9 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 
 struct ArrowEntity {
 	Vec3 pos;        /* feet-equivalent anchor - same convention as Entity_GetBounds/AABB_Make */
+	Vec3 prevPos;    /* pos as of the end of the previous tick - RenderArrows blends pos/prevPos */
+	                 /*  by the partial-tick t, exactly like Arrow.render()'s xo/x interpolation, */
+	                 /*  so arrows move smoothly every render frame instead of jumping once per tick. */
 	Vec3 velocity;
 	Vec3 facing;     /* unit direction the arrow visually points; frozen once stuck in a block */
 	float gravity;   /* Arrow.java: gravity = 1/force, scales the per-tick fall acceleration below */
@@ -1922,6 +1967,7 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 	a->pos.x = pos.x - dir.x * 0.2f;
 	a->pos.y = pos.y - dir.y * 0.2f;
 	a->pos.z = pos.z - dir.z * 0.2f;
+	a->prevPos = a->pos; /* seed so the first frame doesn't lerp in from a zeroed-out (0,0,0) */
 
 	a->velocity.x = dir.x * force;
 	a->velocity.y = dir.y * force;
@@ -2031,6 +2077,10 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 	cc_bool collided = false;
 
 	a->age++;
+	/* Snapshot this tick's starting position as the interpolation source - */
+	/*  RenderArrows blends prevPos->pos by the partial-tick t every frame, */
+	/*  same as Arrow.render()'s xo/x blending in the decompiled source. */
+	a->prevPos = a->pos;
 
 	if (a->hasHit) {
 		a->stickTime++;
@@ -2171,7 +2221,7 @@ static void SurvivalTest_EnsureArrowTexture(void) {
 /*  x=-8..8 rotated 0/90/180/270 around the shaft axis, all scaled by */
 /*  0.05625) are copied directly from the decompiled render() though, since */
 /*  that part has no convention mismatch to resolve. */
-static void Arrow_BuildVertices(struct ArrowEntity* a, PackedCol col, struct VertexTextured** vertices) {
+static void Arrow_BuildVertices(struct ArrowEntity* a, Vec3 renderPos, PackedCol col, struct VertexTextured** vertices) {
 	struct VertexTextured* v = *vertices;
 	Vec3 F, ref, right, up, crossA, crossB, center;
 	const float s = 0.05625f;
@@ -2198,7 +2248,7 @@ static void Arrow_BuildVertices(struct ArrowEntity* a, PackedCol col, struct Ver
 	crossA.x = (right.x + up.x) * c45; crossA.y = (right.y + up.y) * c45; crossA.z = (right.z + up.z) * c45;
 	crossB.x = (up.x - right.x) * c45; crossB.y = (up.y - right.y) * c45; crossB.z = (up.z - right.z) * c45;
 
-	center   = a->pos;
+	center   = renderPos;
 	center.y -= 0.125f; /* render() translates heightOffset/2 (=0.25/2) below the tracked position */
 
 	var2 = 0.5f;                            /* shaft U width (16 of 32 texels) */
@@ -2233,6 +2283,7 @@ void SurvivalTest_RenderArrows(float delta, float t) {
 	struct VertexTextured* data;
 	struct VertexTextured* ptr;
 	PackedCol col;
+	Vec3 renderPos;
 	int i, count = 0;
 	cc_bool any = false;
 
@@ -2257,8 +2308,11 @@ void SurvivalTest_RenderArrows(float delta, float t) {
 		a = &st_arrows[i];
 		if (!a->active) continue;
 
-		col = Lighting.Color(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z));
-		Arrow_BuildVertices(a, col, &ptr);
+		/* Blend prevPos->pos by the partial-tick t - see the comment on */
+		/*  ArrowEntity.prevPos above for why this is needed. */
+		Vec3_Lerp(&renderPos, &a->prevPos, &a->pos, t);
+		col = Lighting.Color(Math_Floor(renderPos.x), Math_Floor(renderPos.y), Math_Floor(renderPos.z));
+		Arrow_BuildVertices(a, renderPos, col, &ptr);
 		count += ARROW_VERTICES_PER_ARROW;
 	}
 	Gfx_UnlockDynamicVb(st_arrowVB);
