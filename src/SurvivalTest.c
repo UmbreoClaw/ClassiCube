@@ -1248,7 +1248,8 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 /*  Entity to reuse the model/animation/collision systems. */
 #define MOB_MAX            32
 #define MOB_MAX_HEALTH     20  /* Mob.java's default health - same scale as the player's */
-#define MOB_INVINC_TICKS   20  /* simplified flat invincibility window (Mob.invulnerableDuration) */
+#define MOB_INVINC_TICKS   20  /* Mob.invulnerableDuration - the *full* window; equal-damage hits */
+                               /*  are actually only blocked for half of it (see Mob_Hurt) */
 #define MOB_AIR_TICKS     300  /* 15 seconds @ 20 TPS, matches Mob.airSupply */
 
 enum MobType {
@@ -1288,7 +1289,8 @@ struct Mob {
 	cc_bool  jumping;
 
 	int health;
-	int invincTicks; /* simplified single-threshold version of Mob.invulnerableTime */
+	int lastHealth;  /* health snapshot when the invuln window last opened (Mob.lastHealth) */
+	int invincTicks; /* Mob.invulnerableTime - counts down from invulnerableDuration (20) */
 	int hurtTicks;    /* red hit-flash timer, purely cosmetic (Mob.hurtTime) */
 	int attackDelay;  /* cooldown before this mob can attack again (BasicAttackAI.attackDelay) */
 	int deathTicks;   /* ticks since health reached 0 - removed once this exceeds 20 */
@@ -1541,7 +1543,6 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	int woolCount, i;
 
 	if (m->health <= 0)        return;
-	if (m->invincTicks > 0)    return;
 	if (damage <= 0)           return;
 
 	/* Sheep.hurt(): a Player punch against a still-furred sheep shears it */
@@ -1562,12 +1563,27 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 		return;
 	}
 
-	m->health      -= damage;
-	m->invincTicks  = MOB_INVINC_TICKS;
-	m->hurtTicks    = 10;
+	/* ai.hurt(cause, damage): aggro + the despawn-timer reset happen on every */
+	/*  hit, even one fully absorbed by the invulnerability window below. */
+	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) m->hasTarget = true;
 	m->noActionTime = 0; /* BasicAI.hurt: being hurt counts as "doing something" */
 
-	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) m->hasTarget = true;
+	/* Mob.hurt()'s dual-threshold invulnerability. While invulnerableTime is */
+	/*  still in the FIRST half of its 20-tick window, a follow-up hit is */
+	/*  ignored unless it's strictly stronger than the one that opened the */
+	/*  window (and then only the extra damage lands). Once past the halfway */
+	/*  point a fresh full hit lands and re-arms the window. The net effect is */
+	/*  that equal-damage hits register at most every 10 ticks (0.5s) - half */
+	/*  the old flat 1s block - so rapid clicking actually lands repeat hits. */
+	if (m->invincTicks > MOB_INVINC_TICKS / 2) {
+		if (m->lastHealth - damage >= m->health) return; /* absorbed */
+		m->health = m->lastHealth - damage;
+	} else {
+		m->lastHealth  = m->health;
+		m->invincTicks = MOB_INVINC_TICKS;
+		m->health     -= damage;
+		m->hurtTicks   = 10;
+	}
 
 	if (attacker) {
 		dx   = attacker->Position.x - e->Position.x;
