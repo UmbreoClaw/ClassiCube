@@ -15,6 +15,30 @@ touched this file, `3394a81`) and `0b1df4e`. All in `src/SurvivalTest.c` unless
 noted, all cross-referenced to the decompiled Java, all built with `-Werror`.
 Newest first.
 
+### Player model attack/punch swing (non-authentic cosmetic)
+- **Third-person arm swing on mine/attack/place** (`src/EntityComponents.c/.h`,
+  `src/HeldBlockRenderer.c`). c0.30-s has no model swing at all (genuine
+  `HumanoidModel.setRotationAngles` only does walk + idle; Survival Test also has
+  no third person), so this is a deliberate Enhanced-style nicety the user asked
+  for, visible only in F5. Added a one-shot punch to the shared `AnimatedComp`:
+  fields `Punching` + `PunchO/PunchN` (linear 0..1 progress, per-tick snapshots),
+  advanced ~6 ticks (0.3s) in `AnimatedComp_Update`, and applied at the very END
+  of `AnimatedComp_GetCurrent` (AFTER `CalcHumanAnim`, which otherwise overwrites
+  `RightArmX/Z` for human models) as `RightArmX += sin(progress*PI)*85deg` (+ a
+  small Z splay). **Sign note:** positive arm X = forward/up swing because
+  `Model_RotateX` resolves to a *standard* +angle rotation (it negates the angle
+  twice — `Math_CosF(-a)` in the setup and the macro's own form cancel out); the
+  arm tip at (0,-L,0) rotates toward -Z = the model's facing direction. If it ever
+  looks like it swings backward, flip the two `+=` to `-=`.
+  - Triggered from `HeldBlockRenderer_ClickAnim` (one place that already fires on
+    mining clicks ~4/s while held, mob attacks, and block placement), gated on
+    `SurvivalTest_Enabled` so **creative's third-person model is untouched**.
+    `StartPunch` ignores re-triggers while a swing is mid-flight, so holding to
+    mine yields clean back-to-back full swings instead of a frozen half-swing.
+  - Inert for all other entities/creative: `PunchN` only ever leaves 0 via
+    `StartPunch`, which is only called in survival, so the new GetCurrent block is
+    a no-op everywhere else.
+
 ### HUD
 - **Score/Arrows labels now scale with the hotbar** (`0b1df4e`, `src/Screens.c`).
   They were `TextWidget`s rasterised at a fixed 16px font and drawn at native

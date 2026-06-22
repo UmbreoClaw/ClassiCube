@@ -20,11 +20,20 @@ struct AnimatedComp {
 
 	float LeftLegX, LeftLegZ, RightLegX, RightLegZ;
 	float LeftArmX, LeftArmZ, RightArmX, RightArmZ;
+
+	/* Attack/punch arm swing (a one-shot forward swing of the main arm, layered */
+	/*  on top of the walk/idle pose). PunchN is the linear 0..1 progress this */
+	/*  tick, PunchO the previous tick's (render interpolates between them). */
+	cc_bool Punching;
+	float PunchO, PunchN;
 };
 
 void AnimatedComp_Init(struct AnimatedComp* anim);
 void AnimatedComp_Update(struct Entity* entity, Vec3 oldPos, Vec3 newPos, float delta);
 void AnimatedComp_GetCurrent(struct Entity* entity, float t);
+/* Starts a one-shot attack/punch arm swing (ignored if one is already playing, */
+/*  so it finishes cleanly). Visible only on the rendered model, e.g. 3rd person. */
+void AnimatedComp_StartPunch(struct AnimatedComp* anim);
 
 /* Entity component that performs tilt animation depending on movement speed and time */
 struct TiltComp {

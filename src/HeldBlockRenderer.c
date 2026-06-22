@@ -9,6 +9,7 @@
 #include "Entity.h"
 #include "Model.h"
 #include "Options.h"
+#include "SurvivalTest.h"
 
 cc_bool HeldBlockRenderer_Show;
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_REDUCED
@@ -171,6 +172,13 @@ void HeldBlockRenderer_ClickAnim(cc_bool digging) {
 	held_animating = true;
 	/* Start place animation at bottom of cycle */
 	if (!digging) held_time = held_period / 2;
+
+	/* Mirror the first-person swing onto the player model's arm, so the swing */
+	/*  is visible in third person (F5) when mining/attacking/placing. Survival */
+	/*  only - creative's third-person model is left exactly as-is. */
+	if (SurvivalTest_Enabled && Entities.CurPlayer) {
+		AnimatedComp_StartPunch(&Entities.CurPlayer->Base.Anim);
+	}
 }
 
 static void DoSwitchBlockAnim(void* obj) {
