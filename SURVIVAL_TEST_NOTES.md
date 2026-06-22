@@ -8,6 +8,151 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
+## SESSION LOG — combat/mob fixes, render smoothing, TNT entity, inventory direction (latest)
+
+Catch-up entry covering the work between the "stuck drops" fix (last commit that
+touched this file, `3394a81`) and `919e57b`. All in `src/SurvivalTest.c` unless
+noted, all cross-referenced to the decompiled Java, all built with `-Werror`.
+Newest first.
+
+### Combat & damage fidelity
+- **`Mob.hurt()` dual-threshold invulnerability** (`919e57b`). The old code used a
+  flat 20-tick (1s) window that blocked *all* damage, so rapid click-attacks only
+  landed once per second. Genuine `Mob.hurt()` instead tests against the same
+  20-tick `invulnerableDuration` with two thresholds: while `invulnerableTime` is
+  in the **first half** of the window a follow-up hit is ignored *unless it's
+  strictly stronger* than the hit that opened the window (and then only the extra
+  damage lands, `health = lastHealth - damage`); once **past the halfway point** a
+  fresh full hit lands and re-arms the window. Net: equal-damage hits register
+  every **10 ticks (0.5s)**, matching the real game. Added `Mob.lastHealth`, and
+  moved the aggro / despawn-timer reset (`ai.hurt`) *ahead* of the window check
+  since the original applies it on every hit. "Stronger" = larger raw `damage`
+  int than the window's opening hit (no armor/mitigation exists in c0.30-s; damage
+  is a flat per-source int — fist 4, player arrow 7, creeper headbutt 6, explosion
+  `(1-d/r)*15+1`, lava 10, drown/suffocate 2, fall `floor(dist)-3`).
+- **Explosion falloff + mob damage** (`1a66378`). `SurvivalTest_Explode` now uses
+  the genuine `(1 - dist/radius)*15 + 1` falloff (16 point-blank → 1 at the rim)
+  and damages **mobs as well as the player** (was player-only with a guessed
+  `*MAXHP*0.6` curve); distance measured to each entity's bbox centre to match
+  `Entity.distanceTo`.
+- **Mob melee line-of-sight** (`1a66378`). `Mob_DoAttack` now does a
+  `Level.clip`-equivalent raycast (`Mob_SightBlocked`) before landing a hit, so
+  mobs can't hit through thin walls — closes the gap that was previously only
+  documented, not implemented.
+- **Air / drowning fixed + HUD** (`1a66378`). The underwater check read
+  `Blocks.Collide` (which collapses water/lava to `COLLIDE_LIQUID`) instead of
+  `Blocks.ExtendedCollide`, silently breaking drowning damage and the underwater
+  state. Fixed, exposed via `SurvivalTest_HeadUnderwater/_AirSupply`, and added the
+  depleting air-bubble HUD row (icons.png) plus live Score/Arrows `TextWidget`
+  labels (replacing the old digit-atlas arrow count).
+- **Lava damage 4 → 10** per half-second tick (`1864995`), matching
+  `Mob.tick()`'s `hurt(null, 10)` (~20 HP/s, a full player in ~1s).
+
+### Mob facing / AI
+- **`Math_Atan2f` arguments were swapped** (`e94a908`). CC's `Math_Atan2f(x, y)`
+  returns `atan2(y, x)` (first arg = cosine/x axis). The mob aiming code called it
+  as `(y, x)`, so every facing computation was ~90–180° off — attack mobs faced
+  *away* from the player (head at the ground, body running the wrong way) instead
+  of chasing. Corrected all four sites to `Math_Atan2f(-dz, dx)` /
+  `Math_Atan2f(horDist, -dy)`, matching `Vec3_GetDirVector`'s basis: `Mob_DoAttack`
+  yaw+pitch, `Mob_UpdateBodyYaw`, and `SurvivalTest_CalcHurtDir`. (This supersedes
+  the older "swapped atan2" note in the AUDIT PASS section — that fix had the right
+  diagnosis but the wrong convention; this is the corrected one, verified in-game.)
+
+### Dropped items
+- **Pickup uses AABB overlap, not a sphere** (`0fece5d`). `Player.tick()` collects
+  items via `this.bb.grow(1, 0, 1)` — an AABB widened a full block *horizontally
+  but not vertically*. The port used a 1-block Euclidean sphere from the feet, too
+  narrow horizontally and penalizing any vertical offset, so items resting one
+  block over and up were often just outside the radius. Now an AABB-overlap test.
+- **Death-drops** (`1864995`). `Player.die()` scatters one drop per non-empty
+  inventory slot at the death position. Refactored `SpawnDrop` into a position-based
+  core (`SpawnDropAt`) shared by block-mining and death drops.
+
+### Render smoothing (tick-rate → frame-rate interpolation pass)
+This is a recurring theme: survival entities simulate at the fixed 20 Hz tick but
+render every frame, so anything that read raw tick state "stepped" visibly. The
+fix pattern throughout: store a `prev*` snapshot each tick and blend `prev → cur`
+by the partial-tick `t` already threaded into the render calls.
+- **Arrows** (`a5979f2`): added `ArrowEntity.prevPos`, blended by `t` in
+  `SurvivalTest_RenderArrows`.
+- **Item pickup fly-in** (`a5979f2`, smoothed `f45281f`): ported `TakeEntityAnim`
+  (eases a collected item toward the player over 3 ticks, `(time/3)^2`, before
+  removing it) via `pickingUp/pickupTime/pickupFrom`; then added `DropItem.prevPos`
+  so the fly-in (and all drop motion) interpolates per-frame instead of stepping
+  ~3 times over its 0.15s.
+- **Drop spin/bob/glow** (`9a4f880`): `DropItem_Phase` read raw `d->age` (20 Hz
+  steps). Added `DropItem.prevAge`, threaded an interpolated age through
+  `DropItem_Phase/_ComputeGeometry/_GlowAmount`.
+- **Mob death roll** (`a5979f2`): dying mobs now roll onto their side over the
+  20-tick death window (`(deathTicks/20)^2 * 800°`, capped 90°) via `e->next.rotZ`,
+  picked up by the existing `Entity_LerpAngles`.
+
+### D3D11 vertex-stride desync (`37a77c9`)
+`Gfx_UnlockDynamicVb` on D3D11 implicitly rebinds the VB using the stride of
+whatever format was last set via `Gfx_SetVertexFormat`. Several survival paths set
+the format only *after* lock/fill/unlock, so the unlock used a stale stride left
+by an earlier draw (e.g. `SelOutlineRenderer`'s `VERTEX_FORMAT_COLOURED`),
+scrambling every vertex past the first — D3D11-only, since GL applies stride at
+draw time. Fixed by moving `Gfx_SetVertexFormat` to immediately before each
+`Gfx_LockDynamicVb` in cracks, drop items+glow, TNT glow, and arrows. **This is the
+load-bearing fix that made the crack overlay / items / TNT glow / arrows actually
+render correctly on D3D11**; subsequent visual fixes assume it.
+
+### Block-breaking crack overlay darkening (`ea1a914`)
+The embedded crack texture's alpha was baked as `(255 - grayscale)`, the inverse of
+a plain `dst*src` multiply (white-neutral). But genuine c0.30 draws cracks with
+`glBlendFunc(GL_DST_COLOR, GL_SRC_COLOR)` = `2*src*dst`, whose neutral point is
+**50% grey** — so the tiles use a grey background that vanishes under the 2× blend.
+Under the white-neutral inverse that grey became alpha 128, washing the whole face
+half-black. Re-derived the correct black-source alpha at upload: `out = dst*(1-a)`
+must equal `2*src*dst`, so `a = 2*aOld - 255` (clamped ≥ 0). Grey background → alpha
+~1 (block keeps its colour); only the dark crack lines stay visible. (Root-caused by
+decoding the embedded PNG bytes in Python and simulating the histogram before
+touching code.)
+
+### TNT: smoke, then a real PrimedTnt entity
+- **Smoke puffs** (`c3c19a7`). Ported `SmokeParticle` as a small self-contained pool:
+  one puff per fuse tick, the exact `Particle.java` velocity/grey/lifetime math,
+  rendered as alpha-tested billboards off the shared `particles.png` atlas (8 smoke
+  frames), greyed by world light and tick-interpolated. Added a `Particles_TexId()`
+  getter to `Particle.c/.h` to reach the atlas. Smoke renders independently of live
+  fuses so puffs linger briefly after the blast.
+- **Physical PrimedTnt entity** (`bed39c6`). Replaced the static "block left in the
+  world ticking down" approach (see the now-superseded TNT FUSE SYSTEM section
+  below) with a real entity, matching `TNTPhysics.onBreak`: `ArmTnt` clears the
+  block to air and spawns an entity that pops up (`yd=0.2` + the faithful Notch
+  double-radians-convert drift), then `TntPhysics` runs gravity + a swept block
+  collision (reusing the drops' `Collisions_MoveAndWallSlide`) + the damped landing
+  bounce (keeping the *intended* velocity for the bounce as Java's `move()` does).
+  Drawn as a real textured cube (per-face TNT tiles, 1D-atlas batched, uniform
+  world-light brightness like `model.renderAll`), with the flash + smoke now
+  tracking the moving, interpolated entity. **Defuse** moved from "mine the block
+  again" (there's no block now) to the melee ray-cast: a swing landing on a lit TNT
+  *closer than any mob* removes it and drops a TNT item (`PrimedTnt.isPickable/hurt`).
+
+### Inventory screen — direction reversed (faithful = none)
+A paperdoll inventory was built then deliberately gated/removed for faithful mode:
+- `364f770` redesigned the inventory as an Indev/Beta-style light-grey panel with a
+  3D skin **paperdoll**; `705dae2`/`1f0d371`/`eaa01b2`/`39d649f` fixed its facing
+  (RotY 180 to face camera, body fixed forward + only head tracks the mouse,
+  proportions/scissor, and the atan2 black-box-on-first-frame).
+- `3316dfb` then gated all non-authentic extras behind a new **`SurvivalTest_Enhanced`**
+  flag (`OPT_SURVIVAL_ENHANCED`, off by default; "Enhanced survival" checkbox in
+  Misc options, shown only in survival). The paperdoll is the first thing it gates.
+- `6f7db8a` made **faithful survival (`Enabled && !Enhanced`) open no inventory at
+  all** — matching c0.30-s, which had only the fixed hotbar. (Previously it fell
+  through to the creative block-grid picker, which can't move survival items.)
+  Non-survival keeps the normal creative inventory; Enhanced keeps the paperdoll.
+
+### Debug aid (temporary)
+- **F9 debug menu** (`c7234e6`): `SurvivalDebugScreen` (Menus.c), survival-only —
+  spawn each mob type, heal/hurt, kill all mobs, refill arrows. Explicitly *not*
+  c0.30-s parity; isolated (one screen + three `SurvivalTest_Debug*` fns + one
+  InputHandler hook) so it's easy to strip out later.
+
+---
+
 ## AUDIT PASS (this session): bug fixes + explanatory comments
 
 User asked for a self-directed audit of everything built so far: real bugs, bloat,
@@ -55,6 +200,13 @@ against the decompiled Java sources (not guessed):
 ---
 
 ## TNT FUSE SYSTEM (this session)
+
+> **SUPERSEDED (see SESSION LOG above, `bed39c6`/`c3c19a7`):** the "block left in
+> the world ticking down in place" approach described below was replaced with a
+> real physical `PrimedTnt` entity (pops up, falls/bounces, smokes, flashes,
+> defused by meleeing it). The fuse timing, drop table, and explosion rules below
+> are still accurate; only the "it stays a static block" rendering/representation
+> changed.
 
 User asked: "in survival mode tnt doesn't explode instantly". Confirmed against
 `PrimedTnt.java`/`TNTBlock.java`/`TNTPhysics.java` that this is correct — in real
@@ -874,8 +1026,13 @@ Files: `src/SurvivalTest.c`, `src/SurvivalTest.h`, plus hooks in `src/Game.c`,
 - **HUD**: hearts above the hotbar (icons.png), half-heart support, low-health shake
   at ≤4 HP, hotbar stack-count digits.
 - **Inventory**: real 36-slot model (`st_inv[]`), hotbar mirrored into engine inventory.
-  Survival inventory screen (`SurvivalInvScreen`) — solid dark panel, bordered slots,
-  separator line, "Inventory" title; click to pick/swap stacks.
+  **Inventory SCREEN (updated, see SESSION LOG):** faithful survival
+  (`Enabled && !Enhanced`) opens **no inventory screen** — hotbar only, matching
+  c0.30-s. The Indev/Beta-style 3D **paperdoll** storage screen (`SurvivalInvScreen`)
+  is now gated behind the `SurvivalTest_Enhanced` toggle (`OPT_SURVIVAL_ENHANCED`,
+  off by default; "Enhanced survival" checkbox in Misc options). Non-survival uses
+  the normal creative inventory. (The earlier "solid dark panel / click to pick-swap"
+  description is obsolete.)
 - **Block handling**: mining spawns physical dropped-item entity/entities on the
   ground (faithful drop table, see below); walking near one picks it up into
   inventory. Placing consumes one from the selected slot. Creative-safe:
