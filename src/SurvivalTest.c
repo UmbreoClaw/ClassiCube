@@ -132,6 +132,10 @@ struct DropItem {
 	BlockID block;
 	float pickupDelay;
 	float age;       /* seconds alive - drives spin/bob/glow */
+	float prevAge;   /* age as of the end of the previous tick - RenderDropBlocks blends */
+	                 /*  prevAge->age by the partial-tick t so the spin/bob/glow animation */
+	                 /*  (which all derive from age via DropItem_Phase) advances smoothly */
+	                 /*  every frame instead of snapping forward once per tick. */
 	float rot0;      /* random initial spin angle (degrees) */
 	cc_bool active;
 	cc_bool onGround; /* set by DropPhysics's collision pass, drives the Item.tick() ground damping below */
@@ -163,8 +167,11 @@ static GfxResourceID st_glowVB;
 
 /* Computes the spin/bob/glow animation phase for a drop. var3 is the running */
 /*  spin angle in degrees; sin(var3/10) (matching the original) drives bob+glow. */
-static float DropItem_Phase(struct DropItem* d) {
-	return d->rot0 + d->age * DROP_SPIN_DEG_PER_SEC;
+/* age is passed in (rather than read from d->age directly) so callers can */
+/*  supply the interpolated, partial-tick age and get a smooth render-rate */
+/*  animation instead of one that steps once per 20 Hz tick. */
+static float DropItem_Phase(struct DropItem* d, float age) {
+	return d->rot0 + age * DROP_SPIN_DEG_PER_SEC;
 }
 
 /* Survival Test redrew the item in additive white once per ~second for a */
@@ -173,8 +180,8 @@ static float DropItem_Phase(struct DropItem* d) {
 /*  that approach was invisible outdoors. Instead this drives the alpha of a */
 /*  separate white glow shell (see DropItem_BuildGlowCube), which genuinely */
 /*  brightens the item regardless of how bright its lit colour already is. */
-static float DropItem_GlowAmount(struct DropItem* d) {
-	float s = Math_SinF(DropItem_Phase(d) / 10.0f) * 0.5f + 0.5f; /* 0..1 */
+static float DropItem_GlowAmount(struct DropItem* d, float age) {
+	float s = Math_SinF(DropItem_Phase(d, age) / 10.0f) * 0.5f + 0.5f; /* 0..1 */
 	s = s * s * s * s;       /* ^4, matching the decompiled glow curve exactly */
 	return s * 0.4f;         /* max alpha 0.4, matching the decompiled glColor4f(1,1,1,g*0.4) */
 }
@@ -203,9 +210,9 @@ static void DropItem_RotatedCorners(float half, float cx, float cz, float angleR
 
 /* Computes the world-space geometry (top/bottom Y and the 4 spun XZ corners) */
 /*  shared by the item cube, its glow shell, and the sprite-quad drop variant. */
-static void DropItem_ComputeGeometry(struct DropItem* d, Vec3 pos, float* yLo, float* yHi,
+static void DropItem_ComputeGeometry(struct DropItem* d, Vec3 pos, float age, float* yLo, float* yHi,
 									  Vec3* a, Vec3* b, Vec3* c, Vec3* e) {
-	float var3 = DropItem_Phase(d);
+	float var3 = DropItem_Phase(d, age);
 	float bob  = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
 	*yLo = pos.y + bob;
 	*yHi = *yLo + DROP_ITEM_HALF * 2.0f;
@@ -216,14 +223,14 @@ static void DropItem_ComputeGeometry(struct DropItem* d, Vec3 pos, float* yLo, f
 
 /* Appends the 6-face, 24-vertex textured cube for one drop (cropped to the */
 /*  given UV rect on every face, matching the decompiled ItemModel exactly). */
-static void DropItem_BuildItemCube(struct DropItem* d, Vec3 pos, TextureRec rec, PackedCol col,
+static void DropItem_BuildItemCube(struct DropItem* d, Vec3 pos, float age, TextureRec rec, PackedCol col,
 									struct VertexTextured** vertices) {
 	struct VertexTextured* v = *vertices;
 	float yLo, yHi;
 	float u1 = rec.u1, v1 = rec.v1, u2 = rec.u2, v2 = rec.v2;
 	Vec3 a, b, c, e;
 
-	DropItem_ComputeGeometry(d, pos, &yLo, &yHi, &a, &b, &c, &e);
+	DropItem_ComputeGeometry(d, pos, age, &yLo, &yHi, &a, &b, &c, &e);
 
 	#define ITEM_V(p, py, uu, vv) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v->U = (uu); v->V = (vv); v++;
 	ITEM_V(a,yLo, u1,v1) ITEM_V(b,yLo, u2,v1) ITEM_V(c,yLo, u2,v2) ITEM_V(e,yLo, u1,v2) /* bottom */
@@ -242,13 +249,13 @@ static void DropItem_BuildItemCube(struct DropItem* d, Vec3 pos, TextureRec rec,
 /*  culling on (the cube's winding is consistent, see DropItem_RotatedCorners */
 /*  callers) so only the front faces blend - without culling, the unseen back */
 /*  faces would also blend in, doubling up and producing a boxy flash. */
-static void DropItem_BuildGlowCube(struct DropItem* d, Vec3 pos, PackedCol col,
+static void DropItem_BuildGlowCube(struct DropItem* d, Vec3 pos, float age, PackedCol col,
 									struct VertexColoured** vertices) {
 	struct VertexColoured* v = *vertices;
 	float yLo, yHi;
 	Vec3 a, b, c, e;
 
-	DropItem_ComputeGeometry(d, pos, &yLo, &yHi, &a, &b, &c, &e);
+	DropItem_ComputeGeometry(d, pos, age, &yLo, &yHi, &a, &b, &c, &e);
 
 	#define GLOW_V(p, py) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v++;
 	GLOW_V(a,yLo) GLOW_V(b,yLo) GLOW_V(c,yLo) GLOW_V(e,yLo) /* bottom   */
@@ -292,6 +299,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	d->block       = block;
 	d->pickupDelay = DROP_PICKUP_DELAY;
 	d->age         = 0.0f;
+	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
 	d->active      = true;
 }
@@ -458,8 +466,9 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 		d = &st_drops[i];
 		if (!d->active) continue;
 
-		/* Interpolation source for RenderDropBlocks - see DropItem.prevPos. */
+		/* Interpolation source for RenderDropBlocks - see DropItem.prevPos/prevAge. */
 		d->prevPos = d->position;
+		d->prevAge = d->age;
 
 		if (d->pickingUp) {
 			/* TakeEntityAnim.tick(): distance = (time/3)^2, eased towards the */
@@ -515,7 +524,7 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 	TextureRec base, rec;
 	PackedCol col, glowCol;
 	Vec3 renderPos;
-	float du, dv;
+	float du, dv, renderAge;
 	int i, index, texIndex, offset, glowCount;
 	cc_bool any = false;
 
@@ -560,10 +569,12 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 		rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
 		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
 
-		/* Blend prevPos->position by the partial-tick t - see DropItem.prevPos. */
+		/* Blend prevPos->position and prevAge->age by the partial-tick t - see */
+		/*  DropItem.prevPos/prevAge - so both motion and spin/bob are smooth. */
 		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
+		renderAge = d->prevAge + (d->age - d->prevAge) * t;
 		col = DropItem_WorldColor(&renderPos);
-		DropItem_BuildItemCube(d, renderPos, rec, col, &ptr);
+		DropItem_BuildItemCube(d, renderPos, renderAge, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_itemVB);
@@ -592,8 +603,9 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 		if (!d->active) continue;
 
 		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
-		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d)));
-		DropItem_BuildGlowCube(d, renderPos, glowCol, &glowPtr);
+		renderAge = d->prevAge + (d->age - d->prevAge) * t;
+		glowCol = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * DropItem_GlowAmount(d, renderAge)));
+		DropItem_BuildGlowCube(d, renderPos, renderAge, glowCol, &glowPtr);
 		glowCount += GLOW_VERTICES_PER_DROP;
 	}
 	Gfx_UnlockDynamicVb(st_glowVB);
