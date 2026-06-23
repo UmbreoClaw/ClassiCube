@@ -953,8 +953,8 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 	Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLeg, false);
 
 	Models.Rotation = ROTATE_ORDER_XZY;
-	Model_DrawRotate(e->Anim.LeftArmX,  0, e->Anim.LeftArmZ,  &set->leftArm,  false);
-	Model_DrawRotate(e->Anim.RightArmX, 0, e->Anim.RightArmZ, &set->rightArm, false);
+	Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &set->leftArm,  false);
+	Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &set->rightArm, false);
 	Models.Rotation = ROTATE_ORDER_ZYX;
 
 	if (type != SKIN_64x32) {
@@ -963,8 +963,8 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 		Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLegLayer, false);
 
 		Models.Rotation = ROTATE_ORDER_XZY;
-		Model_DrawRotate(e->Anim.LeftArmX,  0, e->Anim.LeftArmZ,  &set->leftArmLayer,  false);
-		Model_DrawRotate(e->Anim.RightArmX, 0, e->Anim.RightArmZ, &set->rightArmLayer, false);
+		Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &set->leftArmLayer,  false);
+		Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &set->rightArmLayer, false);
 		Models.Rotation = ROTATE_ORDER_ZYX;
 	}
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &model->hat, true);
@@ -1871,21 +1871,21 @@ static void SkeletonModel_MakeParts(void) {
 	BoxDesc_BuildBox(&skeleton_rightArm, &rArm);
 }
 
-/* SkeletonModel extends ZombieModel in c0.30, so it shares the attack swing */
-/*  (defined down in the ZombieModel section). */
-static float ZombieModel_ArmPitch(struct Entity* e);
+/* SkeletonModel extends ZombieModel in c0.30, so it shares the exact same arm */
+/*  pose formula (defined down in the ZombieModel section). */
+static void ZombieModel_SetArmPose(struct Entity* e);
 
 static void SkeletonModel_Draw(struct Entity* e) {
-	float armX = ZombieModel_ArmPitch(e);
+	ZombieModel_SetArmPose(e);
 	Model_ApplyTexture(e);
 	Model_LockVB(e, SKELETON_MAX_VERTICES);
 
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &skeleton_head, true);
 	Model_DrawPart(&skeleton_torso);
-	Model_DrawRotate(e->Anim.LeftLegX,  0, 0,                  &skeleton_leftLeg,  false);
-	Model_DrawRotate(e->Anim.RightLegX, 0, 0,                  &skeleton_rightLeg, false);
-	Model_DrawRotate(armX,              0, e->Anim.LeftArmZ,   &skeleton_leftArm,  false);
-	Model_DrawRotate(armX,              0, e->Anim.RightArmZ,  &skeleton_rightArm, false);
+	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &skeleton_leftLeg,  false);
+	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &skeleton_rightLeg, false);
+	Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &skeleton_leftArm,  false);
+	Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &skeleton_rightArm, false);
 
 	Model_UnlockVB();
 	Gfx_DrawVb_IndexedTris(SKELETON_MAX_VERTICES);
@@ -2021,29 +2021,44 @@ static void SpiderModel_Register(void) {
 /*########################################################################################################################*
 *--------------------------------------------------------ZombieModel------------------------------------------------------*
 *#########################################################################################################################*/
-/* c0.30's ZombieModel.setRotationAngles attack swing (inherited by */
-/*  SkeletonModel). Both arms swing together in pitch, driven by */
-/*  Anim.AttackSwing (= Mob.attackTime/5, interpolated; set by SurvivalTest's */
-/*  RenderMobs). At rest (AttackSwing == 0) this is just the static +90deg */
-/*  forward pose, so it's a no-op for the player and every non-attacking */
-/*  entity. Sign note: ClassiCube's arm convention is mirrored from Java's */
-/*  (we use +90deg where Java uses -90deg for the same forward pose), so */
-/*  Java's `pitch -= (v1*1.2 - v2*0.4)` becomes `+= (...)` here. If a swinging */
-/*  mob ever looks like it raises its arms the wrong way, flip that to `-=`. */
-static float ZombieModel_ArmPitch(struct Entity* e) {
-	float g = e->Anim.AttackSwing;
-	float v1, v2;
-	if (g <= 0.0f) return 90.0f * MATH_DEG2RAD;
+/* c0.30's ZombieModel.setRotationAngles (inherited by SkeletonModel) - fully */
+/*  replaces the walk-cycle arm swing super.setRotationAngles would otherwise */
+/*  give a HumanoidModel, with a static forward pose plus three independent */
+/*  effects, all driven straight off the decompiled formula:
+     v1 = sin(grounded*PI), v2 = sin((1-(1-grounded)^2)*PI)   [grounded = Anim.AttackSwing]
+     yaw   = +-(0.1 - v1*0.6)         outward splay; widens during the attack chop
+     pitch = -PI/2 - (v1*1.2 - v2*0.4)   <- the attack chop itself (both arms equal)
+     roll  = +-(cos(age*0.09)*0.05 + 0.05)   slow always-on idle sway (age = Mob.tickCount)
+     pitch += +-sin(age*0.067)*0.05          slow always-on idle sway, added to the chop
+   At grounded==0 and age==0 this reduces to the plain forward pose, so it's a
+   no-op for the player and any non-zombie/skeleton model.
+   Sign/axis notes (unverified - no display in this dev environment, flag for
+   visual check once testable):
+   - Pitch (X): CC's static pose is +90deg where Java's is -90deg, i.e. mirrored,
+     so Java's `pitch -= X` becomes `+= X` here for both the attack and idle term.
+   - Yaw (Y) and roll->Z have no established CC precedent (arm Y was always 0
+     before this); ported as a direct, unmirrored read of Java's value. If the
+     splay/sway looks inverted or like it fights the attack chop, try flipping
+     the sign of LeftArmY/RightArmY and/or LeftArmZ/RightArmZ below first. */
+static void ZombieModel_SetArmPose(struct Entity* e) {
+	float g = e->Anim.AttackSwing, age = e->Anim.Age;
+	float v1 = Math_SinF(g * MATH_PI);
+	float v2 = Math_SinF((1.0f - (1.0f - g) * (1.0f - g)) * MATH_PI);
+	float chop      = 90.0f * MATH_DEG2RAD + (v1 * 1.2f - v2 * 0.4f);
+	float yaw       = 0.1f - v1 * 0.6f;
+	float idleRoll  = Math_CosF(age * 0.09f)  * 0.05f + 0.05f;
+	float idlePitch = Math_SinF(age * 0.067f) * 0.05f;
 
-	v1 = Math_SinF(g * MATH_PI);
-	v2 = Math_SinF((1.0f - (1.0f - g) * (1.0f - g)) * MATH_PI);
-	return 90.0f * MATH_DEG2RAD + (v1 * 1.2f - v2 * 0.4f);
+	e->Anim.LeftArmX  = chop + idlePitch;
+	e->Anim.RightArmX = chop - idlePitch;
+	e->Anim.LeftArmY  =  yaw;
+	e->Anim.RightArmY = -yaw;
+	e->Anim.LeftArmZ  = -idleRoll;
+	e->Anim.RightArmZ =  idleRoll;
 }
 
 static void ZombieModel_Draw(struct Entity* e) {
-	float armX = ZombieModel_ArmPitch(e);
-	e->Anim.LeftArmX  = armX;
-	e->Anim.RightArmX = armX;
+	ZombieModel_SetArmPose(e);
 	HumanModel_DrawCore(e, &human_set, false);
 }
 static void ZombieModel_DrawArm(struct Entity* e) {

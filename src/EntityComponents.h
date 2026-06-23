@@ -20,6 +20,9 @@ struct AnimatedComp {
 
 	float LeftLegX, LeftLegZ, RightLegX, RightLegZ;
 	float LeftArmX, LeftArmZ, RightArmX, RightArmZ;
+	/* Arm yaw - unused by the player/CalcHumanAnim path (always 0 there), only */
+	/*  set by the zombie/skeleton draw for their outward arm splay (see Model.c). */
+	float LeftArmY, RightArmY;
 
 	/* Attack/punch arm swing (a one-shot forward swing of the main arm, layered */
 	/*  on top of the walk/idle pose). PunchN is the linear 0..1 progress this */
@@ -32,6 +35,10 @@ struct AnimatedComp {
 	/*  and read by the zombie/skeleton models to swing both arms. 0 = no swing */
 	/*  (so it has no effect on the player or any non-attacking entity). */
 	float AttackSwing;
+	/* Per-mob age in ticks (+ partial-tick fraction), i.e. Mob.tickCount - drives */
+	/*  the zombie/skeleton arms' slow always-on idle roll/pitch sway. Unused by */
+	/*  anything else, so 0 (the default) is harmless for the player/other models. */
+	float Age;
 };
 
 void AnimatedComp_Init(struct AnimatedComp* anim);

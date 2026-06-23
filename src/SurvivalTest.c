@@ -1294,6 +1294,7 @@ struct Mob {
 	int hurtTicks;    /* red hit-flash timer, purely cosmetic (Mob.hurtTime) */
 	int attackTime;   /* swing timer, counts down from 5 after a landed hit (Mob.attackTime); */
 	                  /*  drives the zombie/skeleton arm-swing animation at render time */
+	int ticksAlive;   /* Mob.tickCount - drives zombie/skeleton arms' idle sway, see Mob_DoAttack */
 	int attackDelay;  /* cooldown before this mob can attack again (BasicAttackAI.attackDelay) */
 	int deathTicks;   /* ticks since health reached 0 - removed once this exceeds 20 */
 	int airTicks;     /* underwater air supply (Mob.airSupply) */
@@ -1911,6 +1912,7 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	/* Mob.tick decrements attackTime before the AI runs, so a hit landed this */
 	/*  tick (Mob_DoAttack below) leaves it freshly reset to 5 for the swing. */
 	if (m->attackTime  > 0) m->attackTime--;
+	m->ticksAlive++; /* Mob.tick's this.tickCount++ */
 
 	if (m->health <= 0) {
 		m->deathTicks++;
@@ -2222,13 +2224,15 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 		Entity_LerpAngles(e, t);
 
 		AnimatedComp_GetCurrent(e, t);
-		/* Mob.render: grounded = (attackTime - partialTick)/5, clamped >= 0. */
-		/*  This 0..1 value drives the humanoid attack arm swing (read by the */
-		/*  zombie/skeleton models); it's harmlessly ignored by the other models. */
+		/* Mob.render: grounded = (attackTime - partialTick)/5, clamped >= 0, and */
+		/*  age = tickCount + partialTick. These feed the humanoid attack/idle arm */
+		/*  swing (read by the zombie/skeleton models); harmlessly ignored by the */
+		/*  other models (pig/sheep/creeper/spider don't use either field). */
 		{
 			float prog = (float)m->attackTime - t;
 			if (prog < 0.0f) prog = 0.0f;
 			e->Anim.AttackSwing = prog / 5.0f;
+			e->Anim.Age         = (float)m->ticksAlive + t;
 		}
 		e->ShouldRender = Model_ShouldRender(e);
 		if (!e->ShouldRender) continue;
