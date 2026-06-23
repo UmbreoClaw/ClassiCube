@@ -8,7 +8,58 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — launcher "Choose mode" survival toggle (latest)
+## SESSION LOG — TNT explosion item drops (latest)
+
+User reported that blocks destroyed by a TNT explosion never drop any
+items, whereas genuine Survival Test pops a scatter of items out of the
+blast. Root cause: `SurvivalTest_Explode` cleared every destroyed block
+straight to air via `Game_UpdateBlock`, which (unlike `InputHandler.c`'s
+mining path) never raises `UserEvents.BlockChanged` - so the existing
+mining-drop handler (`SurvivalTest_SpawnDropsForBlock`, wired to that
+event) was never reached for exploded blocks at all.
+
+Cross-referenced against `/tmp/good2000mo_oc`'s decompiled
+`Level.explode()`, `BlockUtils.dropItems()`/`getDrop()`/`getDropCount()`,
+and `PrimedTnt.java`:
+
+- `Level.explode()` calls `BlockUtils.dropItems(block, level, x, y, z,
+  0.3F)` for every destroyed block **before** clearing it to air - each
+  potential item only has a 30% chance of actually spawning (vs. mining's
+  implicit 100% chance). This is the "drops explode into existence"
+  sparse/scattered look the user described.
+- Refactored the drop-type/count mapping out of `SurvivalTest_
+  SpawnDropsForBlock` into a new shared `SurvivalTest_GetBlockDrop()`
+  (mirrors `getDrop()`/`getDropCount()`, returns false for water/lava/
+  bookshelf/TNT - none of which yield a plain item). Mining
+  (`SurvivalTest_SpawnDropsForBlock`, chance implicitly 1.0) and the new
+  `SurvivalTest_ExplodeDropsForBlock` (chance 0.3 per item, via
+  `Random_Float(&st_dropRng) <= 0.3f`) both call into it.
+- Leaves keep their existing 1/10 sapling roll *inside*
+  `SurvivalTest_GetBlockDrop` (mirrors `getDropCount()`'s own RNG call) -
+  that roll is separate from, and on top of, the explosion's 0.3 chance
+  gate, exactly like the Java does two independent `rand` calls.
+- TNT destroyed by an explosion chain-reacts instead of dropping an item:
+  `PrimedTnt.tick()`'s expiry spawns a fresh `PrimedTnt` with
+  `life = rand.nextInt(life/4) + life/8` (a **partial randomized fuse**,
+  5-14 ticks for the default life=40) rather than mining's full 40-tick
+  fuse. `SurvivalTest_ArmTnt` gained a `fuseTicks` parameter so both
+  paths (full fuse for mining, partial randomized fuse for the chain
+  reaction) share the same arming code; all three call sites
+  (`SurvivalTest_SpawnDropsForBlock`, `SurvivalTest_Explode`,
+  `SurvivalTest_DebugSpawnTnt`) updated.
+- `SurvivalTest_Explode`'s block-destruction loop now rolls the drop (or
+  arms the chain-reaction fuse) immediately before clearing each block to
+  air, matching `Level.explode()`'s exact order of operations.
+- Did **not** touch `SurvivalTest_ExplosionImmune` - it currently also
+  treats liquids as blast-immune, which genuine `BlockUtils.canExplode()`
+  does not (only STONE/COBBLESTONE/BEDROCK/ORES/GOLD_BLOCK/IRON_BLOCK/
+  SLAB/DOUBLE_SLAB/BRICK_BLOCK/MOSSY_COBBLESTONE/OBSIDIAN are immune).
+  Flagged as a separate, related discrepancy - out of scope of this
+  fix since the user only asked about missing drops.
+
+---
+
+## SESSION LOG — launcher "Choose mode" survival toggle
 
 User asked for the "Survival mode" checkbox on the Launcher's Choose Mode
 screen (`LScreens.c`'s `ChooseModeScreen`) to become a button like the three

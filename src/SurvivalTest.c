@@ -107,7 +107,10 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot);
 /* Defined later, in the TNT section - forward declared so the Drops section */
 /*  above (which decides what mining a TNT block does) can ignite its fuse. */
-static void SurvivalTest_ArmTnt(IVec3 coords);
+/*  fuseTicks lets callers other than mining (the explosion chain-reaction) */
+/*  arm a shorter, randomized fuse instead of the full PrimedTnt default. */
+static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks);
+#define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
 
 
 /*########################################################################################################################*
@@ -323,23 +326,30 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	SurvivalTest_SpawnDropAt(pos, block);
 }
 
-/* Decides what physically drops when a block is mined (Survival Test rules). */
-static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
-	BlockID dropBlock = oldBlock;
-	int count = 1, i;
+/* BlockUtils.getDrop()/getDropCount(): decides what a block *would* drop and */
+/*  how many, before any chance gate is applied. Shared by both the mining */
+/*  path (chance always 1.0) and the explosion path (chance 0.3 per item, via */
+/*  BlockUtils.dropItems(block, level, x, y, z, 0.3F)). Returns false for */
+/*  blocks that never drop a plain item at all (water/lava/bookshelf/TNT - */
+/*  TNT instead arms a fuse, handled separately by each caller). */
+static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, int* count) {
+	*dropBlock = oldBlock;
+	*count     = 1;
 
 	switch (oldBlock) {
 	case BLOCK_GRASS:
-		dropBlock = BLOCK_DIRT;
+		*dropBlock = BLOCK_DIRT;
 		break;
 	case BLOCK_LEAVES:
-		/* Leaves only drop a sapling 1/10 of the time, otherwise nothing */
-		if (Random_Next(&st_dropRng, 10) != 0) return;
-		dropBlock = BLOCK_SAPLING;
+		/* Leaves only drop a sapling 1/10 of the time, otherwise nothing - */
+		/*  this roll lives inside getDropCount() itself, so it's separate */
+		/*  from (and on top of) the explosion's own 0.3 chance gate. */
+		*dropBlock = BLOCK_SAPLING;
+		*count     = Random_Next(&st_dropRng, 10) == 0 ? 1 : 0;
 		break;
 	case BLOCK_LOG:
-		dropBlock = BLOCK_WOOD;
-		count     = 3 + Random_Next(&st_dropRng, 3); /* 3-5 planks */
+		*dropBlock = BLOCK_WOOD;
+		*count     = 3 + Random_Next(&st_dropRng, 3); /* 3-5 planks */
 		break;
 	case BLOCK_STONE:
 	case BLOCK_OBSIDIAN:
@@ -347,47 +357,76 @@ static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 		/*  is literally constructed as `new StoneBlock(49, 37)`, so it goes */
 		/*  through the exact same override. Confirmed against the Wiki too */
 		/*  ("breaking stone/obsidian yields cobblestone"). */
-		dropBlock = BLOCK_COBBLE;
+		*dropBlock = BLOCK_COBBLE;
 		break;
 	case BLOCK_COAL_ORE:
 		/* OreBlock.getDrop(): coal ore is the one weird case - it yields a */
 		/*  stone SLAB, not coal (there's no separate coal item yet). Wiki */
 		/*  confirms this exact quirk ("stone slabs were obtained by mining */
 		/*  coal ore" in Survival Test). getDropCount() = 1-3 for all ores. */
-		dropBlock = BLOCK_SLAB;
-		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		*dropBlock = BLOCK_SLAB;
+		*count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
 		break;
 	case BLOCK_GOLD_ORE:
-		dropBlock = BLOCK_GOLD; /* OreBlock.getDrop(): gold ore -> gold block */
-		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		*dropBlock = BLOCK_GOLD; /* OreBlock.getDrop(): gold ore -> gold block */
+		*count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
 		break;
 	case BLOCK_IRON_ORE:
-		dropBlock = BLOCK_IRON; /* OreBlock.getDrop(): iron ore -> iron block */
-		count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
+		*dropBlock = BLOCK_IRON; /* OreBlock.getDrop(): iron ore -> iron block */
+		*count     = 1 + Random_Next(&st_dropRng, 3); /* 1-3 */
 		break;
 	case BLOCK_DOUBLE_SLAB:
-		dropBlock = BLOCK_SLAB; /* SlabBlock.getDrop() always returns SLAB.id */
+		*dropBlock = BLOCK_SLAB; /* SlabBlock.getDrop() always returns SLAB.id */
 		break;
 	case BLOCK_BOOKSHELF:
 		/* BookshelfBlock.getDropCount() == 0 - never drops anything */
-		return;
+		return false;
 	case BLOCK_WATER:
 	case BLOCK_STILL_WATER:
 	case BLOCK_LAVA:
 	case BLOCK_STILL_LAVA:
 		/* LiquidBlock overrides dropItems()/onBreak() to no-ops and */
 		/*  getDropCount() == 0 - liquids never yield an item drop. */
-		return;
+		return false;
 	case BLOCK_TNT:
-		/* TNTBlock.getDropCount()==0 - mining TNT never yields an item, it */
-		/*  ignites a fuse instead (TNTPhysics.onBreak spawns a PrimedTnt). */
-		SurvivalTest_ArmTnt(coords);
-		return;
+		/* TNTBlock.getDropCount()==0 - TNT never yields a plain item drop; */
+		/*  callers handle it as a fuse instead. */
+		return false;
 	default:
 		break; /* most blocks drop themselves */
 	}
+	return true;
+}
+
+/* Decides what physically drops when a block is mined (Survival Test rules). */
+/*  Mining always uses chance=1.0 (BlockUtils.dropItems's default overload). */
+static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
+	BlockID dropBlock;
+	int count, i;
+
+	if (oldBlock == BLOCK_TNT) {
+		/* TNTPhysics.onBreak spawns a PrimedTnt with the full default fuse. */
+		SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS);
+		return;
+	}
+	if (!SurvivalTest_GetBlockDrop(oldBlock, &dropBlock, &count)) return;
 
 	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, dropBlock); }
+}
+
+/* Decides what physically drops when a block is destroyed by an explosion */
+/*  (Level.explode -> BlockUtils.dropItems(block, level, x, y, z, 0.3F)): each */
+/*  potential item only has a 30% chance of actually being spawned, on top of */
+/*  (not instead of) the leaves' own 1/10 roll above. This is why explosions */
+/*  visibly look like only a handful of the broken blocks pop loose. */
+static void SurvivalTest_ExplodeDropsForBlock(IVec3 coords, BlockID oldBlock) {
+	BlockID dropBlock;
+	int count, i;
+	if (!SurvivalTest_GetBlockDrop(oldBlock, &dropBlock, &count)) return;
+
+	for (i = 0; i < count; i++) {
+		if (Random_Float(&st_dropRng) <= 0.3f) SurvivalTest_SpawnDrop(coords, dropBlock);
+	}
 }
 
 /* Item.tick()'s move() - a proper swept-AABB collision against every block */
@@ -788,7 +827,6 @@ static void SurvivalTest_Explode(Vec3 center, int radius);
 /* Like drops/arrows/mobs, the entity is simulated by hand in a fixed array */
 /*  (never a real Entities.List[] entry) and rendered as a textured cube. */
 #define TNT_MAX        8
-#define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
 #define TNT_SIZE       0.98f /* PrimedTnt.setSize(0.98, 0.98) */
 #define TNT_HALF       (TNT_SIZE * 0.5f)
 #define TNT_HEIGHT_OFF (TNT_SIZE * 0.5f) /* heightOffset = bbHeight/2; pos is the centre */
@@ -874,7 +912,7 @@ static void SurvivalTest_TickTntSmoke(void) {
 	}
 }
 
-static void SurvivalTest_ArmTnt(IVec3 coords) {
+static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks) {
 	struct TntFuse* tnt;
 	float ang;
 	int i, slot = -1;
@@ -902,7 +940,7 @@ static void SurvivalTest_ArmTnt(IVec3 coords) {
 	tnt->vel.y = 0.2f;
 	tnt->vel.z = -Math_CosF(ang * MATH_DEG2RAD) * 0.02f;
 
-	tnt->ticksLeft = TNT_FUSE_TICKS;
+	tnt->ticksLeft = fuseTicks;
 	tnt->onGround  = false;
 	tnt->active    = true;
 }
@@ -1649,6 +1687,7 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 	int z = Math_Floor(center.z);
 	int dx, dy, dz, xx, yy, zz, i;
 	BlockID block;
+	IVec3 coords;
 	Vec3 diff;
 	float dist, inv = 1.0f / (float)radius;
 
@@ -1661,7 +1700,20 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 
 		block = World_GetBlock(xx, yy, zz);
 		if (block == BLOCK_AIR || SurvivalTest_ExplosionImmune(block)) continue;
-		Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+
+		/* Level.explode: dropItems(block, ..., 0.3F) is rolled BEFORE the */
+		/*  block is cleared, then setTile(...,0). If the destroyed block was */
+		/*  TNT, a fresh PrimedTnt is spawned with a randomized PARTIAL fuse */
+		/*  (rand.nextInt(life/4) + life/8 = 5-14 ticks) instead of a plain */
+		/*  item drop - the classic TNT chain-reaction. */
+		coords.x = xx; coords.y = yy; coords.z = zz;
+		if (block == BLOCK_TNT) {
+			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+			SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS / 8 + Random_Next(&st_dropRng, TNT_FUSE_TICKS / 4));
+		} else {
+			SurvivalTest_ExplodeDropsForBlock(coords, block);
+			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+		}
 	}}}
 
 	if (p) {
@@ -3582,7 +3634,7 @@ void SurvivalTest_DebugSpawnTnt(void) {
 	coords.x = Math_Floor(pos.x);
 	coords.y = Math_Floor(pos.y);
 	coords.z = Math_Floor(pos.z);
-	SurvivalTest_ArmTnt(coords);
+	SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS);
 }
 
 void SurvivalTest_DebugShootArrow(void) {
