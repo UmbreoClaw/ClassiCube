@@ -26,6 +26,12 @@ struct AnimatedComp {
 	/*  tick, PunchO the previous tick's (render interpolates between them). */
 	cc_bool Punching;
 	float PunchO, PunchN;
+
+	/* c0.30 humanoid-mob attack swing (Mob.attackTime/grounded). 0..1 progress */
+	/*  for the current render frame, set per-frame by SurvivalTest's RenderMobs */
+	/*  and read by the zombie/skeleton models to swing both arms. 0 = no swing */
+	/*  (so it has no effect on the player or any non-attacking entity). */
+	float AttackSwing;
 };
 
 void AnimatedComp_Init(struct AnimatedComp* anim);

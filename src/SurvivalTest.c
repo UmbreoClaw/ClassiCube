@@ -1292,6 +1292,8 @@ struct Mob {
 	int lastHealth;  /* health snapshot when the invuln window last opened (Mob.lastHealth) */
 	int invincTicks; /* Mob.invulnerableTime - counts down from invulnerableDuration (20) */
 	int hurtTicks;    /* red hit-flash timer, purely cosmetic (Mob.hurtTime) */
+	int attackTime;   /* swing timer, counts down from 5 after a landed hit (Mob.attackTime); */
+	                  /*  drives the zombie/skeleton arm-swing animation at render time */
 	int attackDelay;  /* cooldown before this mob can attack again (BasicAttackAI.attackDelay) */
 	int deathTicks;   /* ticks since health reached 0 - removed once this exceeds 20 */
 	int airTicks;     /* underwater air supply (Mob.airSupply) */
@@ -1826,6 +1828,7 @@ static void Mob_DoAttack(struct Mob* m) {
 		Vec3 pc = pe->Position; pc.y  += pe->Size.y * 0.5f;
 		if (Mob_SightBlocked(mc, pc)) return;
 
+		m->attackTime   = 5;  /* BasicAttackAI.attack: triggers the model arm swing */
 		m->attackDelay  = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
 		m->noActionTime = 0; /* BasicAttackAI.attack: landing a hit also resets the despawn timer */
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
@@ -1905,6 +1908,9 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 
 	if (m->invincTicks > 0) m->invincTicks--;
 	if (m->hurtTicks   > 0) m->hurtTicks--;
+	/* Mob.tick decrements attackTime before the AI runs, so a hit landed this */
+	/*  tick (Mob_DoAttack below) leaves it freshly reset to 5 for the swing. */
+	if (m->attackTime  > 0) m->attackTime--;
 
 	if (m->health <= 0) {
 		m->deathTicks++;
@@ -2216,6 +2222,14 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 		Entity_LerpAngles(e, t);
 
 		AnimatedComp_GetCurrent(e, t);
+		/* Mob.render: grounded = (attackTime - partialTick)/5, clamped >= 0. */
+		/*  This 0..1 value drives the humanoid attack arm swing (read by the */
+		/*  zombie/skeleton models); it's harmlessly ignored by the other models. */
+		{
+			float prog = (float)m->attackTime - t;
+			if (prog < 0.0f) prog = 0.0f;
+			e->Anim.AttackSwing = prog / 5.0f;
+		}
 		e->ShouldRender = Model_ShouldRender(e);
 		if (!e->ShouldRender) continue;
 

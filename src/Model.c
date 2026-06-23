@@ -1871,16 +1871,21 @@ static void SkeletonModel_MakeParts(void) {
 	BoxDesc_BuildBox(&skeleton_rightArm, &rArm);
 }
 
+/* SkeletonModel extends ZombieModel in c0.30, so it shares the attack swing */
+/*  (defined down in the ZombieModel section). */
+static float ZombieModel_ArmPitch(struct Entity* e);
+
 static void SkeletonModel_Draw(struct Entity* e) {
+	float armX = ZombieModel_ArmPitch(e);
 	Model_ApplyTexture(e);
 	Model_LockVB(e, SKELETON_MAX_VERTICES);
 
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &skeleton_head, true);
 	Model_DrawPart(&skeleton_torso);
-	Model_DrawRotate(e->Anim.LeftLegX,  0, 0,                      &skeleton_leftLeg,  false);
-	Model_DrawRotate(e->Anim.RightLegX, 0, 0,                      &skeleton_rightLeg, false);
-	Model_DrawRotate(90.0f * MATH_DEG2RAD,   0, e->Anim.LeftArmZ,  &skeleton_leftArm,  false);
-	Model_DrawRotate(90.0f * MATH_DEG2RAD,   0, e->Anim.RightArmZ, &skeleton_rightArm, false);
+	Model_DrawRotate(e->Anim.LeftLegX,  0, 0,                  &skeleton_leftLeg,  false);
+	Model_DrawRotate(e->Anim.RightLegX, 0, 0,                  &skeleton_rightLeg, false);
+	Model_DrawRotate(armX,              0, e->Anim.LeftArmZ,   &skeleton_leftArm,  false);
+	Model_DrawRotate(armX,              0, e->Anim.RightArmZ,  &skeleton_rightArm, false);
 
 	Model_UnlockVB();
 	Gfx_DrawVb_IndexedTris(SKELETON_MAX_VERTICES);
@@ -2016,9 +2021,29 @@ static void SpiderModel_Register(void) {
 /*########################################################################################################################*
 *--------------------------------------------------------ZombieModel------------------------------------------------------*
 *#########################################################################################################################*/
+/* c0.30's ZombieModel.setRotationAngles attack swing (inherited by */
+/*  SkeletonModel). Both arms swing together in pitch, driven by */
+/*  Anim.AttackSwing (= Mob.attackTime/5, interpolated; set by SurvivalTest's */
+/*  RenderMobs). At rest (AttackSwing == 0) this is just the static +90deg */
+/*  forward pose, so it's a no-op for the player and every non-attacking */
+/*  entity. Sign note: ClassiCube's arm convention is mirrored from Java's */
+/*  (we use +90deg where Java uses -90deg for the same forward pose), so */
+/*  Java's `pitch -= (v1*1.2 - v2*0.4)` becomes `+= (...)` here. If a swinging */
+/*  mob ever looks like it raises its arms the wrong way, flip that to `-=`. */
+static float ZombieModel_ArmPitch(struct Entity* e) {
+	float g = e->Anim.AttackSwing;
+	float v1, v2;
+	if (g <= 0.0f) return 90.0f * MATH_DEG2RAD;
+
+	v1 = Math_SinF(g * MATH_PI);
+	v2 = Math_SinF((1.0f - (1.0f - g) * (1.0f - g)) * MATH_PI);
+	return 90.0f * MATH_DEG2RAD + (v1 * 1.2f - v2 * 0.4f);
+}
+
 static void ZombieModel_Draw(struct Entity* e) {
-	e->Anim.LeftArmX  = 90.0f * MATH_DEG2RAD;
-	e->Anim.RightArmX = 90.0f * MATH_DEG2RAD;
+	float armX = ZombieModel_ArmPitch(e);
+	e->Anim.LeftArmX  = armX;
+	e->Anim.RightArmX = armX;
 	HumanModel_DrawCore(e, &human_set, false);
 }
 static void ZombieModel_DrawArm(struct Entity* e) {

@@ -15,7 +15,52 @@ touched this file, `3394a81`) and `0b1df4e`. All in `src/SurvivalTest.c` unless
 noted, all cross-referenced to the decompiled Java, all built with `-Werror`.
 Newest first.
 
+### Mob attack arm swing — AUTHENTIC c0.30, ported (zombie + skeleton)
+- **What it is:** the genuine c0.30 humanoid-mob melee swing. The user was right
+  that "zombies have it when attacking" — it lives in `ZombieModel.setRotationAngles`
+  (and `SkeletonModel extends ZombieModel`, so skeletons inherit it). Driven by
+  `Mob.attackTime`: `BasicAttackAI.attack()` sets `attackTime = 5` on a landed hit,
+  `Mob.tick()` decrements it, and `Mob.render()` feeds
+  `model.grounded = (attackTime - partialTick)/5` (clamped >= 0) into the model.
+  The model then swings both arms together in pitch by `v1*1.2 - v2*0.4` where
+  `v1 = sin(g*PI)`, `v2 = sin((1-(1-g)^2)*PI)`, `g = grounded`. Net motion: a
+  single up-then-down chop over 5 ticks (0.25s) right after a hit connects.
+- **How it's ported here:**
+  - `struct Mob` gained `int attackTime;` (`src/SurvivalTest.c`), decremented at the
+    top of `SurvivalTest_TickOneMob` (alongside `invincTicks`/`hurtTicks`, i.e.
+    BEFORE `Mob_DoAttack` runs, matching Java's tick order), and set to `5` in
+    `Mob_DoAttack`'s landed-hit branch.
+  - `AnimatedComp` gained `float AttackSwing;` (`src/EntityComponents.h`) — the
+    per-render-frame `grounded` value. `SurvivalTest_RenderMobs` computes
+    `(attackTime - t)/5`, clamped >= 0, and stores it on `e->Anim.AttackSwing`
+    just before `Model_Render` (exactly Java's `Mob.render` interpolation; no
+    prev/next snapshot needed since the int + fractional `t` already smooth it).
+  - `ZombieModel_ArmPitch(e)` in `src/Model.c` computes the swung arm pitch from
+    `AttackSwing` and is used by both `ZombieModel_Draw` and `SkeletonModel_Draw`
+    (forward-declared above the skeleton draw since skeleton comes first in the
+    file). At `AttackSwing == 0` it returns the plain `+90deg` forward pose, so it
+    is a **no-op for the player, creative-mode zombies/skeletons, and every
+    non-attacking entity** — `AttackSwing` is only ever set non-zero by RenderMobs.
+- **Sign note:** ClassiCube's arm convention is mirrored from Java's (we use
+  `+90deg` where Java uses `-90deg` for the same forward pose), so Java's
+  `pitch -= (v1*1.2 - v2*0.4)` is `+= (...)` here. If a swinging mob ever looks
+  like it raises its arms the wrong way, flip that to `-=` in `ZombieModel_ArmPitch`.
+  (Couldn't verify visually — no display in this environment.)
+- **Known simplification (deliberate):** only the **pitch** chop is ported. The
+  authentic `ZombieModel` also spreads the arms in **yaw** (`±(0.1 - v1*0.6)`) and
+  adds a constant tiny idle sway in roll/pitch. The yaw spread needs an arm-Y
+  rotation (the arm draws currently pass Y=0) and the idle sway is always-on (would
+  change the *resting* pose of every zombie/skeleton, incl. creative). Both were
+  skipped to keep the change to the attack motion only and avoid touching the
+  shared human draw path / resting pose. Formula is recorded here for a future,
+  fuller port. Non-humanoid attackers (creeper/spider) also set `attackTime` but
+  their models don't read `AttackSwing`, so it's harmlessly ignored.
+
 ### Player model attack/punch swing (non-authentic cosmetic) — DISABLED, deferred
+- **NOTE:** the bullet below from the previous session wrongly concluded c0.30 has
+  no mob attack animation. It does (see the section just above) — that was a gap in
+  ClassiCube's port, now filled. The player-side punch infra remains disabled as
+  described, awaiting the future beta-humanoid-animation work.
 - **Status: disabled by user request.** The trigger call
   `AnimatedComp_StartPunch(&Entities.CurPlayer->Base.Anim)` in
   `HeldBlockRenderer_ClickAnim` (`src/HeldBlockRenderer.c`) has been removed (and
