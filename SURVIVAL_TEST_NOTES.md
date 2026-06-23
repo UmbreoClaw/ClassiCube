@@ -18,8 +18,13 @@ hunger, mobs and dropped items".
 - `cbSurvival` (`LCheckbox`) → `btnSurvival` (`LButton`, 145x35, matching
   `btnEnhanced`/`btnClassicHax`/`btnClassic`). Click handler
   `SurvivalMode_Click` reads+flips `OPT_SURVIVAL_MODE` and relabels itself
-  via `LButton_SetConst` to `"Survival mode: ON"`/`"Survival mode: OFF"` -
-  same toggle-caption pattern as the F9 debug menu's `SetToggleLabels`.
+  via `LButton_SetConst` to `"Survival: ON"`/`"Survival: OFF"` - same
+  toggle-caption pattern as the F9 debug menu's `SetToggleLabels`.
+- Caption was originally `"Survival mode: ON"`/`"Survival mode: OFF"` but
+  that overflowed the fixed 145px button width (longer than the other
+  buttons' captions, e.g. "Classic +hax" at 12 chars) - `LButton` doesn't
+  auto-size to text. Shortened to `"Survival: ON"`/`"Survival: OFF"`
+  (12/13 chars) to match.
 - `lblSurvival` widened from 1 line to 2 (`lblSurvival[2]`) to match the
   other three buttons' two-line descriptions: "Based on Classic Survival
   Test - adds hearts, hunger, mobs, and mining".

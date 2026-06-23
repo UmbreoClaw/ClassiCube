@@ -218,7 +218,7 @@ static void SurvivalMode_Click(void* w_) {
 	cc_bool enabled = !Options_GetBool(OPT_SURVIVAL_MODE, false);
 
 	Options_SetBool(OPT_SURVIVAL_MODE, enabled);
-	LButton_SetConst(w, enabled ? "Survival mode: ON" : "Survival mode: OFF");
+	LButton_SetConst(w, enabled ? "Survival: ON" : "Survival: OFF");
 }
 
 CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) {
@@ -264,7 +264,7 @@ static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	LLabel_Add(s,  &s->lblClassic[1], "&ethe original minecraft classic",     mode_lblClassic1);
 
 	LButton_Add(s, &s->btnSurvival, 145, 35,
-				Options_GetBool(OPT_SURVIVAL_MODE, false) ? "Survival mode: ON" : "Survival mode: OFF",
+				Options_GetBool(OPT_SURVIVAL_MODE, false) ? "Survival: ON" : "Survival: OFF",
 				SurvivalMode_Click, mode_btnSurvival);
 	LLabel_Add(s,  &s->lblSurvival[0], "&eBased on Classic Survival Test - adds", mode_lblSurvival0);
 	LLabel_Add(s,  &s->lblSurvival[1], "&ehearts, hunger, mobs, and mining",      mode_lblSurvival1);
