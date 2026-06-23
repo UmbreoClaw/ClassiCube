@@ -8,7 +8,77 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — combat/mob fixes, render smoothing, TNT entity, inventory direction (latest)
+## SESSION LOG — zombie/skeleton plate armor (latest)
+
+### Mob armor (helmet + body plate) — AUTHENTIC c0.30, fully ported
+
+**Research findings (confirmed against `/tmp/good2000mo_oc` decompiled source,
+the primary ground-truth tree):**
+- `Mob` → `HumanoidMob` (adds `boolean helmet, armor`, each
+  `Math.random() < 0.2`, rolled ONCE in the constructor) → `Zombie extends
+  HumanoidMob` → `Skeleton extends Zombie`. So **both zombies and skeletons**
+  get independent ~20%/20% helmet/armor rolls; no other mob (pig/sheep/
+  creeper/spider) extends `HumanoidMob`, so none of them can ever have armor.
+- **Purely cosmetic — confirmed no damage-mitigation path exists anywhere.**
+  Grepped `Mob.hurt()` and `NetworkPlayer.java`; the only other `armor`/
+  `helmet` reference in the whole tree is `NetworkPlayer`'s
+  `this.armor = this.helmet = false;` field init, never read for defense.
+- Render mechanism: `HumanoidMob.renderModel` does a SECOND draw pass bound to
+  `/armor/plate.png`, using a single shared cached model `"humanoid.armor"`
+  (= `new HumanoidModel(1.0F)`, i.e. the same humanoid geometry with every box
+  outset/inflated by 1 unit on each face — same trick as the player's
+  hat/2nd-layer skin parts). It renders `head` if `helmet`, and
+  `body+rightArm+leftArm` if `armor` (legs are hardcoded to NEVER render,
+  in the original too). Pose is copied live from the mob's own current model
+  pose each frame.
+- **Faithful quirk preserved, not "fixed":** `SkeletonModel extends
+  ZombieModel extends HumanoidModel`, so the cast in `renderModel` succeeds
+  for skeletons too — but the armor overlay always uses the oversized/thick
+  `HumanoidModel` arm geometry, never `SkeletonModel`'s own thinner arms. So
+  an armored skeleton's plate overlay is visibly chunkier than its own arms
+  in genuine c0.30. Ported as-is (both `human_armor*` and `skeleton_armor*`
+  parts use byte-identical `BoxDesc` box dimensions).
+- `/armor/plate.png` (64x32 RGBA, 742 bytes) is a real bundled c0.30 asset,
+  byte-identical across all three decompiled trees and an extracted built
+  jar. Embedded directly into `Model.c` (same pattern as `arrows.png`/
+  `cracks.png` in `SurvivalTest.c`) since no ClassiCube texture pack ships it.
+  A sibling `/armor/chain.png` exists in the same folders but is referenced
+  by **zero** code anywhere — dead/unused planned-but-never-wired chainmail
+  tier, deliberately excluded.
+
+**Implementation (`src/EntityComponents.h`, `src/SurvivalTest.c`, `src/Model.c`):**
+- `AnimatedComp` gained `cc_bool HasHelmet, HasArmor` — copied from the mob's
+  own `hasHelmet`/`hasArmor` every render frame in `SurvivalTest_RenderMobs`,
+  always false for the player/anything else.
+- `struct Mob` gained `cc_bool hasHelmet, hasArmor`, rolled independently in
+  `SurvivalTest_SpawnMobAt` only `if (type == MOB_TYPE_ZOMBIE ||
+  type == MOB_TYPE_SKELETON)` — there's no `HumanoidMob` class in ClassiCube
+  (flat `enum MobType` + `struct MobTypeInfo` table design), so the Java
+  class-hierarchy check just becomes this one `if`.
+- `Model.c`: added `human_armorHead/Torso/LeftArm/RightArm` parts (built in
+  `HumanModel_MakeParts`, sized via `BoxDesc_Dims` + `BoxDesc_Bounds` with a
+  +1 unit inflate, mirroring the existing hat/2nd-layer convention) and an
+  identical set of `skeleton_armor*` parts (built in
+  `SkeletonModel_MakeParts` — duplicated, not shared, because
+  `BoxDesc_BuildBox` writes into whichever `struct Model` is `Models.Active`,
+  and zombie/skeleton are separate `Model`s with separate vertex arrays).
+  Bumped both `human_vertices[]` and `skeleton_vertices[]` sizes accordingly.
+- New `MobArmor_Draw()` helper: bails immediately if neither flag is set;
+  lazily decodes the embedded `plate_png[]` into `armor_texId` on first use
+  (also registered as a `TextureEntry` so a real texture pack can still
+  override it); computes a vertex count dynamic on which of helmet/armor are
+  set (engine has no "skip draw but reserve VB slot" mechanism), does its own
+  `Model_LockVB`/`Model_UnlockVB` pass (separate from the body's own, since
+  armor is conditional per-instance), and binds `plate.png` for its own
+  `Gfx_DrawVb_IndexedTris` call. Called from both `ZombieModel_Draw` and
+  `SkeletonModel_Draw` right after their normal body draw.
+- Built clean with `-Werror`; headless Xvfb smoke test ran 25s with no crash
+  (exit 124 = timeout, expected — this environment has no real display, so
+  this only verifies crash-safety, not the actual visual look of the armor).
+
+---
+
+## SESSION LOG — combat/mob fixes, render smoothing, TNT entity, inventory direction
 
 Catch-up entry covering the work between the "stuck drops" fix (last commit that
 touched this file, `3394a81`) and `0b1df4e`. All in `src/SurvivalTest.c` unless

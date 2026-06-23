@@ -39,6 +39,12 @@ struct AnimatedComp {
 	/*  the zombie/skeleton arms' slow always-on idle roll/pitch sway. Unused by */
 	/*  anything else, so 0 (the default) is harmless for the player/other models. */
 	float Age;
+
+	/* c0.30 HumanoidMob.helmet/armor - purely cosmetic plate-armor overlay flags, */
+	/*  rolled once (independently, ~20% each) when a zombie/skeleton spawns (see */
+	/*  SurvivalTest's SurvivalTest_SpawnMobAt), copied here per render frame by */
+	/*  RenderMobs and read by Model.c's MobArmor_Draw. Always false elsewhere. */
+	cc_bool HasHelmet, HasArmor;
 };
 
 void AnimatedComp_Init(struct AnimatedComp* anim);

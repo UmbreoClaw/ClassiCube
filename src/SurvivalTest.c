@@ -1322,6 +1322,12 @@ struct Mob {
 	/*  chance to regrow its fur (so a sheared sheep can become shearable again). */
 	cc_bool grazing;
 	int     grazingTime;
+
+	/* Zombie/skeleton-only (HumanoidMob.helmet/armor): independent ~20% rolls */
+	/*  made once at spawn time (see SurvivalTest_SpawnMobAt), purely cosmetic - */
+	/*  no damage reduction in the original. Forwarded to e->Anim.HasHelmet/ */
+	/*  HasArmor every render frame for the zombie/skeleton models to draw. */
+	cc_bool hasHelmet, hasArmor;
 };
 static struct Mob st_mobs[MOB_MAX];
 
@@ -2109,6 +2115,15 @@ static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->airTicks = MOB_AIR_TICKS;
 	m->active   = true;
 	m->hasFur   = true; /* irrelevant for non-sheep, but harmless */
+
+	/* HumanoidMob's `helmet = Math.random() < 0.2`/`armor = Math.random() < 0.2` */
+	/*  field initialisers - only zombies/skeletons extend HumanoidMob, so every */
+	/*  other type is faithfully left with neither (pigs/sheep/creepers/spiders */
+	/*  have no arms/head shaped to wear plate on in the original anyway). */
+	if (type == MOB_TYPE_ZOMBIE || type == MOB_TYPE_SKELETON) {
+		m->hasHelmet = Random_Float(&st_mobRng) < 0.2f;
+		m->hasArmor  = Random_Float(&st_mobRng) < 0.2f;
+	}
 }
 
 /* MobSpawner.spawn - for each of `count` attempts, picks a random point */
@@ -2233,6 +2248,8 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 			if (prog < 0.0f) prog = 0.0f;
 			e->Anim.AttackSwing = prog / 5.0f;
 			e->Anim.Age         = (float)m->ticksAlive + t;
+			e->Anim.HasHelmet   = m->hasHelmet;
+			e->Anim.HasArmor    = m->hasArmor;
 		}
 		e->ShouldRender = Model_ShouldRender(e);
 		if (!e->ShouldRender) continue;
