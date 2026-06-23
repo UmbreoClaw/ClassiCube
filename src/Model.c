@@ -1327,6 +1327,13 @@ static void MobArmor_Draw(struct Entity* e, struct ModelPart* head, struct Model
 	if (helmet) count += ARMOR_HEAD_VERTICES;
 	if (armor)  count += ARMOR_BODY_VERTICES;
 	Model_LockVB(e, count);
+	/* Model_DrawPart/Model_DrawRotate emit into Models.Vertices[model->index] and */
+	/*  bump model->index. Model_SetupState zeroes it once per entity, but the body */
+	/*  draw (HumanModel_DrawCore) already consumed that range and left model->index */
+	/*  at its own vertex count - so this fresh, smaller armor VB must restart from 0, */
+	/*  else the armor verts spill past the locked region and the count we draw from */
+	/*  offset 0 is uninitialised garbage (the "broken armor" look). */
+	Models.Active->index = 0;
 
 	if (helmet) Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, head, true);
 	if (armor) {

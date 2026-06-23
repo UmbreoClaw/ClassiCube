@@ -8,7 +8,44 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — zombie/skeleton plate armor (latest)
+## SESSION LOG — armor render fix (latest)
+
+### Broken armor overlay — `MobArmor_Draw` VB index bug, FIXED
+
+User play-tested the new zombie/skeleton plate armor and reported it "seems to
+be broken" (screenshot showed an armored zombie rendering wrong). Root-caused
+by reading the model VB plumbing, not guessed:
+
+- `Model_DrawPart`/`Model_DrawRotate` emit each vertex at
+  `Models.Vertices[model->index]` and bump `model->index`. That index is zeroed
+  **once per entity** by `Model_SetupState` (right before `model->Draw(e)`), and
+  every model's single `Model_LockVB`→draw→`Model_UnlockVB` batch relies on it
+  being 0 at lock time.
+- `MobArmor_Draw` does a **second** `Model_LockVB(e, count)` *after*
+  `HumanModel_DrawCore` already ran the body batch — which left `model->index`
+  sitting at the body's vertex count (~252+). Nothing resets it between the two
+  locks, so the armor parts were written **past the end** of the freshly-locked,
+  much smaller (`count` ≤ 144) armor region, while `Gfx_DrawVb_IndexedTris(count)`
+  drew indices `[0,count)` that were never written — i.e. uninitialised/stale GPU
+  buffer contents. That garbage geometry is exactly the "broken armor" the user
+  saw.
+- The Sheep two-texture model (`SheepModel_Draw`) avoids this by doing body+fur
+  in **one** lock (index flows 0→body→fur continuously) and drawing sub-ranges
+  with `Gfx_DrawVb_IndexedTris_Range`. Armor is kept as a separate second lock
+  (so it stays isolated to zombie/skeleton instead of being threaded through the
+  shared `HumanModel_DrawCore`), so it just needs to restart the index.
+- **Fix:** `Models.Active->index = 0;` immediately after `Model_LockVB(e, count)`
+  in `MobArmor_Draw` (`Model.c`), with a comment explaining why. Armor verts now
+  fill `[0,count)`, matching what gets drawn. Built clean with `-Werror`; headless
+  Xvfb smoke ran with no crash. Visual correctness to be confirmed on the user's
+  machine (no real display/default.zip here).
+- NOTE: this bug only ever affected armored zombies/skeletons (the ~20%/20%
+  rolls). Un-armored mobs never enter `MobArmor_Draw` past its early-out, which
+  is why most mobs looked fine and only some looked broken.
+
+---
+
+## SESSION LOG — zombie/skeleton plate armor
 
 ### Mob armor (helmet + body plate) — AUTHENTIC c0.30, fully ported
 
