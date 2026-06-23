@@ -8,7 +8,29 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — arrows burying into blocks (latest)
+## SESSION LOG — launcher "Choose mode" survival toggle (latest)
+
+User asked for the "Survival mode" checkbox on the Launcher's Choose Mode
+screen (`LScreens.c`'s `ChooseModeScreen`) to become a button like the three
+mode buttons above it, plus a clearer description than the old "Hearts,
+hunger, mobs and dropped items".
+
+- `cbSurvival` (`LCheckbox`) → `btnSurvival` (`LButton`, 145x35, matching
+  `btnEnhanced`/`btnClassicHax`/`btnClassic`). Click handler
+  `SurvivalMode_Click` reads+flips `OPT_SURVIVAL_MODE` and relabels itself
+  via `LButton_SetConst` to `"Survival mode: ON"`/`"Survival mode: OFF"` -
+  same toggle-caption pattern as the F9 debug menu's `SetToggleLabels`.
+- `lblSurvival` widened from 1 line to 2 (`lblSurvival[2]`) to match the
+  other three buttons' two-line descriptions: "Based on Classic Survival
+  Test - adds hearts, hunger, mobs, and mining".
+- `CHOOSEMODE_SCREEN_MAX_WIDGETS` bumped 14→15 (net +1 widget: checkbox+1
+  label → button+2 labels).
+- Cosmetic/UI only - no gameplay logic touched, `OPT_SURVIVAL_MODE` plumbing
+  unchanged.
+
+---
+
+## SESSION LOG — arrows burying into blocks
 
 User reported arrows sink almost flush into blocks here, whereas in genuine
 c0.30-s they stick out — and crucially "it depends on the angle shot at"

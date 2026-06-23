@@ -184,13 +184,12 @@ static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
 static struct ChooseModeScreen {
 	LScreen_Layout
 	struct LLine seps[2];
-	struct LButton btnEnhanced, btnClassicHax, btnClassic, btnBack;
-	struct LLabel  lblHelp, lblEnhanced[2], lblClassicHax[2], lblClassic[2], lblSurvival;
-	struct LCheckbox cbSurvival;
+	struct LButton btnEnhanced, btnClassicHax, btnClassic, btnSurvival, btnBack;
+	struct LLabel  lblHelp, lblEnhanced[2], lblClassicHax[2], lblClassic[2], lblSurvival[2];
 	cc_bool firstTime;
 } ChooseModeScreen CC_BIG_VAR;
 
-#define CHOOSEMODE_SCREEN_MAX_WIDGETS 14
+#define CHOOSEMODE_SCREEN_MAX_WIDGETS 15
 static struct LWidget* chooseMode_widgets[CHOOSEMODE_SCREEN_MAX_WIDGETS];
 
 LAYOUTS mode_seps0[] = { { ANCHOR_CENTRE, -5 }, { ANCHOR_CENTRE, -85 } };
@@ -206,15 +205,20 @@ LAYOUTS mode_btnClassic[]     = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE, 
 LAYOUTS mode_lblClassic0[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,   20 - 12 } };
 LAYOUTS mode_lblClassic1[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,   20 + 12 } };
 
-LAYOUTS mode_cbSurvival[]  = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE,  85 } };
-LAYOUTS mode_lblSurvival[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  85 } };
+LAYOUTS mode_btnSurvival[]  = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE,  90      } };
+LAYOUTS mode_lblSurvival0[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 - 12 } };
+LAYOUTS mode_lblSurvival1[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 + 12 } };
 
 LAYOUTS mode_lblHelp[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 160 } };
 LAYOUTS mode_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 170 } };
 
 
-static void SurvivalMode_Changed(struct LCheckbox* w) {
-	Options_SetBool(OPT_SURVIVAL_MODE, w->value);
+static void SurvivalMode_Click(void* w_) {
+	struct LButton* w = (struct LButton*)w_;
+	cc_bool enabled = !Options_GetBool(OPT_SURVIVAL_MODE, false);
+
+	Options_SetBool(OPT_SURVIVAL_MODE, enabled);
+	LButton_SetConst(w, enabled ? "Survival mode: ON" : "Survival mode: OFF");
 }
 
 CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) {
@@ -259,10 +263,11 @@ static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	LLabel_Add(s,  &s->lblClassic[0], "&eOnly uses blocks and features from", mode_lblClassic0);
 	LLabel_Add(s,  &s->lblClassic[1], "&ethe original minecraft classic",     mode_lblClassic1);
 
-	LCheckbox_Add(s, &s->cbSurvival, "Survival mode",
-				SurvivalMode_Changed, mode_cbSurvival);
-	LLabel_Add(s,  &s->lblSurvival, "&eHearts, hunger, mobs and dropped items", mode_lblSurvival);
-	LCheckbox_Set(&s->cbSurvival, Options_GetBool(OPT_SURVIVAL_MODE, false));
+	LButton_Add(s, &s->btnSurvival, 145, 35,
+				Options_GetBool(OPT_SURVIVAL_MODE, false) ? "Survival mode: ON" : "Survival mode: OFF",
+				SurvivalMode_Click, mode_btnSurvival);
+	LLabel_Add(s,  &s->lblSurvival[0], "&eBased on Classic Survival Test - adds", mode_lblSurvival0);
+	LLabel_Add(s,  &s->lblSurvival[1], "&ehearts, hunger, mobs, and mining",      mode_lblSurvival1);
 
 	if (s->firstTime) {
 		LLabel_Add(s,  &s->lblHelp, "&eClick &fEnhanced &eif you're not sure which mode to choose.", mode_lblHelp);
