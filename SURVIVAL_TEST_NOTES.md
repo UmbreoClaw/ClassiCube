@@ -383,8 +383,22 @@ A paperdoll inventory was built then deliberately gated/removed for faithful mod
 ### Debug aid (temporary)
 - **F9 debug menu** (`c7234e6`): `SurvivalDebugScreen` (Menus.c), survival-only —
   spawn each mob type, heal/hurt, kill all mobs, refill arrows. Explicitly *not*
-  c0.30-s parity; isolated (one screen + three `SurvivalTest_Debug*` fns + one
+  c0.30-s parity; isolated (one screen + the `SurvivalTest_Debug*` fns + one
   InputHandler hook) so it's easy to strip out later.
+- **Expanded (latest session)** at user request, for testing the armor fix and
+  the entity systems: now also has **Spawn drops** (a spread of stone/log/red-
+  mushroom/TNT items), **Spawn TNT** (a primed fused entity in front of you),
+  **Shoot arrow** (a free player arrow that doesn't spend the count), and three
+  *persistent* toggles whose button captions show ON/OFF live: **Invincible**
+  (`st_godMode` - blocks ALL player damage at the top of `SurvivalTest_Damage`),
+  **No-AI** (`st_debugNoAI` - subsequently debug-spawned mobs stand frozen for
+  inspection: no wander/chase/attack and held out of the despawn roll, but
+  gravity/hurt still apply), and **Armor** (`st_debugForceArmor` - forces
+  helmet+armor on every debug-spawned zombie/skeleton instead of the ~20% roll,
+  so the plate overlay is easy to eyeball). The two spawn toggles affect only
+  debug-menu spawns, never natural ones. `SurvivalTest_SpawnMobAt` now returns
+  the `struct Mob*` so `SurvivalTest_DebugSpawnMob` can post-apply those flags;
+  the F9 menu went 2 columns / 10 buttons -> 3 columns / 16 buttons.
 
 ---
 

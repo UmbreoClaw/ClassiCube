@@ -157,5 +157,26 @@ void SurvivalTest_DebugKillAllMobs(void);
 /* Sets the player's arrow count directly (clamped 0-99). No-op when survival mode is disabled. */
 void SurvivalTest_DebugSetArrows(int count);
 
+/* Spawns a small spread of dropped-item entities a couple of blocks in front of the */
+/*  player, to test drop physics/rendering/pickup. No-op when survival is disabled. */
+void SurvivalTest_DebugSpawnDrops(void);
+/* Ignites a primed TNT entity (full fuse) a couple of blocks in front of the player. */
+/*  No-op when survival is disabled. */
+void SurvivalTest_DebugSpawnTnt(void);
+/* Fires a player-type arrow along the look direction WITHOUT spending an arrow from */
+/*  the count, so it can be spammed while testing. No-op when survival is disabled. */
+void SurvivalTest_DebugShootArrow(void);
+
+/* Debug spawn-affecting toggles + invincibility. The Toggle* fns flip the flag; the */
+/*  plain getters report current state (used to label the F9 menu buttons). God mode */
+/*  blocks all player damage; NoAI/ForceArmor only affect mobs spawned via the debug */
+/*  menu afterwards (never natural spawns). All no-op/false when survival is disabled. */
+cc_bool SurvivalTest_DebugGodMode(void);
+cc_bool SurvivalTest_DebugNoAI(void);
+cc_bool SurvivalTest_DebugForceArmor(void);
+void SurvivalTest_DebugToggleGodMode(void);
+void SurvivalTest_DebugToggleNoAI(void);
+void SurvivalTest_DebugToggleForceArmor(void);
+
 CC_END_HEADER
 #endif

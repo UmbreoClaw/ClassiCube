@@ -3002,7 +3002,12 @@ void NostalgiaMenuScreen_Show(void) {
 /*  opened with F9 - see InputHandler.c. Not part of genuine c0.30-s parity; this entire */
 /*  section, its SurvivalTest_Debug* counterparts in SurvivalTest.c/h, and the F9 hook can */
 /*  all be deleted later without affecting parity. */
-#define DEBUG_MAX_BTNS 10
+#define DEBUG_MAX_BTNS 16
+/* Indices into btns[]/survivalDebug_descs of the three stateful toggles, whose */
+/*  labels are rebuilt from current state (ON/OFF) rather than being constant. */
+#define DEBUG_BTN_INVINC 12
+#define DEBUG_BTN_NOAI   13
+#define DEBUG_BTN_ARMOR  14
 static struct SurvivalDebugScreen {
 	Screen_Body
 	struct TextWidget title;
@@ -3013,6 +3018,23 @@ static struct SurvivalDebugScreen {
 
 static void SurvivalDebugScreen_Close(void* a, void* b) { Gui_Remove((struct Screen*)&SurvivalDebugScreen); }
 
+/* Rebuilds the three toggle buttons' captions from current state (ON/OFF). */
+static void SurvivalDebugScreen_SetToggleLabels(struct SurvivalDebugScreen* s, struct FontDesc* font) {
+	ButtonWidget_SetConst(&s->btns[DEBUG_BTN_INVINC], SurvivalTest_DebugGodMode()    ? "Invincible: ON"  : "Invincible: OFF", font);
+	ButtonWidget_SetConst(&s->btns[DEBUG_BTN_NOAI],   SurvivalTest_DebugNoAI()       ? "No-AI: ON"       : "No-AI: OFF",      font);
+	ButtonWidget_SetConst(&s->btns[DEBUG_BTN_ARMOR],  SurvivalTest_DebugForceArmor() ? "Armor: ON"       : "Armor: OFF",      font);
+}
+
+/* A toggle handler flips its flag then refreshes the captions. The button-click */
+/*  callback's first arg is the owning screen (see Menu_PointerDown dispatch). */
+static void SurvivalDebugScreen_RefreshToggles(void* screen) {
+	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
+	struct FontDesc font;
+	Gui_MakeTitleFont(&font);
+	SurvivalDebugScreen_SetToggleLabels(s, &font);
+	Font_Free(&font);
+}
+
 static void SurvivalDebugScreen_SpawnZombie(void* a, void* b)   { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_ZOMBIE); }
 static void SurvivalDebugScreen_SpawnSkeleton(void* a, void* b) { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SKELETON); }
 static void SurvivalDebugScreen_SpawnSpider(void* a, void* b)   { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SPIDER); }
@@ -3020,22 +3042,38 @@ static void SurvivalDebugScreen_SpawnCreeper(void* a, void* b)  { SurvivalTest_D
 static void SurvivalDebugScreen_SpawnPig(void* a, void* b)      { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_PIG); }
 static void SurvivalDebugScreen_SpawnSheep(void* a, void* b)    { SurvivalTest_DebugSpawnMob(SURVIVAL_DEBUG_MOB_SHEEP); }
 
+static void SurvivalDebugScreen_SpawnDrops(void* a, void* b)   { SurvivalTest_DebugSpawnDrops(); }
+static void SurvivalDebugScreen_SpawnTnt(void* a, void* b)     { SurvivalTest_DebugSpawnTnt(); }
+static void SurvivalDebugScreen_ShootArrow(void* a, void* b)   { SurvivalTest_DebugShootArrow(); }
+
 static void SurvivalDebugScreen_HealFull(void* a, void* b)     { SurvivalTest_Heal(SURVIVAL_MAX_HEALTH); }
 static void SurvivalDebugScreen_Hurt(void* a, void* b)         { SurvivalTest_Hurt(5); }
 static void SurvivalDebugScreen_KillAllMobs(void* a, void* b)  { SurvivalTest_DebugKillAllMobs(); }
 static void SurvivalDebugScreen_RefillArrows(void* a, void* b) { SurvivalTest_DebugSetArrows(99); }
 
+static void SurvivalDebugScreen_ToggleInvinc(void* a, void* b) { SurvivalTest_DebugToggleGodMode();    SurvivalDebugScreen_RefreshToggles(a); }
+static void SurvivalDebugScreen_ToggleNoAI(void* a, void* b)   { SurvivalTest_DebugToggleNoAI();       SurvivalDebugScreen_RefreshToggles(a); }
+static void SurvivalDebugScreen_ToggleArmor(void* a, void* b)  { SurvivalTest_DebugToggleForceArmor(); SurvivalDebugScreen_RefreshToggles(a); }
+
+/* 3 columns (x = -160 / 0 / 160) to fit everything; toggle captions (indices */
+/*  12-14, see DEBUG_BTN_*) are placeholders, replaced by SetToggleLabels. */
 static const struct SimpleButtonDesc survivalDebug_descs[DEBUG_MAX_BTNS] = {
-	{ -160, -120, "Spawn Zombie",   SurvivalDebugScreen_SpawnZombie },
-	{  160, -120, "Spawn Skeleton", SurvivalDebugScreen_SpawnSkeleton },
-	{ -160,  -70, "Spawn Spider",   SurvivalDebugScreen_SpawnSpider },
-	{  160,  -70, "Spawn Creeper",  SurvivalDebugScreen_SpawnCreeper },
-	{ -160,  -20, "Spawn Pig",      SurvivalDebugScreen_SpawnPig },
-	{  160,  -20, "Spawn Sheep",    SurvivalDebugScreen_SpawnSheep },
-	{ -160,   40, "Heal to full",   SurvivalDebugScreen_HealFull },
-	{  160,   40, "Hurt (-5 HP)",   SurvivalDebugScreen_Hurt },
-	{ -160,   90, "Kill all mobs",  SurvivalDebugScreen_KillAllMobs },
-	{  160,   90, "Refill arrows",  SurvivalDebugScreen_RefillArrows },
+	{ -160, -150, "Spawn Zombie",    SurvivalDebugScreen_SpawnZombie },
+	{    0, -150, "Spawn Skeleton",  SurvivalDebugScreen_SpawnSkeleton },
+	{  160, -150, "Spawn Spider",    SurvivalDebugScreen_SpawnSpider },
+	{ -160, -105, "Spawn Creeper",   SurvivalDebugScreen_SpawnCreeper },
+	{    0, -105, "Spawn Pig",       SurvivalDebugScreen_SpawnPig },
+	{  160, -105, "Spawn Sheep",     SurvivalDebugScreen_SpawnSheep },
+	{ -160,  -60, "Spawn drops",     SurvivalDebugScreen_SpawnDrops },
+	{    0,  -60, "Spawn TNT",       SurvivalDebugScreen_SpawnTnt },
+	{  160,  -60, "Shoot arrow",     SurvivalDebugScreen_ShootArrow },
+	{ -160,  -15, "Heal to full",    SurvivalDebugScreen_HealFull },
+	{    0,  -15, "Hurt (-5 HP)",    SurvivalDebugScreen_Hurt },
+	{  160,  -15, "Refill arrows",   SurvivalDebugScreen_RefillArrows },
+	{ -160,   30, "Invincible: OFF", SurvivalDebugScreen_ToggleInvinc },
+	{    0,   30, "No-AI: OFF",      SurvivalDebugScreen_ToggleNoAI },
+	{  160,   30, "Armor: OFF",      SurvivalDebugScreen_ToggleArmor },
+	{    0,   80, "Kill all mobs",   SurvivalDebugScreen_KillAllMobs },
 };
 
 static void SurvivalDebugScreen_ContextRecreated(void* screen) {
@@ -3046,6 +3084,7 @@ static void SurvivalDebugScreen_ContextRecreated(void* screen) {
 
 	TextWidget_SetConst(&s->title, "Survival debug menu (F9)", &titleFont);
 	Menu_SetButtons(s->btns, &titleFont, survivalDebug_descs, DEBUG_MAX_BTNS);
+	SurvivalDebugScreen_SetToggleLabels(s, &titleFont); /* override the 3 toggles with ON/OFF state */
 	ButtonWidget_SetConst(&s->done, "Close", &titleFont);
 
 	Font_Free(&titleFont);
@@ -3053,7 +3092,7 @@ static void SurvivalDebugScreen_ContextRecreated(void* screen) {
 
 static void SurvivalDebugScreen_Layout(void* screen) {
 	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
-	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -170);
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -195);
 	Menu_LayoutButtons(s->btns, survivalDebug_descs, DEBUG_MAX_BTNS);
 	Menu_LayoutBack(&s->done);
 }

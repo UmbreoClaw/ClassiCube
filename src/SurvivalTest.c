@@ -77,6 +77,15 @@ static int   st_hurtTicks;
 /*  yaw at the moment of the hit, baked in (not recomputed while it decays). */
 static float st_hurtDir;
 
+/* Debug/testing toggles, driven by the F9 SurvivalDebugScreen - NOT part of */
+/*  genuine c0.30-s parity (see the Debug/testing tools section at the bottom). */
+/*  st_godMode blocks ALL player damage; st_debugNoAI and st_debugForceArmor */
+/*  affect only mobs subsequently spawned via the debug menu, never natural */
+/*  spawns. All default false (zero-init), so they're inert unless toggled on. */
+static cc_bool st_godMode;
+static cc_bool st_debugNoAI;
+static cc_bool st_debugForceArmor;
+
 /* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
 struct SurvivalSlot { BlockID block; cc_int16 count; };
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
@@ -672,6 +681,7 @@ static void SurvivalTest_DropInventory(void) {
 static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc, const Vec3* attackerPos) {
 	if (!SurvivalTest_Enabled) return;
 	if (st_isDead)             return;
+	if (st_godMode)            return; /* debug invincibility - blocks every damage source */
 	if (damage <= 0)           return;
 	if (!ignoreInvinc && st_invincTimer > 0.0f) return;
 
@@ -1328,6 +1338,10 @@ struct Mob {
 	/*  no damage reduction in the original. Forwarded to e->Anim.HasHelmet/ */
 	/*  HasArmor every render frame for the zombie/skeleton models to draw. */
 	cc_bool hasHelmet, hasArmor;
+	/* Debug-only (F9 menu): when set, this mob runs no wander/chase/attack AI - */
+	/*  it just stands still (gravity/hurt still apply) so it can be inspected. */
+	/*  Never set on naturally-spawned mobs. Not part of c0.30-s parity. */
+	cc_bool noAI;
 };
 static struct Mob st_mobs[MOB_MAX];
 
@@ -1954,6 +1968,16 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		m->moveStrafe  = 0.0f;
 		m->moveForward = 0.0f;
 		m->turnRate    = 0.0f;
+	} else if (m->noAI) {
+		/* Debug frozen mob (F9 menu): skip all wander/chase/attack so it just */
+		/*  stands still for inspection. Gravity/physics below still run, and it */
+		/*  can still be hurt/killed. Held out of the despawn roll too, so a */
+		/*  test mob can't vanish on its own while you're poking at it. */
+		m->jumping     = false;
+		m->moveStrafe  = 0.0f;
+		m->moveForward = 0.0f;
+		m->turnRate    = 0.0f;
+		m->hasTarget   = false;
 	} else {
 		m->noActionTime++;
 		/* BasicAI.tick's despawn roll: once a mob has gone 600+ ticks without */
@@ -2082,11 +2106,11 @@ static PackedCol Mob_GetColor(struct Entity* e) {
 /*  since Model_SetupState calls it directly. The rest can stay NULL. */
 static const struct EntityVTABLE mob_VTABLE = { NULL, NULL, NULL, Mob_GetColor, NULL, NULL };
 
-static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
+static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	struct Mob* m;
 	cc_string model;
 	int slot = SurvivalTest_FindFreeMobSlot();
-	if (slot < 0) return;
+	if (slot < 0) return NULL;
 
 	m = &st_mobs[slot];
 	Mem_Set(m, 0, sizeof(struct Mob));
@@ -2124,6 +2148,7 @@ static void SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 		m->hasHelmet = Random_Float(&st_mobRng) < 0.2f;
 		m->hasArmor  = Random_Float(&st_mobRng) < 0.2f;
 	}
+	return m;
 }
 
 /* MobSpawner.spawn - for each of `count` attempts, picks a random point */
@@ -3442,24 +3467,87 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 *#########################################################################################################################*/
 /* See SurvivalTest.h - not part of genuine c0.30-s parity, just manual-testing aids. */
 
-void SurvivalTest_DebugSpawnMob(int type) {
-	struct LocalPlayer* p;
+/* Common helper: a point `dist` blocks in front of the player along their look */
+/*  yaw (level, ignoring pitch), nudged up a touch. Returns false if there's no */
+/*  player yet, so every debug spawner can bail cleanly. */
+static cc_bool SurvivalTest_DebugFrontPos(float dist, Vec3* pos) {
+	struct LocalPlayer* p = Entities.CurPlayer;
 	struct Entity* e;
-	Vec3 dir, pos;
-	if (!SurvivalTest_Enabled) return;
-	if (type < 0 || type >= SURVIVAL_DEBUG_MOB_COUNT) return;
-
-	p = Entities.CurPlayer;
-	if (!p) return;
+	Vec3 dir;
+	if (!p) return false;
 	e = &p->Base;
 
 	dir = Vec3_GetDirVector(e->Yaw * MATH_DEG2RAD, 0.0f);
-	pos.x = e->Position.x + dir.x * 3.0f;
-	pos.y = e->Position.y + 0.5f;
-	pos.z = e->Position.z + dir.z * 3.0f;
-
-	SurvivalTest_SpawnMobAt((cc_uint8)type, pos);
+	pos->x = e->Position.x + dir.x * dist;
+	pos->y = e->Position.y + 0.5f;
+	pos->z = e->Position.z + dir.z * dist;
+	return true;
 }
+
+void SurvivalTest_DebugSpawnMob(int type) {
+	struct Mob* m;
+	Vec3 pos;
+	if (!SurvivalTest_Enabled) return;
+	if (type < 0 || type >= SURVIVAL_DEBUG_MOB_COUNT) return;
+	if (!SurvivalTest_DebugFrontPos(3.0f, &pos)) return;
+
+	m = SurvivalTest_SpawnMobAt((cc_uint8)type, pos);
+	if (!m) return;
+
+	/* Apply the persistent debug spawn toggles (F9 menu) to this one mob. */
+	if (st_debugNoAI) m->noAI = true;
+	if (st_debugForceArmor && (m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON)) {
+		m->hasHelmet = true;
+		m->hasArmor  = true;
+	}
+}
+
+void SurvivalTest_DebugSpawnDrops(void) {
+	/* A spread of distinct item renderings to eyeball drop physics/pickup at once. */
+	static const BlockID kinds[] = { BLOCK_STONE, BLOCK_LOG, BLOCK_RED_SHROOM, BLOCK_TNT };
+	Vec3 pos;
+	int i;
+	if (!SurvivalTest_Enabled) return;
+	if (!SurvivalTest_DebugFrontPos(2.0f, &pos)) return;
+
+	for (i = 0; i < (int)Array_Elems(kinds); i++) {
+		SurvivalTest_SpawnDropAt(pos, kinds[i]);
+	}
+}
+
+void SurvivalTest_DebugSpawnTnt(void) {
+	IVec3 coords;
+	Vec3 pos;
+	if (!SurvivalTest_Enabled) return;
+	if (!SurvivalTest_DebugFrontPos(2.0f, &pos)) return;
+
+	/* ArmTnt positions the primed entity at coords + 0.5 and ignites a fuse. */
+	coords.x = Math_Floor(pos.x);
+	coords.y = Math_Floor(pos.y);
+	coords.z = Math_Floor(pos.z);
+	SurvivalTest_ArmTnt(coords);
+}
+
+void SurvivalTest_DebugShootArrow(void) {
+	struct Entity* e;
+	Vec3 eye;
+	if (!SurvivalTest_Enabled) return;
+	if (!Entities.CurPlayer) return;
+	e = &Entities.CurPlayer->Base;
+
+	/* Same as a Tab-fire (eye-height, player force/damage), but free - doesn't */
+	/*  spend an arrow from the count, so you can spam them while testing. */
+	eye = Entity_GetEyePosition(e);
+	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
+							ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
+}
+
+cc_bool SurvivalTest_DebugGodMode(void)     { return st_godMode; }
+cc_bool SurvivalTest_DebugNoAI(void)        { return st_debugNoAI; }
+cc_bool SurvivalTest_DebugForceArmor(void)  { return st_debugForceArmor; }
+void SurvivalTest_DebugToggleGodMode(void)    { st_godMode          = !st_godMode; }
+void SurvivalTest_DebugToggleNoAI(void)       { st_debugNoAI        = !st_debugNoAI; }
+void SurvivalTest_DebugToggleForceArmor(void) { st_debugForceArmor  = !st_debugForceArmor; }
 
 void SurvivalTest_DebugKillAllMobs(void) {
 	struct Mob* m;
