@@ -8,7 +8,48 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — armor render fix (latest)
+## SESSION LOG — mob-mob pushing (latest)
+
+### Mobs shove each other apart — AUTHENTIC c0.30, ported
+
+User asked to close the last gameplay gap from the status audit: mob-mob
+push-apart physics. Ported from the ground-truth tree (`/tmp/good2000mo_oc`),
+not guessed:
+
+- Source: `BasicAI.tick()` ends (right after `mob.travel(...)`) with
+  `level.findEntities(mob, mob.bb.grow(0.2F,0,0.2F))` then `e.push(mob)` for
+  every neighbour where `e.isPushable()` (`Mob.isPushable() == !removed`).
+- `Entity.push(Entity)`: takes the horizontal centre-to-centre delta, normalises
+  it, divides by the distance **again**, scales by `0.05`, multiplies by
+  `1 - pushthrough`, then applies `-delta` to itself and `+delta` to the other —
+  an equal-and-opposite shove with a soft `1/dist` falloff (so each axis term is
+  `0.05*delta/dist^2`). Guarded by `sqXZDiff >= 0.01`. `pushthrough` is `0.0` for
+  every mob (only `NetworkPlayer` sets it `0.8`), so the `(1-pushthrough)` factor
+  is always 1 here.
+- Ported as `Mob_PushApart(m)` (`SurvivalTest.c`), called in
+  `SurvivalTest_TickOneMob` immediately after `Mob_Travel` (matching the
+  original's travel-then-push order). Uses `Entity_GetBounds` + the grown-0.2
+  AABB + `AABB_Intersects` to replicate `findEntities`, then writes the shove
+  straight into both mobs' `Base.Velocity` (= Java's `xd/zd`). Because the pass
+  runs from both mobs' ticks, each pair is processed twice per tick — exactly as
+  the original does (every mob's `BasicAI.tick` runs its own scan).
+- The `dist/dist/×0.05` chain simplifies to `delta/sq*0.05` (no sqrt needed),
+  since normalise(/dist) then /dist = /dist² = /sq. Done that way for speed; the
+  result is byte-identical to the Java order.
+- **Debug frozen (noAI) mobs are exempted on both sides** (skipped as both pusher
+  and pushee), so an F9-spawned "No-AI" inspection mob can't be nudged out of
+  place by its neighbours.
+- Built clean with `-Werror`; headless Xvfb smoke ran with no crash.
+- **Deliberately scoped to mob-mob only.** In the original, the same loop also
+  pushes the *player* (Player `extends Mob`, so `isPushable()` is true and mobs
+  shove the player too). NOT ported here: that would mean a SurvivalTest mob tick
+  reaching in to perturb the carefully-tuned `LocalPlayer` velocity, which is a
+  different integration and risk profile than mob-on-mob. Left as a documented,
+  faithful follow-up if the user wants mobs to physically jostle the player.
+
+---
+
+## SESSION LOG — armor render fix
 
 ### Broken armor overlay — `MobArmor_Draw` VB index bug, FIXED
 
@@ -1185,7 +1226,8 @@ Implemented entirely in `src/SurvivalTest.c` (+ hooks in `src/SurvivalTest.h`,
 ### Possible follow-ups (not done, not asked for yet)
 - Skeleton arrow-shooting (needs a projectile system — out of scope here).
 - Despawn-at-distance: **implemented** in the audit pass at the top of this file
-  (see `Mob.noActionTime`). Mob-mob push-apart physics is still not ported.
+  (see `Mob.noActionTime`). Mob-mob push-apart physics: **implemented** (see the
+  "mob-mob pushing" session-log entry at the top).
 - Mob death animation / fall-over before removal (currently mobs just
   freeze in place during `deathTicks` then vanish).
 - Mob names/render distance culling tuning, sound effects on hurt/death.

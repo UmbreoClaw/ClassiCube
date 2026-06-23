@@ -1905,6 +1905,49 @@ static void Mob_UpdateBodyYaw(struct Mob* m, Vec3 oldPos) {
 	e->RotY += diff * 0.1f;
 }
 
+/* BasicAI.tick's post-travel shove pass: level.findEntities(mob, mob.bb.grow( */
+/*  0.2,0,0.2)) then e.push(mob) for each pushable neighbour, so mobs don't pile */
+/*  into a single point. Entity.push normalises the horizontal centre-to-centre */
+/*  delta, divides by the distance AGAIN, then scales by 0.05 - i.e. each axis */
+/*  component is 0.05*delta/dist^2 (a soft 1/dist falloff). pushthrough is 0 for */
+/*  every mob (only NetworkPlayer sets it to 0.8), so the (1-pushthrough) factor */
+/*  is always 1 here. The two mobs get equal-and-opposite shoves, and since this */
+/*  runs from BOTH mobs' ticks each pair is processed twice per tick - faithful */
+/*  to the original, which has the same double-processing. Debug frozen (noAI) */
+/*  mobs are skipped on both sides so they stay put for inspection. */
+static void Mob_PushApart(struct Mob* m) {
+	struct Entity* e = &m->Base;
+	struct AABB selfBB, otherBB;
+	struct Mob* n;
+	float dx, dz, sq, fx, fz;
+	int i;
+	if (m->noAI) return;
+
+	Entity_GetBounds(e, &selfBB);
+	selfBB.Min.x -= 0.2f; selfBB.Max.x += 0.2f;
+	selfBB.Min.z -= 0.2f; selfBB.Max.z += 0.2f;
+
+	for (i = 0; i < MOB_MAX; i++) {
+		n = &st_mobs[i];
+		if (n == m || !n->active || n->noAI) continue;
+
+		Entity_GetBounds(&n->Base, &otherBB);
+		if (!AABB_Intersects(&selfBB, &otherBB)) continue;
+
+		dx = e->Position.x - n->Base.Position.x;
+		dz = e->Position.z - n->Base.Position.z;
+		sq = dx * dx + dz * dz;
+		if (sq < 0.01f) continue; /* Entity.push's sqXZDiff >= 0.01 guard */
+
+		/* normalise (/dist) then /dist again then *0.05 == *0.05/dist^2 == /sq*0.05 */
+		fx = dx / sq * 0.05f;
+		fz = dz / sq * 0.05f;
+		/* this(=n).push(-f); entity(=m).push(+f) - shove the pair apart. */
+		n->Base.Velocity.x -= fx; n->Base.Velocity.z -= fz;
+		e->Velocity.x      += fx; e->Velocity.z      += fz;
+	}
+}
+
 static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	const struct MobTypeInfo* info;
 	struct Entity* e = &m->Base;
@@ -2023,6 +2066,9 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 
 	oldPos = e->Position;
 	Mob_Travel(m, inWater, inLava);
+	/* BasicAI.tick shoves overlapping mobs apart right after travel (modifies */
+	/*  velocity, so it takes effect next tick - same as the original). */
+	Mob_PushApart(m);
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
 	Mob_UpdateBodyYaw(m, oldPos);
 
