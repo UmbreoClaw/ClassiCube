@@ -40,11 +40,24 @@ the primary ground-truth tree):**
   parts use byte-identical `BoxDesc` box dimensions).
 - `/armor/plate.png` (64x32 RGBA, 742 bytes) is a real bundled c0.30 asset,
   byte-identical across all three decompiled trees and an extracted built
-  jar. Embedded directly into `Model.c` (same pattern as `arrows.png`/
-  `cracks.png` in `SurvivalTest.c`) since no ClassiCube texture pack ships it.
-  A sibling `/armor/chain.png` exists in the same folders but is referenced
-  by **zero** code anywhere — dead/unused planned-but-never-wired chainmail
-  tier, deliberately excluded.
+  jar. Embedded directly into `Model.c` as a fallback (same pattern as
+  `arrows.png`/`cracks.png` in `SurvivalTest.c`), **and** added to
+  `Resources.c`'s `defaultZipEntries[]` (`"classic jar files"` group, next to
+  `arrows.png`/`zombie.png`/etc.) so the real asset auto-downloads from the
+  genuine c0.30 client jar into `texpacks/default.zip` like every other mob
+  skin — no `ClassicPatcher_SelectEntry`/`ProcessEntry` changes needed, since
+  that pipeline already matches purely by basename regardless of the jar's
+  internal `armor/` folder path. The embedded copy only matters before that
+  resource exists (e.g. very first launch); whichever one loads first wins,
+  and a texture pack can still override either via the `armor_entry`
+  `TextureEntry`. A sibling `/armor/chain.png` exists in the same folders but
+  is referenced by **zero** code anywhere — dead/unused planned-but-never-
+  wired chainmail tier, deliberately excluded (and NOT added to
+  `defaultZipEntries`).
+- `arrows.png` already had this same dual-source treatment from an earlier
+  session (`dceeebc`/`2e60f87`) — fixed its stale comment in
+  `SurvivalTest.c` while making this change, since it still claimed "no
+  texture pack ships it" despite `Resources.c` fetching the real one.
 
 **Implementation (`src/EntityComponents.h`, `src/SurvivalTest.c`, `src/Model.c`):**
 - `AnimatedComp` gained `cc_bool HasHelmet, HasArmor` — copied from the mob's

@@ -2586,12 +2586,14 @@ static void ArrowsPngProcess(struct Stream* stream, const cc_string* name) {
 }
 static struct TextureEntry arrows_entry = { "arrows.png", ArrowsPngProcess };
 
-/* Minecraft Classic's /item/arrows.png (32x32 RGBA). No ClassiCube texture */
-/*  pack ships an arrows.png, so the original asset is embedded here and */
-/*  uploaded directly - otherwise st_arrowsTexId would stay 0 and */
-/*  SurvivalTest_RenderArrows would bail, leaving every arrow invisible. A */
-/*  custom pack CAN still override it via the arrows_entry TextureEntry above */
-/*  (Game_UpdateTexture deletes this embedded one first, so no leak). */
+/* Minecraft Classic's /item/arrows.png (32x32 RGBA). Resources.c pulls the */
+/*  real asset from the classic jar into default.zip (same as char.png/ */
+/*  zombie.png/etc.), so this embedded copy is just a fallback for before */
+/*  that resource exists (e.g. very first launch) - otherwise st_arrowsTexId */
+/*  would stay 0 and SurvivalTest_RenderArrows would bail, leaving every */
+/*  arrow invisible. A custom pack CAN still override either source via the */
+/*  arrows_entry TextureEntry above (Game_UpdateTexture deletes whichever */
+/*  texture was active first, so no leak). */
 static const cc_uint8 arrows_png[] = {
 	0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
 	0x00,0x00,0x00,0x20,0x00,0x00,0x00,0x20,0x08,0x06,0x00,0x00,0x00,0x73,0x7A,0x7A,

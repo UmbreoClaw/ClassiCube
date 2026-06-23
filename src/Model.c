@@ -1234,12 +1234,14 @@ static void HumanoidModel_Register(void) {
 /*  here too rather than "fixed". Legs are never armoured either way. */
 static GfxResourceID armor_texId;
 
-/* Minecraft Classic's /armor/plate.png (64x32 RGBA). No ClassiCube texture */
-/*  pack ships a plate.png, so the original asset is embedded here and */
-/*  uploaded directly - otherwise armor_texId would stay 0 and MobArmor_Draw */
-/*  would bail, leaving every armored zombie/skeleton's overlay invisible. A */
-/*  custom pack CAN still override it via the armor_entry TextureEntry below */
-/*  (Game_UpdateTexture deletes this embedded one first, so no leak). */
+/* Minecraft Classic's /armor/plate.png (64x32 RGBA). Resources.c now pulls */
+/*  the real asset from the classic jar into default.zip (same as char.png/ */
+/*  zombie.png/etc.), so this embedded copy is just a fallback for before */
+/*  that resource exists (e.g. very first launch) - otherwise armor_texId */
+/*  would stay 0 and MobArmor_Draw would bail, leaving every armored zombie/ */
+/*  skeleton's overlay invisible. A custom pack CAN still override either */
+/*  source via the armor_entry TextureEntry below (Game_UpdateTexture */
+/*  deletes whichever texture was active first, so no leak). */
 static const cc_uint8 plate_png[] = {
 	0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
 	0x00,0x00,0x00,0x40,0x00,0x00,0x00,0x20,0x08,0x06,0x00,0x00,0x00,0xA2,0x9D,0x7E,

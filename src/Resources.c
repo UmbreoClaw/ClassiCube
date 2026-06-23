@@ -817,6 +817,7 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "sheep.png",    RESOURCE_TYPE_DATA }, { "sheep_fur.png",   RESOURCE_TYPE_DATA },
 	{ "skeleton.png", RESOURCE_TYPE_DATA }, { "spider.png",      RESOURCE_TYPE_DATA },
 	{ "zombie.png",   RESOURCE_TYPE_DATA }, { "arrows.png",      RESOURCE_TYPE_DATA },
+	{ "plate.png",    RESOURCE_TYPE_DATA },
 	/* other files */
 	{ "snow.png", RESOURCE_TYPE_DATA }, { "chicken.png",    RESOURCE_TYPE_DATA },
 	{ "gui.png",  RESOURCE_TYPE_DATA }, { "animations.png", RESOURCE_TYPE_PNG  },
