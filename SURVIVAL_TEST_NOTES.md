@@ -8,7 +8,38 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — mob-mob pushing (latest)
+## SESSION LOG — "chestplate might be too small" audit (latest)
+
+User audited the now-working armor render (post VB-index fix) and reported the
+chestplate looks visually too small. Re-derived the box geometry from the
+ground-truth decompile (`/tmp/good2000mo_oc/.../model/HumanoidModel.java` +
+`ModelPart.java`'s `setBounds`) rather than guessing — **verdict: not a bug**.
+
+- `HumanoidMob.renderModel` renders armor via `modelCache.getModel("humanoid.armor")`
+  = `ModelManager`'s `new HumanoidModel(1.0F)`. `ModelPart.setBounds(x1,y1,z1,w,h,d,var7)`
+  inflates every face by `var7`: `x1 -= var7; y1 -= var7; z1 -= var7;` and the max
+  corner gets `+= var7` on each axis. So `var1=1.0F` is a **flat 1-pixel (1/16 block)
+  inflate on every face**, nothing more.
+- Checked this bit-for-bit against `Model.c`'s `armorTorso`/`armorLArm`/`armorRArm`/
+  `armorHead` `BoxDesc_Bounds` values (`HumanModel_MakeParts`, ~line 1154):
+  torso base dims `-4,12,-2 to 4,24,2` → bounds `-5,11,-3 to 5,25,3` is exactly
+  ±1 on every face; same for both arms and the head box. The C port matches the
+  Java inflate **exactly**, not approximately.
+- Also confirmed `armored.rightLeg.render = false; armored.leftLeg.render = false;`
+  in `HumanoidMob.renderModel` — genuine c0.30 armor never covers the legs, which
+  `Model.c`'s comment already noted and `MobArmor_Draw` already respects.
+- Conclusion: the genuine c0.30-s "chestplate" is just the bare torso box wrapped
+  in a shell exactly **1 pixel** larger on every side — a subtle outline, not a
+  bulky modern-Minecraft chestplate. The "too small" look the user is seeing is
+  therefore a **faithful reproduction** of how thin the original overlay actually
+  was, not a geometry/UV bug. No code change made.
+- Open option (NOT implemented, needs user sign-off since it'd be non-authentic):
+  could gate a chunkier inflate amount behind `SurvivalTest_Enhanced` if the user
+  wants a more visually distinct chestplate, leaving classic mode byte-faithful.
+
+---
+
+## SESSION LOG — mob-mob pushing
 
 ### Mobs shove each other apart — AUTHENTIC c0.30, ported
 
