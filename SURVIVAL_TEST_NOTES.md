@@ -8,7 +8,35 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — "chestplate might be too small" audit (latest)
+## SESSION LOG — arrows burying into blocks (latest)
+
+User reported arrows sink almost flush into blocks here, whereas in genuine
+c0.30-s they stick out — and crucially "it depends on the angle shot at"
+(side-by-side screenshot: c0.30 arrow protruding from the ground at an angle
+vs ours buried nearly flush).
+
+- Root cause: `Arrow_BoxAt` built the collision AABB with `AABB_Make`, which
+  uses ClassiCube's standard *feet-at-position* convention (`Min.y = pos.y`).
+  But `Entity.setPos` (Entity.java:127) centres the bb on the position on
+  ALL THREE axes: `bb.y0 = y - bbHeight/2`. So the arrow's tracked position
+  is the box CENTRE, and our box sat 0.25 (half of the 0.5 height) too high.
+- Effect: on a downward/angled shot the arrow's position sank ~0.25 deeper
+  into the ground before the box BOTTOM hit the block, so it buried nearly
+  flush. A purely horizontal shot into a vertical wall was unaffected (a
+  vertical box offset doesn't move the horizontal stop point) — which is
+  exactly why the user saw it "depend on the angle".
+- Fix: `Arrow_BoxAt` now centres the box on the position vertically by hand
+  (`Min.y = pos.y - ARROW_HEIGHT*0.5f`, `Max.y = pos.y + ARROW_HEIGHT*0.5f`),
+  matching the original. The renderer was already correct — it offsets
+  `center.y -= 0.125` (= Java's `- heightOffset/2`) from the tracked
+  position, consistent with the centred box.
+- The collision/tick sweep itself (stop-before-move on `expand`+`getCubes`
+  overlap, so the arrow never enters the block) was already a faithful port
+  of `Arrow.tick`; only the box's vertical centring was wrong.
+
+---
+
+## SESSION LOG — "chestplate might be too small" audit
 
 User audited the now-working armor render (post VB-index fix) and reported the
 chestplate looks visually too small. Re-derived the box geometry from the

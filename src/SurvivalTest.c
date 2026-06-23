@@ -2471,8 +2471,19 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 }
 
 static void Arrow_BoxAt(Vec3* pos, struct AABB* out) {
-	Vec3 size = { ARROW_WIDTH, ARROW_HEIGHT, ARROW_WIDTH };
-	AABB_Make(out, pos, &size);
+	/* Entity.setPos centres the bb on the tracked position on ALL axes
+	   (bb.y0 = y - bbHeight/2), so the arrow's position is the box CENTRE,
+	   not its feet. AABB_Make uses CC's usual feet-at-position convention
+	   (Min.y = pos.y), which would sit the box 0.25 too high - making
+	   downward/angled shots sink ~0.25 deeper into the ground before the
+	   box bottom collides (arrows buried almost flush instead of sticking
+	   out). Centre it vertically by hand to match the original. */
+	out->Min.x = pos->x - ARROW_WIDTH  * 0.5f;
+	out->Min.y = pos->y - ARROW_HEIGHT * 0.5f;
+	out->Min.z = pos->z - ARROW_WIDTH  * 0.5f;
+	out->Max.x = pos->x + ARROW_WIDTH  * 0.5f;
+	out->Max.y = pos->y + ARROW_HEIGHT * 0.5f;
+	out->Max.z = pos->z + ARROW_WIDTH  * 0.5f;
 }
 
 /* AABB.expand()'s semantics: grows whichever corner the signed delta points */
