@@ -1971,6 +1971,7 @@ static void Mob_PushApart(struct Mob* m) {
 	struct Entity* e = &m->Base;
 	struct AABB selfBB, otherBB;
 	struct Mob* n;
+	struct LocalPlayer* p;
 	float dx, dz, sq, fx, fz;
 	int i;
 	if (m->noAI) return;
@@ -1979,6 +1980,7 @@ static void Mob_PushApart(struct Mob* m) {
 	selfBB.Min.x -= 0.2f; selfBB.Max.x += 0.2f;
 	selfBB.Min.z -= 0.2f; selfBB.Max.z += 0.2f;
 
+	/* mob-mob push: BasicAI.tick's findEntities loop over other mobs */
 	for (i = 0; i < MOB_MAX; i++) {
 		n = &st_mobs[i];
 		if (n == m || !n->active || n->noAI) continue;
@@ -1997,6 +1999,24 @@ static void Mob_PushApart(struct Mob* m) {
 		/* this(=n).push(-f); entity(=m).push(+f) - shove the pair apart. */
 		n->Base.Velocity.x -= fx; n->Base.Velocity.z -= fz;
 		e->Velocity.x      += fx; e->Velocity.z      += fz;
+	}
+
+	/* mob-player push: BasicAI.tick's findEntities also finds the player entity
+	   (player.isPushable() returns true; pushthrough=0 so factor=1 same as mobs). */
+	p = Entities.CurPlayer;
+	if (p) {
+		Entity_GetBounds(&p->Base, &otherBB);
+		if (AABB_Intersects(&selfBB, &otherBB)) {
+			dx = e->Position.x - p->Base.Position.x;
+			dz = e->Position.z - p->Base.Position.z;
+			sq = dx * dx + dz * dz;
+			if (sq >= 0.01f) {
+				fx = dx / sq * 0.05f;
+				fz = dz / sq * 0.05f;
+				e->Velocity.x      += fx; e->Velocity.z      += fz;
+				p->Base.Velocity.x -= fx; p->Base.Velocity.z -= fz;
+			}
+		}
 	}
 }
 
@@ -2950,6 +2970,8 @@ static void SurvivalTest_AddBlock(BlockID block) {
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		if (st_inv[i].block == block && st_inv[i].count < SURVIVAL_STACK_MAX) {
 			st_inv[i].count++;
+			/* Inventory.addResource(): popTime[slot] = 5 triggers the pop animation */
+			if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
 			SurvivalTest_SyncHotbar();
 			return;
 		}
@@ -2959,6 +2981,7 @@ static void SurvivalTest_AddBlock(BlockID block) {
 		if (st_inv[i].block != BLOCK_AIR) continue;
 		st_inv[i].block = block;
 		st_inv[i].count = 1;
+		if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
 		SurvivalTest_SyncHotbar();
 		return;
 	}

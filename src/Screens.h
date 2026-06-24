@@ -44,6 +44,9 @@ void TouchScreen_Show(void);
 #endif
 
 int HUDScreen_LayoutHotbar(void);
+/* Sets the pop animation on a hotbar slot (Inventory.popTime[slot] = time).
+   time=5 is a full-duration pop; 0 clears.  No-op if HUD is not yet active. */
+void HUDScreen_SetSlotPop(int slot, float time);
 void TabListOverlay_Show(cc_bool staysOpen);
 
 /* Opens chat input for the HUD with the given initial text. */

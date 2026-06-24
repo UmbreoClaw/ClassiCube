@@ -8,7 +8,49 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — TNT explosion item drops (latest)
+## SESSION LOG — Mob-player push + hotbar slot pop animation (latest)
+
+### Mob-player push (`SurvivalTest.c` / `Mob_PushApart`)
+
+`BasicAI.tick()` calls `level.findEntities(mob, mob.bb.grow(0.2,0,0.2))` which
+returns both other mobs AND the player. For each pushable result it calls
+`result.push(mob)` — `Entity.push(Entity)` normalises the horizontal
+centre-to-centre vector, divides by distance again, scales by 0.05, then applies
+equal-and-opposite impulses (pushthrough=0 for all mobs and the player).
+
+`Mob_PushApart` previously only looped over `st_mobs[]`. The player push block
+was added immediately after the mob-mob loop:
+- Expanded AABB (±0.2 on X/Z, same as mob-mob) is intersected with the player's AABB
+- If overlapping and `sq >= 0.01`: `fx = dx/sq*0.05`, `fz = dz/sq*0.05`
+- Mob velocity += (fx, fz); player velocity -= (fx, fz)
+
+This fires from each mob's tick, so every mob independently shoves the player
+(and the player shoves back). Frozen `noAI` mobs are skipped.
+
+### Hotbar slot pop animation (`Widgets.h/c` + `Screens.c` + `SurvivalTest.c`)
+
+Original: `Inventory.addResource()` sets `popTime[slot]=5` (integer ticks);
+`Inventory.tick()` decrements it once per game tick; `HUDScreen.render()` drives
+a pop-and-scale per slot: `t=popTime/5` ∈ [0,1]; `sinT2=sin(t²π)`;
+Y-shift = -`sinT2*8` (slots briefly jump upward); block scale *= `sinT2+1`.
+
+Implementation:
+- **`Widgets.h`** — `float slotPopTime[INVENTORY_BLOCKS_PER_HOTBAR]` added to
+  `HotbarWidget`. Zero-init; set externally, decremented internally.
+- **`Widgets.c` `HotbarWidget_Update`** — decrements each `slotPopTime[i]` by
+  `delta*20` (20 ticks/sec matches original 1/tick), clamped ≥0.
+- **`Widgets.c` `HotbarWidget_BuildEntriesMesh`** — for slots with `slotPopTime>0`:
+  `t=slotPopTime/5`; `sinT2=Math_SinF(t²*π)`; `yOff=-sinT2*8*(height/22)`;
+  `slotScale=scale*(sinT2+1)`. Passes adjusted float coords to `IsometricDrawer_AddBatch`.
+- **`Screens.h/c`** — `HUDScreen_SetSlotPop(slot, time)` sets the pop time on the
+  active HUD's hotbar widget. In `HUDScreen_Update`, if any `slotPopTime[i]>0`,
+  sets `s->dirty=true` so the mesh rebuilds every frame while animating.
+- **`SurvivalTest.c` `SurvivalTest_AddBlock`** — calls `HUDScreen_SetSlotPop(i,5.0f)`
+  whenever a block lands in a hotbar slot (both stack-onto-existing and new-slot paths).
+
+---
+
+## SESSION LOG — TNT explosion item drops
 
 User reported that blocks destroyed by a TNT explosion never drop any
 items, whereas genuine Survival Test pops a scatter of items out of the

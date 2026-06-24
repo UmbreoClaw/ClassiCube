@@ -279,6 +279,11 @@ int HUDScreen_LayoutHotbar(void) {
 	return s->hotbar.height;
 }
 
+void HUDScreen_SetSlotPop(int slot, float time) {
+	if (!Gui_HUD || slot < 0 || slot >= INVENTORY_BLOCKS_PER_HOTBAR) return;
+	Gui_HUD->hotbar.slotPopTime[slot] = time;
+}
+
 static void HUDScreen_Layout(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
 	struct TextWidget* line1 = &s->line1;
@@ -437,6 +442,15 @@ static void HUDScreen_Update(void* screen, float delta) {
 	/*  rebuilding the HUD to animate them (like the low-health heart shake). */
 	if (SurvivalTest_Enabled && SurvivalTest_HeadUnderwater()) {
 		s->dirty = true;
+	}
+
+	/* Rebuild each frame while any slot pop animation is running so the */
+	/*  animated slot (which HotbarWidget_Update just decremented) is redrawn */
+	if (SurvivalTest_Enabled) {
+		int i;
+		for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+			if (s->hotbar.slotPopTime[i] > 0.0f) { s->dirty = true; break; }
+		}
 	}
 }
 

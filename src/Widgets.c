@@ -440,7 +440,7 @@ static void HotbarWidget_BuildOutlineMesh(struct HotbarWidget* w, struct VertexT
 
 static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexTextured** vertices) {
 	int i, x, y;
-	float scale;
+	float scale, slotScale, yOff, t, sinT2;
 
 	IsometricDrawer_BeginBatch(*vertices, w->state);
 	scale = w->elemSize / 2.0f;
@@ -451,7 +451,19 @@ static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexT
 
 		if (i == HOTBAR_MAX_INDEX && Gui_TouchUI) continue;
 
-		IsometricDrawer_AddBatch(Inventory_Get(i), scale, x, y);
+		slotScale = scale;
+		yOff      = 0.0f;
+
+		/* HUDScreen.java pop animation: popTime counts 5→0, t=popTime/5 ∈ [0,1].
+		   sinT2 = sin(t²π) peaks ~0.707; shifts the slot up and briefly enlarges it. */
+		if (w->slotPopTime[i] > 0.0f) {
+			t      = w->slotPopTime[i] / 5.0f;
+			sinT2  = Math_SinF(t * t * MATH_PI);
+			yOff      = -sinT2 * 8.0f * (w->height / 22.0f);
+			slotScale = scale * (sinT2 + 1.0f);
+		}
+
+		IsometricDrawer_AddBatch(Inventory_Get(i), slotScale, (float)x, (float)y + yOff);
 	}
 	w->verticesCount = IsometricDrawer_EndBatch();
 }
@@ -500,15 +512,23 @@ static int HotbarWidget_MaxVertices(void* w) { return HOTBAR_MAX_VERTICES; }
 
 void HotbarWidget_Update(struct HotbarWidget* w, float delta) {
 	int i;
+
+	/* Inventory.tick(): count down per-slot pop animations at 20 ticks/sec */
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		if (w->slotPopTime[i] <= 0.0f) continue;
+		w->slotPopTime[i] -= delta * 20.0f;
+		if (w->slotPopTime[i] < 0.0f) w->slotPopTime[i] = 0.0f;
+	}
+
 	if (!Gui_TouchUI) return;
 
-	for (i = 0; i < HOTBAR_MAX_INDEX; i++) 
+	for (i = 0; i < HOTBAR_MAX_INDEX; i++)
 	{
 		if (w->touchId[i] < 0) continue;
-		
+
 		w->touchTime[i] += delta;
 		if (w->touchTime[i] <= 1.0f) continue;
-		
+
 		w->touchId[i]   = -1;
 		w->touchTime[i] =  0;
 		Inventory_Set(i, 0);
