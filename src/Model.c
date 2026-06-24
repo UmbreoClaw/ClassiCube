@@ -948,7 +948,7 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 	Model_LockVB(e, num);
 
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &model->head, true);
-	Model_DrawPart(&model->torso);
+	Model_DrawRotate(0, e->Anim.PunchBodyYaw, 0, &model->torso, false);
 	Model_DrawRotate(e->Anim.LeftLegX,  0, e->Anim.LeftLegZ,  &set->leftLeg,  false);
 	Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLeg, false);
 
@@ -958,7 +958,7 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 	Models.Rotation = ROTATE_ORDER_ZYX;
 
 	if (type != SKIN_64x32) {
-		Model_DrawPart(&model->torsoLayer);
+		Model_DrawRotate(0, e->Anim.PunchBodyYaw, 0, &model->torsoLayer, false);
 		Model_DrawRotate(e->Anim.LeftLegX,  0, e->Anim.LeftLegZ,  &set->leftLegLayer,  false);
 		Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLegLayer, false);
 

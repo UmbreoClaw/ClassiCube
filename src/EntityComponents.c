@@ -135,10 +135,16 @@ void AnimatedComp_GetCurrent(struct Entity* e, float t) {
 	/* Layer the attack/punch swing on top of whatever arm pose was computed */
 	/*  above. Only the main (right) arm swings; sin(progress*PI) eases it out */
 	/*  and back so it's 0 at both ends (rest -> forward-up -> rest). */
+	/*  bodyY is the torso yaw from Beta 1.2 ModelBiped: sin(sqrt(t)*PI*2)*0.2 */
+	anim->PunchBodyYaw = 0.0f;
 	if (anim->PunchN > 0.0f) {
-		float punch = Math_SinF(Math_Lerp(anim->PunchO, anim->PunchN, t) * MATH_PI);
-		anim->RightArmX += punch * ANIM_PUNCH_XMAX;
-		anim->RightArmZ += punch * ANIM_PUNCH_ZMAX;
+		float swing = Math_Lerp(anim->PunchO, anim->PunchN, t);
+		float punch  = Math_SinF(swing * MATH_PI);
+		float bodyY  = Math_SinF(Math_SqrtF(swing) * MATH_PI * 2.0f) * 0.2f;
+		anim->PunchBodyYaw  = bodyY;
+		anim->RightArmX    += punch  * ANIM_PUNCH_XMAX;
+		anim->RightArmY    += bodyY  * 2.0f;
+		anim->RightArmZ    += punch  * ANIM_PUNCH_ZMAX;
 	}
 }
 

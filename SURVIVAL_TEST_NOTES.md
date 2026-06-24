@@ -8,7 +8,49 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — Third-person player punch swing (latest)
+## SESSION LOG — Beta 1.2 punch torso twist (latest)
+
+### What was added
+
+Ported the body-torso yaw component from Beta 1.2 `ModelBiped.setRotationAngles`
+into the existing `AnimatedComp` punch system. Three files changed:
+
+**`src/EntityComponents.h`** — Added `float PunchBodyYaw` field to `struct AnimatedComp`.
+Zero-initialised by `AnimatedComp_Init`'s `Mem_Set`. Always 0 when not punching.
+
+**`src/EntityComponents.c`** — Expanded `AnimatedComp_GetCurrent`'s punch block:
+```c
+float swing = Math_Lerp(anim->PunchO, anim->PunchN, t);
+float punch  = Math_SinF(swing * MATH_PI);
+float bodyY  = Math_SinF(Math_SqrtF(swing) * MATH_PI * 2.0f) * 0.2f;
+anim->PunchBodyYaw  = bodyY;
+anim->RightArmX    += punch  * ANIM_PUNCH_XMAX;
+anim->RightArmY    += bodyY  * 2.0f;   // arm amplifies body twist
+anim->RightArmZ    += punch  * ANIM_PUNCH_ZMAX;
+```
+`bodyY` peaks at ≈11.5°; arm yaw peaks at ≈23°. Reset to 0.0f when PunchN == 0.
+
+**`src/Model.c`** — In `HumanModel_DrawCore`, replaced both `Model_DrawPart(&model->torso)`
+and `Model_DrawPart(&model->torsoLayer)` with:
+```c
+Model_DrawRotate(0, e->Anim.PunchBodyYaw, 0, &model->torso, false);
+Model_DrawRotate(0, e->Anim.PunchBodyYaw, 0, &model->torsoLayer, false);
+```
+The torso's native pivot is `rotY=12` (bottom of chest), so the yaw rotates
+around the waist — matching Minecraft's body twist look.
+
+### What was NOT ported (known gap)
+
+- **Arm pivot shift** (`rightArm.Z=sin(bodyY)*5`, `rightArm.X=-cos(bodyY)*5`) — sets
+  the arm's neutral fighting-stance orientation. Omitted: ClassiCube's coordinate
+  system doesn't map these "pivot" overrides cleanly to `RightArmX/Z`.
+- **Ease curve** (`ease=1-(1-swing)^4`) applied to arm pitch — kept the existing
+  `sin(punch*PI)*XMAX` envelope which already looks smooth.
+- **Head-pitch coupling** (`sin(swing*PI)*(head.X-0.7)*0.75`) — minor, skipped.
+
+---
+
+## SESSION LOG — Third-person player punch swing enable
 
 ### Source research
 
@@ -39,10 +81,7 @@ if (Entities.CurPlayer)
 ```
 
 This fires on both mob attacks (via `SurvivalTest_TryAttackMob → HeldBlockRenderer_ClickAnim(true)`)
-and block mining. The animation is visible in third-person. The body-torso
-yaw and arm pivot shifts from the Beta formula are not ported — the existing
-`ANIM_PUNCH_XMAX`/`ZMAX` approximation is visually sufficient and avoids
-adding fields to `AnimatedComp`.
+and block mining. The animation is visible in third-person.
 
 ---
 
