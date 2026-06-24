@@ -172,8 +172,8 @@ void HeldBlockRenderer_ClickAnim(cc_bool digging) {
 	/* Start place animation at bottom of cycle */
 	if (!digging) held_time = held_period / 2;
 
-	if (Entities.CurPlayer)
-		AnimatedComp_StartPunch(&Entities.CurPlayer->Base.Anim);
+	/* Third-person arm swing on the player model (AnimatedComp_StartPunch) is */
+	/*  disabled for now - deferred, see SURVIVAL_TEST_NOTES.md. */
 }
 
 static void DoSwitchBlockAnim(void* obj) {
