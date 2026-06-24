@@ -28,7 +28,76 @@ ClassiCube aims to replicate the 2009 Minecraft Classic client while offering **
 ![enhanced](https://github.com/ClassiCube/ClassiCube/assets/6509348/b2fe0e2b-5d76-41ab-909f-048d0ad15f37)
 
 
-# We need your help
+---
+
+# Survival Test mode (unofficial fork)
+
+> [!WARNING]
+> **This branch (`claude/c030-s-gamemode-8fpmns`) is an unofficial, unsupported fork.**
+> It is not affiliated with the ClassiCube project, not endorsed by its maintainers,
+> and is developed entirely independently. The official ClassiCube project does not
+> and will not include survival gameplay — see its stance above.
+
+This fork adds a faithful, from-scratch recreation of **Minecraft Classic Survival Test (version c0.30_survival_test)** — the short-lived survival mode that Notch shipped in October 2009, roughly 17 months before Minecraft's official release. It ran for only a few weeks before being pulled, and most players never experienced it. The implementation is cross-referenced against decompiled Java source and behaves as closely as possible to the original without touching ClassiCube's creative mode at all.
+
+### What Survival Test was
+
+Survival Test was Minecraft's first taste of actual gameplay on top of the creative block editor. It was deliberately primitive — no crafting, no inventory management beyond a nine-slot hotbar, no saving — but it introduced almost everything that made Minecraft feel dangerous and alive:
+
+- **Health and hearts.** The player had ten hearts of health, displayed as a row of heart icons above the hotbar. Damage reduced them; there was no regeneration.
+- **Hostile mobs.** Zombies and skeletons hunted the player on sight, dealt melee damage, and had a chance to wear armour. Creepers crept up and exploded. Spiders skittered fast and could climb. Pigs wandered peacefully and dropped items when killed.
+- **Physics-based dropped items.** Mining a block popped a small spinning cube onto the ground. Walking over it picked it up. Explosions scattered drops outward with a 30% chance per item — giving the iconic "blocks exploding into existence" look.
+- **TNT and explosions.** TNT blocks could be lit, primed as a fuse-ticking entity, and detonated in a sphere-shaped blast that destroyed blocks, hurt everything nearby, and chain-reacted with adjacent TNT.
+- **Arrows.** The player could collect and fire arrows. Skeletons returned fire. Arrows stuck into whatever surface they hit.
+- **Fall damage and environmental hazards.** Falling too far, touching lava, or drowning all dealt damage. The camera tilted briefly in the direction of the hit.
+- **Score.** Killing mobs earned points, displayed in the corner. Death showed a Game Over screen with your final score.
+- **Mushroom food.** Brown mushrooms could be right-clicked to eat, restoring health.
+
+### What this fork adds
+
+Everything above has been implemented inside ClassiCube's singleplayer mode. Survival Test is toggled on/off from the launcher's **Choose Mode** screen — when off, the game is completely unaffected and behaves as normal ClassiCube.
+
+Specific systems ported so far:
+
+| System | Notes |
+|---|---|
+| Hearts / health HUD | 10-heart row, DPI-aware scaling, low-health jitter |
+| Hostile mob AI | Zombie, skeleton, creeper, spider, pig, sheep — authentic pathfinding and attack |
+| Mob armour | Zombies and skeletons can spawn wearing armour; geometry matches original 1px inflate |
+| Dropped item physics | Spin, bob, glow, gravity, ground damping, pickup fly-in animation |
+| Hotbar slot pop animation | Slot briefly jumps and scales when a block lands in it |
+| Mob–mob and mob–player push | Equal-and-opposite separation forces matching `BasicAI.tick()` |
+| TNT entity | Fuse timer, smoke particles, glow overlay, chain-reaction with partial fuse |
+| Explosion drops | 30% per-item drop chance before block is cleared, matching `Level.explode()` |
+| Arrows | Fired by player (Tab), fired by skeletons, stick into surfaces, HUD count |
+| Hurt camera tilt | Rolls toward/away from attacker direction, decays over ~5 ticks |
+| Fall damage | Mirrors `Player.hurt` fall threshold and damage formula |
+| Lava / drowning damage | Air bubble HUD depletes underwater; lava drains health continuously |
+| Score | Awarded on player-credited kills, displayed in HUD corner |
+| Mining with hardness | Blocks require sustained mining; crack overlay tracks progress |
+| Death / game over screen | Permadeath with score display |
+| Mushroom eating | Right-click brown mushroom to restore 5 HP |
+| Arm swing | Third-person punch animation on melee/mining |
+| Mob death roll | Bodies roll 90° on death before despawning |
+| Inventory (hotbar only) | Nine-slot hotbar, stack counts, no crafting, faithful to c0.30 |
+
+### Screenshots
+
+> **[ Screenshot placeholder — launcher main screen with Survival mode ON ]**
+
+> **[ Screenshot placeholder — in-game with hearts HUD, hotbar stack counts, and a zombie ]**
+
+> **[ Screenshot placeholder — TNT explosion with item drops scattering ]**
+
+> **[ Screenshot placeholder — skeleton firing an arrow, player at low health ]**
+
+> **[ Screenshot placeholder — dropped items spinning on the ground ]**
+
+*Send screenshots here when you have them — replace the placeholders above with actual images.*
+
+---
+
+
 
 ClassiCube strives to replicate the original Minecraft Classic experience by **strictly adhering to [clean room](https://en.wikipedia.org/wiki/Clean_room_design) reverse engineering approach**.
 
