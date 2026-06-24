@@ -8,7 +8,45 @@ cross-referenced against the Minecraft Wiki, that does **not** disturb creative 
 
 ---
 
-## SESSION LOG — Mob-player push + hotbar slot pop animation (latest)
+## SESSION LOG — Third-person player punch swing (latest)
+
+### Source research
+
+Fetched `ModelBiped.setRotationAngles` from a publicly hosted decompiled jar
+(`doxing/licorice`). The swing block is identical across b1.2→b1.7.3. Key formulas:
+
+- `swing` is a 0→1 float (`swingProgress`); sentinel `-9990.0F` = no swing
+- **Body torso yaw**: `bodyY = sin(sqrt(swing)*π*2)*0.2`
+- **Arm pivot shift**: `rightArm.Z = sin(bodyY)*5`, `rightArm.X = -cos(bodyY)*5`
+- **Ease curve**: `ease = 1-(1-swing)^4` (fast start, deceleration)
+- **Arm pitch**: `rightArm.X -= sin(ease*π)*1.2 + sin(swing*π)*(head.X-0.7)*0.75`
+- **Arm yaw/roll**: `rightArm.Y += bodyY*2`; `rightArm.Z += sin(swing*π)*-0.4`
+
+### Implementation
+
+The existing `AnimatedComp_StartPunch` / `PunchN` / `PunchO` system in
+`EntityComponents.c` already has a correct one-shot arm swing that applies
+`RightArmX += sin(punch*π)*85°` and `RightArmZ += sin(punch*π)*15°` in
+`AnimatedComp_GetCurrent`. `ANIM_PUNCH_TICKS=6` (0.3s at 20 ticks/sec) —
+a reasonable approximation of the Beta arm-chop speed.
+
+**The only fix needed**: `HeldBlockRenderer_ClickAnim` had a placeholder comment
+saying "deferred". Replaced it with:
+
+```c
+if (Entities.CurPlayer)
+    AnimatedComp_StartPunch(&Entities.CurPlayer->Base.Anim);
+```
+
+This fires on both mob attacks (via `SurvivalTest_TryAttackMob → HeldBlockRenderer_ClickAnim(true)`)
+and block mining. The animation is visible in third-person. The body-torso
+yaw and arm pivot shifts from the Beta formula are not ported — the existing
+`ANIM_PUNCH_XMAX`/`ZMAX` approximation is visually sufficient and avoids
+adding fields to `AnimatedComp`.
+
+---
+
+## SESSION LOG — Mob-player push + hotbar slot pop animation
 
 ### Mob-player push (`SurvivalTest.c` / `Mob_PushApart`)
 
