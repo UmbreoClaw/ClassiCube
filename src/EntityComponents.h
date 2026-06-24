@@ -29,9 +29,6 @@ struct AnimatedComp {
 	/*  tick, PunchO the previous tick's (render interpolates between them). */
 	cc_bool Punching;
 	float PunchO, PunchN;
-	/* Body yaw applied to the torso during a punch; computed per-frame from     */
-	/*  sin(sqrt(progress)*PI*2)*0.2, matching Beta 1.2 ModelBiped.swingProgress */
-	float PunchBodyYaw;
 
 	/* c0.30 humanoid-mob attack swing (Mob.attackTime/grounded). 0..1 progress */
 	/*  for the current render frame, set per-frame by SurvivalTest's RenderMobs */
