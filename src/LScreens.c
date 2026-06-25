@@ -125,12 +125,21 @@ static void LScreen_MouseUp(struct LScreen* s, int idx) { }
 static void LScreen_MouseWheel(struct LScreen* s, float delta) { }
 
 static void LScreen_DrawBackground(struct LScreen* s, struct Context2D* ctx) {
+	cc_string title; char titleBuffer[STRING_SIZE];
+	cc_string translated;
+
 	if (!s->title) {
 		Launcher_DrawBackground(ctx, 0, 0, ctx->width, ctx->height);
 		return;
 	}
 	Launcher_DrawBackgroundAll(ctx);
-	LBackend_DrawTitle(ctx, s->title);
+
+	/* Translate the title (e.g. "Options"), keeping it null terminated */
+	translated = Locale_Translate(s->title);
+	String_InitArray(title, titleBuffer);
+	String_AppendString(&title, &translated);
+	titleBuffer[title.length] = '\0';
+	LBackend_DrawTitle(ctx, titleBuffer);
 }
 
 CC_NOINLINE static void LScreen_Reset(struct LScreen* s) {
@@ -176,6 +185,7 @@ static void SwitchToDirectConnect(void* w) { DirectConnectScreen_SetActive(); }
 static void SwitchToMain(void* w)          { MainScreen_SetActive(); }
 static void SwitchToSettings(void* w)      { SettingsScreen_SetActive(); }
 static void SwitchToThemes(void* w)        { ThemesScreen_SetActive(); }
+static void SwitchToLanguage(void* w)      { LanguageScreen_SetActive(); }
 static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
 
 
@@ -1486,12 +1496,6 @@ static void SettingsScreen_DPIScaling(struct LCheckbox* w) {
 #endif
 }
 
-static void SettingsScreen_Language(void* w) {
-	Locale_SetActive((Locale_GetActive() + 1) % LOCALE_COUNT);
-	/* Reactivate the screen so all text is rebuilt in the new language */
-	SettingsScreen_SetActive();
-}
-
 static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
 	LLine_Add(s,   &s->sep, 380, set_sep);
 	LButton_Add(s, &s->btnMode, 110, 35, "Mode",
@@ -1504,8 +1508,8 @@ static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
 		LLabel_Add(s,  &s->lblColours, "&eChange how the launcher looks", set_lblColours);
 	}
 
-	LButton_Add(s, &s->btnLanguage, 110, 35, Locale_Names[Locale_GetActive()],
-				SettingsScreen_Language, set_btnLanguage);
+	LButton_Add(s, &s->btnLanguage, 110, 35, "Language",
+				SwitchToLanguage, set_btnLanguage);
 	LLabel_Add(s,  &s->lblLanguage, "&eChange the language", set_lblLanguage);
 
 #if defined CC_BUILD_MOBILE
@@ -1612,6 +1616,62 @@ void ThemesScreen_SetActive(void) {
 
 	s->Activated      = ThemesScreen_Activated;
 	s->title          = "Select theme";
+	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
+
+	Launcher_SetScreen((struct LScreen*)s);
+}
+
+
+/*########################################################################################################################*
+*-------------------------------------------------------LanguageScreen----------------------------------------------------*
+*#########################################################################################################################*/
+static struct LanguageScreen {
+	LScreen_Layout
+	struct LButton btnLangs[LOCALE_COUNT];
+	struct LButton btnBack;
+} LanguageScreen CC_BIG_VAR;
+
+#define LANGUAGE_SCREEN_MAX_WIDGETS (LOCALE_COUNT + 1)
+static struct LWidget* language_widgets[LANGUAGE_SCREEN_MAX_WIDGETS];
+
+/* Per-language button layouts are filled in at runtime, so the screen */
+/*  automatically lays out however many languages are available */
+static struct LLayout lang_btnLangs[LOCALE_COUNT][2];
+LAYOUTS lang_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 170 } };
+
+static void LanguageScreen_Select(void* w) {
+	int i = (int)((struct LButton*)w - LanguageScreen.btnLangs);
+	Locale_SetActive(i);
+	/* Return to the settings screen, now rebuilt in the chosen language */
+	SwitchToSettings(NULL);
+}
+
+static void LanguageScreen_Activated(struct LScreen* s_) {
+	struct LanguageScreen* s = (struct LanguageScreen*)s_;
+	int i, y;
+
+	for (i = 0; i < LOCALE_COUNT; i++)
+	{
+		y = -100 + i * 50;
+		lang_btnLangs[i][0].type = ANCHOR_CENTRE; lang_btnLangs[i][0].offset = 0;
+		lang_btnLangs[i][1].type = ANCHOR_CENTRE; lang_btnLangs[i][1].offset = y;
+
+		LButton_Add(s, &s->btnLangs[i], 200, 35, Locale_Names[i],
+					LanguageScreen_Select, lang_btnLangs[i]);
+	}
+	LButton_Add(s, &s->btnBack, 80, 35, "Back",
+				SwitchToSettings, lang_btnBack);
+}
+
+void LanguageScreen_SetActive(void) {
+	struct LanguageScreen* s = &LanguageScreen;
+	LScreen_Reset((struct LScreen*)s);
+
+	s->widgets    = language_widgets;
+	s->maxWidgets = Array_Elems(language_widgets);
+
+	s->Activated      = LanguageScreen_Activated;
+	s->title          = "Select language";
 	s->onEscapeWidget = (struct LWidget*)&s->btnBack;
 
 	Launcher_SetScreen((struct LScreen*)s);

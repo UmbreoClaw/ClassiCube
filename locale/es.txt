@@ -221,3 +221,94 @@ Magma=Magma
 Pillar=Pilar
 Crate=Caja
 Stone brick=Ladrillo de piedra
+
+# ---- In-game option values ----
+ON=Sí
+OFF=No
+
+# ---- In-game option names: graphics / gui ----
+Render distance=Distancia de renderizado
+View distance=Distancia de visión
+3D anaglyph=Anaglifo 3D
+3d anaglyph=Anaglifo 3D
+Show FPS=Mostrar FPS
+Limit framerate=Limitar fotogramas
+FPS mode=Modo de FPS
+Mipmaps=Mipmaps
+Smooth lighting=Iluminación suave
+Lighting mode=Modo de iluminación
+Field of view=Campo de visión
+Names=Nombres
+Shadows=Sombras
+Black text shadows=Sombras de texto negras
+Use system font=Usar fuente del sistema
+Hotbar scale=Escala de la barra rápida
+Inventory scale=Escala del inventario
+Chat scale=Escala del chat
+Crosshair scale=Escala de la mira
+Scale with window=Escalar con la ventana
+Clickable chat=Chat clicable
+Chat lines=Líneas de chat
+Tab auto-complete=Autocompletar con Tab
+Log to disk=Guardar registro en disco
+
+# ---- In-game option names: sound / misc ----
+Music=Música
+Sound=Sonido
+Camera clipping=Colisión de cámara
+
+# ---- In-game option names: hacks ----
+Hacks enabled=Hacks activados
+Speed multiplier=Multiplicador de velocidad
+Jump height=Altura de salto
+WoM style hacks=Hacks estilo WoM
+Full block stepping=Subir bloques completos
+Noclip slide=Deslizamiento en noclip
+Pushback placing=Colocación con retroceso
+
+# ---- In-game option names: environment ----
+Clouds color=Color de nubes
+Sky color=Color del cielo
+Fog color=Color de niebla
+Clouds speed=Velocidad de nubes
+Clouds height=Altura de nubes
+Sunlight color=Color de luz solar
+Shadow color=Color de sombra
+Weather=Clima
+Rain/Snow speed=Velocidad de lluvia/nieve
+Water level=Nivel del agua
+Breakable liquids=Líquidos rompibles
+
+# ---- In-game option names: nostalgia ----
+Classic hand model=Mano clásica
+Classic walk anim=Caminar clásico
+Classic chat=Chat clásico
+Classic inventory=Inventario clásico
+Classic GUI textures=Texturas clásicas
+Classic player list=Lista clásica
+Classic options=Opciones clásicas
+Use server textures=Texturas del servidor
+Allow custom blocks=Bloques personalizados
+Non-classic features=Funciones no clásicas
+Game version=Versión del juego
+
+# ---- In-game option descriptions (single line only) ----
+&eRequires restarting game to take full effect=&eRequiere reiniciar el juego para que surta pleno efecto
+&eChange the smoothness of the smooth camera.=&eCambia la suavidad de la cámara suave.
+&eNote: You jump much higher when holding down the Speed key binding.=&eNota: Saltas mucho más alto manteniendo pulsada la tecla de Velocidad.
+
+# ---- Launcher: screen titles ----
+Choose mode=Elegir modo
+Select theme=Seleccionar tema
+Custom theme=Tema personalizado
+Select language=Seleccionar idioma
+Splitscreen mode=Modo pantalla dividida
+Enter login code=Introduce el código de acceso
+Update game=Actualizar juego
+
+# ---- Launcher: text input hints ----
+Username..=Usuario..
+Password..=Contraseña..
+IP address:Port number..=Dirección IP:Número de puerto..
+Login code..=Código de acceso..
+Search servers..=Buscar servidores..

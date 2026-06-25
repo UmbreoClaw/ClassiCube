@@ -51,6 +51,7 @@ void FetchResourcesScreen_SetActive(void);
 void ServersScreen_SetActive(void);
 void SettingsScreen_SetActive(void);
 void ThemesScreen_SetActive(void);
+void LanguageScreen_SetActive(void);
 void UpdatesScreen_SetActive(void);
 
 CC_END_HEADER

@@ -74,6 +74,7 @@ struct LButton {
 	LWidget_Layout
 	cc_string text;
 	int _textWidth, _textHeight;
+	int _minWidth; /* Requested width; the button grows beyond this to fit its text */
 };
 CC_NOINLINE void LButton_Add(void* screen, struct LButton* w, int width, int height, const char* text, 
 							LWidgetFunc onClick, const struct LLayout* layouts);

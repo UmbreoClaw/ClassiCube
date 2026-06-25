@@ -452,18 +452,28 @@ static void HookEvents(void) {
 /*########################################################################################################################*
 *------------------------------------------------------ButtonWidget-------------------------------------------------------*
 *#########################################################################################################################*/
-void LBackend_ButtonInit(struct LButton* w, int width, int height) {	
-	w->width  = Display_ScaleX(width);
-	w->height = Display_ScaleY(height);
+/* Horizontal padding kept between the button text and its left/right edges */
+#define LBUTTON_TEXT_PADDING 16
+
+void LBackend_ButtonInit(struct LButton* w, int width, int height) {
+	w->_minWidth = Display_ScaleX(width);
+	w->width     = w->_minWidth;
+	w->height    = Display_ScaleY(height);
 }
 
 void LBackend_ButtonUpdate(struct LButton* w) {
 	struct DrawTextArgs args;
+	int minWidth;
 	DrawTextArgs_Make(&args, &w->text, &titleFont, true);
 	LBackend_NeedsRedraw(w);
 
 	w->_textWidth  = Drawer2D_TextWidth(&args);
 	w->_textHeight = Drawer2D_TextHeight(&args);
+
+	/* Grow the button if needed so longer (e.g. translated) text fits inside */
+	/*  the box instead of overflowing past its left and right edges */
+	minWidth = w->_textWidth + Display_ScaleX(LBUTTON_TEXT_PADDING);
+	w->width = max(w->_minWidth, minWidth);
 }
 
 void LBackend_ButtonDraw(struct LButton* w) {

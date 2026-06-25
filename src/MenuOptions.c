@@ -263,7 +263,8 @@ static void MenuOptionsScreen_EndButtons(struct MenuOptionsScreen* s, int half, 
 static void MenuOptionsScreen_BoolGet(struct ButtonWidget* btn, cc_string* v) {
 	struct MenuOptionMetaBool* meta = (struct MenuOptionMetaBool*)btn->meta.ptr;
 	cc_bool value = meta->GetValue();
-	String_AppendConst(v, value ? "ON" : "OFF");
+	cc_string str = Locale_Translate(value ? "ON" : "OFF");
+	String_AppendString(v, &str);
 }
 
 static void MenuOptionsScreen_BoolClick(void* screen, void* widget) {

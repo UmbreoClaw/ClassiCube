@@ -9,8 +9,8 @@ Choosing a language
 -------------------
 The language can be changed from within ClassiCube, or by editing options:
 
-* In the launcher: open the **Options** screen and click the **Language**
-  button to cycle through the available languages.
+* In the launcher: open the **Options** screen, click **Language**, then pick a
+  language from the list.
 * In game: open **Options... -> Misc options...** and use the **Language**
   setting.
 * Manually: set `language=<code>` in `options.txt` (for example `language=es`).
