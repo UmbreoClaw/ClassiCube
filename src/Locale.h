@@ -24,6 +24,9 @@ void Locale_Free(void);
 /* If no translation exists (or no language is loaded), returns the original text */
 /* NOTE: The returned string references memory that is only valid until Locale_Free */
 CC_API cc_string Locale_Translate(const char* eng);
+/* Same as Locale_Translate, but takes the English text as a cc_string */
+/* Useful for translating text that isn't a compile time constant (e.g. block names) */
+CC_API cc_string Locale_TranslateString(const cc_string* eng);
 
 CC_END_HEADER
 #endif

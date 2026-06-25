@@ -180,7 +180,7 @@ void LCheckbox_Add(void* screen, struct LCheckbox* w, const char* text,
 	w->autoSelectable = true;
 	w->ValueChanged   = onChanged;
 
-	w->text = String_FromReadonly(text);
+	w->text = Locale_Translate(text);
 	LBackend_CheckboxInit(w);
 	LScreen_AddWidget(screen, w);
 }

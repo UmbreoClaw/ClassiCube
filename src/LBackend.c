@@ -27,6 +27,7 @@
 #include "Stream.h"
 #include "Logger.h"
 #include "Errors.h"
+#include "Locale.h"
 
 struct FontDesc titleFont, textFont, hintFont, logoFont, rowFont;
 /* Contains the pixels that are drawn to the window */
@@ -793,7 +794,7 @@ static void LInput_DrawText(struct LInput* w, struct DrawTextArgs* args) {
 		Context2D_DrawText(&LBackend_FB, args, 
 							w->x + xInputOffset, y + yInputOffset);
 	} else {
-		args->text = String_FromReadonly(w->hintText);
+		args->text = Locale_Translate(w->hintText);
 		args->font = &hintFont;
 
 		hintHeight = Drawer2D_TextHeight(args);
@@ -1047,8 +1048,8 @@ static void LTable_DrawHeaders(struct LTable* w) {
 	x = w->x; y = w->y;
 
 	for (i = 0; i < w->numColumns; i++) {
-		args.text = String_FromReadonly(w->columns[i].name);
-		Drawer2D_DrawClippedText(&LBackend_FB, &args, 
+		args.text = Locale_Translate(w->columns[i].name);
+		Drawer2D_DrawClippedText(&LBackend_FB, &args,
 								x + cellXOffset, y + hdrYOffset, 
 								w->columns[i].width - cellXPadding);
 

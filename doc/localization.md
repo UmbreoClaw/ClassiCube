@@ -21,6 +21,30 @@ This means any UI text that already goes through those helpers becomes
 translatable without changing the call site - only the locale file needs a
 matching entry.
 
+What is currently translated
+----------------------------
+* In-game button and text widgets (the pause menu, options menus, generate
+  level screen, etc.)
+* Block names shown in the inventory selection title. Only the *displayed* name
+  is translated - the English name is still used internally for block lookup
+  (e.g. `/place stone`) and when serializing levels, so saved maps and commands
+  are unaffected.
+* Launcher buttons, labels, option checkboxes, server list column headers, and
+  text input hints.
+
+`Locale_TranslateString` is the same as `Locale_Translate` but takes a
+`cc_string` (used for text that isn't a compile time constant, such as block
+names).
+
+Supported characters
+---------------------
+Locale files are UTF-8 encoded, but ClassiCube converts the text to its internal
+CP437 character set when reading. CP437 covers the common accented Spanish
+letters (`á é í ó ú ñ ü ¿ ¡`), but it does **not** include the accented capital
+letters `Á Í Ó Ú` (only `É Ñ Ü Ö` and friends exist). Any character without a
+CP437 equivalent is shown as `?`, so avoid those (for example, write `Indigo`
+rather than `Índigo`).
+
 Locale file format
 ------------------
 A locale file is a plain UTF-8 text file with one `key=value` pair per line:
@@ -44,6 +68,13 @@ Adding a new language
 
 The bundled `locale/es.txt` (Spanish) can be used as a reference for which
 strings are commonly shown in the launcher and in-game menus.
+
+Verifying a locale file
+-----------------------
+Run `python3 misc/verify_locale.py` to check every `locale/*.txt` file (or pass
+specific files as arguments). It validates the format, flags duplicate keys,
+ensures every character is representable in CP437, and confirms each key matches
+a real English string in `src/` (catching typos and dead keys).
 
 Relevant source files
 ---------------------

@@ -5,20 +5,23 @@
 #   - The text after it is the translation shown in game
 #   - Lines starting with '#' and blank lines are ignored
 #
+# This file is UTF-8 encoded. ClassiCube decodes it to its internal CP437
+#   character set, so accented Spanish letters (á é í ó ú ñ ¿ ¡ ü) are supported.
+#
 # To use this language, set "language=es" in options.txt (or copy this file to
 #   "locale/es.txt" next to the game and the launcher will pick it up at startup)
 #
-# Only user interface text set through the constant text helpers is translated;
+# Only user interface text set through the translatable helpers is translated;
 #   any English text without a matching line below is shown unchanged.
 
 # ---- Common buttons ----
 Done=Hecho
 Cancel=Cancelar
-Back=Atras
+Back=Atrás
 OK=Aceptar
-Yes=Si
+Yes=Sí
 No=No
-More=Mas
+More=Más
 Default value=Valor por defecto
 Send=Enviar
 Download=Descargar
@@ -26,7 +29,7 @@ Download=Descargar
 # ---- Pause / game menu ----
 Back to game=Volver al juego
 Quit game=Salir del juego
-Game menu=Menu del juego
+Game menu=Menú del juego
 Options...=Opciones...
 Change texture pack...=Cambiar paquete de texturas...
 Hotkeys...=Atajos de teclado...
@@ -39,7 +42,7 @@ Nostalgia options...=Opciones de nostalgia...
 # ---- Options group screen ----
 Misc options...=Opciones varias...
 Gui options...=Opciones de interfaz...
-Graphics options...=Opciones graficas...
+Graphics options...=Opciones gráficas...
 Controls...=Controles...
 Chat options...=Opciones de chat...
 Hacks settings...=Ajustes de hacks...
@@ -48,7 +51,7 @@ Env settings...=Ajustes del entorno...
 # ---- Generate level screen ----
 Flatgrass=Hierba plana
 Vanilla=Vainilla
-Small=Pequeno
+Small=Pequeño
 Normal=Normal
 Huge=Enorme
 Width:=Anchura:
@@ -65,13 +68,13 @@ Save file...=Guardar archivo...
 Texture ID reference sheet=Hoja de referencia de IDs de texturas
 
 # ---- Input device categories ----
-Keyboard/Mouse=Teclado/Raton
+Keyboard/Mouse=Teclado/Ratón
 Gamepad/Controller=Mando/Controlador
 
-# ---- Launcher: main screen ----
+# ---- Launcher: main menu items ----
 Singleplayer=Un jugador
 Resume=Reanudar
-Direct connect=Conexion directa
+Direct connect=Conexión directa
 Refresh=Actualizar
 Connect=Conectar
 Updates=Actualizaciones
@@ -79,45 +82,124 @@ Mode=Modo
 Theme=Tema
 Options=Opciones
 Exit=Salir
-Sign in=Iniciar sesion
+Sign in=Iniciar sesión
 Register=Registrarse
 Splitscreen (WIP)=Pantalla dividida (en desarrollo)
 2 player splitscreen=Pantalla dividida 2 jugadores
 3 player splitscreen=Pantalla dividida 3 jugadores
 4 player splitscreen=Pantalla dividida 4 jugadores
 
+# ---- Launcher: server list column headers ----
+Name=Nombre
+Players=Jugadores
+Uptime=Tiempo activo
+Software=Software
+
+# ---- Launcher: option checkboxes ----
+Classic style=Estilo clásico
+Force landscape=Forzar horizontal
+Close this after game starts=Cerrar esto al iniciar el juego
+Show empty servers in list=Mostrar servidores vacíos en la lista
+Use display scaling=Usar escalado de pantalla
+
 # ---- Launcher: modes ----
 Enhanced=Mejorado
-Classic=Clasico
-Classic +hax=Clasico +hax
+Classic=Clásico
+Classic +hax=Clásico +hax
 Custom=Personalizado
 
 # ---- Launcher: themes ----
 Modern=Moderno
-Blue=Azul
-Red=Rojo
-Green=Verde
-Nordic=Nordico
-Custom=Personalizado
+Nordic=Nórdico
 
 # ---- Launcher: theme editor labels ----
 Background=Fondo
-Button border=Borde del boton
-Button highlight=Resaltado del boton
-Button=Boton
-Active button=Boton activo
+Button border=Borde del botón
+Button highlight=Resaltado del botón
+Button=Botón
+Active button=Botón activo
 
 # ---- Launcher: status messages ----
 &eWorking..=&eTrabajando..
-&eSigning in..=&eIniciando sesion..
+&eSigning in..=&eIniciando sesión..
 &eRetrieving servers list..=&eObteniendo lista de servidores..
 &eChecking..=&eComprobando..
 &eUp to date=&eActualizado
-&aUpdate available=&aActualizacion disponible
-&aNew release=&aNueva version
-&cCheck failed=&cComprobacion fallida
-&cInvalid address=&cDireccion invalida
-&cInvalid ip=&cIP invalida
-&cInvalid port=&cPuerto invalido
+&aUpdate available=&aActualización disponible
+&aNew release=&aNueva versión
+&cCheck failed=&cComprobación fallida
+&cInvalid address=&cDirección inválida
+&cInvalid ip=&cIP inválida
+&cInvalid port=&cPuerto inválido
 &cUsername required=&cSe requiere nombre de usuario
-&cPassword required=&cSe requiere contrasena
+&cPassword required=&cSe requiere contraseña
+
+# ---- Block names ----
+# NOTE: only the displayed name is translated; the English name is still used
+#   internally for commands (e.g. /place) and when saving levels
+Air=Aire
+Stone=Piedra
+Grass=Hierba
+Dirt=Tierra
+Cobblestone=Adoquín
+Wood=Madera
+Sapling=Retoño
+Bedrock=Roca madre
+Water=Agua
+Still water=Agua estancada
+Lava=Lava
+Still lava=Lava estancada
+Sand=Arena
+Gravel=Grava
+Gold ore=Mineral de oro
+Iron ore=Mineral de hierro
+Coal ore=Mineral de carbón
+Log=Tronco
+Leaves=Hojas
+Sponge=Esponja
+Glass=Cristal
+Red=Rojo
+Orange=Naranja
+Yellow=Amarillo
+Lime=Lima
+Green=Verde
+Teal=Verde azulado
+Aqua=Aguamarina
+Cyan=Cian
+Blue=Azul
+Indigo=Indigo
+Violet=Violeta
+Magenta=Magenta
+Pink=Rosado
+Black=Negro
+Gray=Gris
+White=Blanco
+Dandelion=Diente de león
+Rose=Rosa
+Brown mushroom=Champiñón marrón
+Red mushroom=Champiñón rojo
+Gold=Oro
+Iron=Hierro
+Double slab=Losa doble
+Slab=Losa
+Brick=Ladrillos
+TNT=TNT
+Bookshelf=Estantería
+Mossy rocks=Roca musgosa
+Obsidian=Obsidiana
+Cobblestone slab=Losa de adoquín
+Rope=Cuerda
+Sandstone=Arenisca
+Snow=Nieve
+Fire=Fuego
+Light pink=Rosa claro
+Forest green=Verde bosque
+Brown=Marrón
+Deep blue=Azul profundo
+Turquoise=Turquesa
+Ice=Hielo
+Ceramic tile=Baldosa cerámica
+Magma=Magma
+Pillar=Pilar
+Crate=Caja
+Stone brick=Ladrillo de piedra

@@ -17,6 +17,7 @@
 #include "Camera.h"
 #include "Http.h"
 #include "Block.h"
+#include "Locale.h"
 #include "Menus.h"
 #include "World.h"
 #include "Input.h"
@@ -1728,6 +1729,9 @@ static void InventoryScreen_GetTitleText(cc_string* desc, BlockID block) {
 	if (block == BLOCK_AIR) return;
 
 	name = Block_UNSAFE_GetName(block);
+	/* Translate for display only - the stored name stays English so that */
+	/* block lookup (e.g. /place) and map serialization remain unaffected */
+	name = Locale_TranslateString(&name);
 	String_AppendString(desc, &name);
 	if (Game_ClassicMode) return;
 

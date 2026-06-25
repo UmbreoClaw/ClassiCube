@@ -40,7 +40,7 @@ void Locale_Free(void) {
 	locale_loaded = false;
 }
 
-cc_string Locale_Translate(const char* eng) {
+cc_string Locale_TranslateString(const cc_string* eng) {
 	cc_string entry, key, value;
 	int i;
 
@@ -49,9 +49,14 @@ cc_string Locale_Translate(const char* eng) {
 			entry = StringsBuffer_UNSAFE_Get(&locale_entries, i);
 			String_UNSAFE_Separate(&entry, LOCALE_SEPARATOR, &key, &value);
 
-			if (String_CaselessEqualsConst(&key, eng)) return value;
+			if (String_CaselessEquals(&key, eng)) return value;
 		}
 	}
 	/* Fall back to the original English text when no translation is found */
-	return String_FromReadonly(eng);
+	return *eng;
+}
+
+cc_string Locale_Translate(const char* eng) {
+	cc_string str = String_FromReadonly(eng);
+	return Locale_TranslateString(&str);
 }
