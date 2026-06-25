@@ -18,6 +18,7 @@ Eg. the webclient 'main' function loads IndexedDB, and when that has asynchronou
 #include "Launcher.h"
 #include "Server.h"
 #include "Options.h"
+#include "Locale.h"
 #include "main.h"
 
 /*########################################################################################################################*
@@ -131,6 +132,7 @@ static void SetupProgram(int argc, char** argv) {
 	
 	res = Platform_SetDefaultCurrentDirectory(argc, argv);
 	Options_Load();
+	Locale_Load();
 	Window_Init();
 	Gamepads_Init();
 	

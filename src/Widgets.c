@@ -18,6 +18,7 @@
 #include "Input.h"
 #include "InputHandler.h"
 #include "Launcher.h"
+#include "Locale.h"
 
 static void Widget_NullFunc(void* widget) { }
 static int  Widget_Pointer(void* elem, int id, int x, int y) { return false; }
@@ -102,7 +103,7 @@ void TextWidget_Set(struct TextWidget* w, const cc_string* text, struct FontDesc
 }
 
 void TextWidget_SetConst(struct TextWidget* w, const char* text, struct FontDesc* font) {
-	cc_string str = String_FromReadonly(text);
+	cc_string str = Locale_Translate(text);
 	TextWidget_Set(w, &str, font);
 }
 
@@ -283,7 +284,7 @@ void ButtonWidget_Set(struct ButtonWidget* w, const cc_string* text, struct Font
 }
 
 void ButtonWidget_SetConst(struct ButtonWidget* w, const char* text, struct FontDesc* font) {
-	cc_string str = String_FromReadonly(text);
+	cc_string str = Locale_Translate(text);
 	ButtonWidget_Set(w, &str, font);
 }
 

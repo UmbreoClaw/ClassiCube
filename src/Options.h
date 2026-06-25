@@ -14,6 +14,8 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_MIN_MUSIC_DELAY "music-mindelay"
 #define OPT_MAX_MUSIC_DELAY "music-maxdelay"
 
+#define OPT_LANGUAGE "language"
+
 #define OPT_VIEW_DISTANCE "viewdist"
 #define OPT_BLOCK_PHYSICS "singleplayerphysics"
 #define OPT_NAMES_MODE "namesmode"

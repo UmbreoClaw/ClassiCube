@@ -399,6 +399,7 @@
     <ClInclude Include="Gui.h" />
     <ClInclude Include="HeldBlockRenderer.h" />
     <ClInclude Include="Launcher.h" />
+    <ClInclude Include="Locale.h" />
     <ClInclude Include="LScreens.h" />
     <ClInclude Include="LWeb.h" />
     <ClInclude Include="LWidgets.h" />
@@ -602,6 +603,7 @@
     <ClCompile Include="InputHandler.c" />
     <ClCompile Include="Inventory.c" />
     <ClCompile Include="Launcher.c" />
+    <ClCompile Include="Locale.c" />
     <ClCompile Include="LBackend.c" />
     <ClCompile Include="LScreens.c" />
     <ClCompile Include="LWeb.c" />

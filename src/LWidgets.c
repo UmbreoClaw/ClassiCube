@@ -13,6 +13,7 @@
 #include "Input.h"
 #include "Utils.h"
 #include "LBackend.h"
+#include "Locale.h"
 
 static int flagXOffset, flagYOffset;
 static int oneX, twoX, fourX;
@@ -152,7 +153,7 @@ void LButton_Add(void* screen, struct LButton* w, int width, int height, const c
 }
 
 void LButton_SetConst(struct LButton* w, const char* text) {
-	w->text = String_FromReadonly(text);
+	w->text = Locale_Translate(text);
 	LBackend_ButtonUpdate(w);
 }
 
@@ -426,7 +427,7 @@ void LLabel_SetText(struct LLabel* w, const cc_string* text) {
 }
 
 void LLabel_SetConst(struct LLabel* w, const char* text) {
-	cc_string str = String_FromReadonly(text);
+	cc_string str = Locale_Translate(text);
 	LLabel_SetText(w, &str);
 }
 

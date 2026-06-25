@@ -119,6 +119,7 @@ TODO: explain multiple backends for some Modules
 |Module|Functionality|
 |--------|-------|
 |Event|Contains all events and provies helper methods for using events
+|Locale|Loads a locale file and translates English UI text into other languages
 |Options|Retrieves options from and sets options in options.txt
 |String|Implements operations for a string with a buffer, length, and capacity
 |Utils|Various general utility functions

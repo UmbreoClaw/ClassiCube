@@ -1,0 +1,123 @@
+# ClassiCube Spanish (Español) locale file
+#
+# Format: <English text>=<translated text>
+#   - The text before the first '=' is the original English UI text (the key)
+#   - The text after it is the translation shown in game
+#   - Lines starting with '#' and blank lines are ignored
+#
+# To use this language, set "language=es" in options.txt (or copy this file to
+#   "locale/es.txt" next to the game and the launcher will pick it up at startup)
+#
+# Only user interface text set through the constant text helpers is translated;
+#   any English text without a matching line below is shown unchanged.
+
+# ---- Common buttons ----
+Done=Hecho
+Cancel=Cancelar
+Back=Atras
+OK=Aceptar
+Yes=Si
+No=No
+More=Mas
+Default value=Valor por defecto
+Send=Enviar
+Download=Descargar
+
+# ---- Pause / game menu ----
+Back to game=Volver al juego
+Quit game=Salir del juego
+Game menu=Menu del juego
+Options...=Opciones...
+Change texture pack...=Cambiar paquete de texturas...
+Hotkeys...=Atajos de teclado...
+Generate new level...=Generar nuevo nivel...
+Load level...=Cargar nivel...
+Save level...=Guardar nivel...
+Generate new level=Generar nuevo nivel
+Nostalgia options...=Opciones de nostalgia...
+
+# ---- Options group screen ----
+Misc options...=Opciones varias...
+Gui options...=Opciones de interfaz...
+Graphics options...=Opciones graficas...
+Controls...=Controles...
+Chat options...=Opciones de chat...
+Hacks settings...=Ajustes de hacks...
+Env settings...=Ajustes del entorno...
+
+# ---- Generate level screen ----
+Flatgrass=Hierba plana
+Vanilla=Vainilla
+Small=Pequeno
+Normal=Normal
+Huge=Enorme
+Width:=Anchura:
+Height:=Altura:
+Length:=Longitud:
+Seed:=Semilla:
+
+# ---- Categories / misc UI ----
+Appearance=Apariencia
+Functionality=Funcionalidad
+Nostalgia options=Opciones de nostalgia
+Connected players:=Jugadores conectados:
+Save file...=Guardar archivo...
+Texture ID reference sheet=Hoja de referencia de IDs de texturas
+
+# ---- Input device categories ----
+Keyboard/Mouse=Teclado/Raton
+Gamepad/Controller=Mando/Controlador
+
+# ---- Launcher: main screen ----
+Singleplayer=Un jugador
+Resume=Reanudar
+Direct connect=Conexion directa
+Refresh=Actualizar
+Connect=Conectar
+Updates=Actualizaciones
+Mode=Modo
+Theme=Tema
+Options=Opciones
+Exit=Salir
+Sign in=Iniciar sesion
+Register=Registrarse
+Splitscreen (WIP)=Pantalla dividida (en desarrollo)
+2 player splitscreen=Pantalla dividida 2 jugadores
+3 player splitscreen=Pantalla dividida 3 jugadores
+4 player splitscreen=Pantalla dividida 4 jugadores
+
+# ---- Launcher: modes ----
+Enhanced=Mejorado
+Classic=Clasico
+Classic +hax=Clasico +hax
+Custom=Personalizado
+
+# ---- Launcher: themes ----
+Modern=Moderno
+Blue=Azul
+Red=Rojo
+Green=Verde
+Nordic=Nordico
+Custom=Personalizado
+
+# ---- Launcher: theme editor labels ----
+Background=Fondo
+Button border=Borde del boton
+Button highlight=Resaltado del boton
+Button=Boton
+Active button=Boton activo
+
+# ---- Launcher: status messages ----
+&eWorking..=&eTrabajando..
+&eSigning in..=&eIniciando sesion..
+&eRetrieving servers list..=&eObteniendo lista de servidores..
+&eChecking..=&eComprobando..
+&eUp to date=&eActualizado
+&aUpdate available=&aActualizacion disponible
+&aNew release=&aNueva version
+&cCheck failed=&cComprobacion fallida
+&cInvalid address=&cDireccion invalida
+&cInvalid ip=&cIP invalida
+&cInvalid port=&cPuerto invalido
+&cUsername required=&cSe requiere nombre de usuario
+&cPassword required=&cSe requiere contrasena

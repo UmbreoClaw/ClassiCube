@@ -282,6 +282,9 @@
     <ClInclude Include="Launcher.h">
       <Filter>Header Files\Launcher</Filter>
     </ClInclude>
+    <ClInclude Include="Locale.h">
+      <Filter>Header Files\Utils</Filter>
+    </ClInclude>
     <ClInclude Include="Resources.h">
       <Filter>Header Files\Launcher</Filter>
     </ClInclude>
@@ -532,6 +535,9 @@
     </ClCompile>
     <ClCompile Include="Launcher.c">
       <Filter>Source Files\Launcher</Filter>
+    </ClCompile>
+    <ClCompile Include="Locale.c">
+      <Filter>Source Files\Utils</Filter>
     </ClCompile>
     <ClCompile Include="Resources.c">
       <Filter>Source Files\Launcher</Filter>
