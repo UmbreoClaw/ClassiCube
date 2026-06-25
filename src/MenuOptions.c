@@ -166,7 +166,7 @@ static cc_string MenuOptionsScreen_GetDesc(int i) {
 
 	descRaw = String_FromReadonly(desc);
 	String_UNSAFE_Split(&descRaw, '\n', descLines, Array_Elems(descLines));
-	return descLines[i];
+	return Locale_TranslateString(&descLines[i]);
 }
 
 static void MenuOptionsScreen_SelectExtHelp(struct MenuOptionsScreen* s, int idx) {
@@ -1163,7 +1163,12 @@ static void MiO_SetSensitivity(int v) {
 }
 
 static int  MiO_GetLanguage(void)  { return Locale_GetActive(); }
-static void MiO_SetLanguage(int v) { Locale_SetActive(v); }
+static void MiO_SetLanguage(int v) {
+	Locale_SetActive(v);
+	/* Rebuild every menu so all text immediately switches to the new language */
+	/* (same approach as when the font changes) */
+	Gui_RefreshAll();
+}
 
 static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 	MenuOptionsScreen_BeginButtons(s);
@@ -1199,7 +1204,7 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			MiO_GetSensitivity, MiO_SetSensitivity, NULL);
 		MenuOptionsScreen_AddEnum(s, "Language", Locale_Names, LOCALE_COUNT,
 			MiO_GetLanguage, MiO_SetLanguage,
-			"&eReopen menus or restart the game for all text to update");
+			"&eChanges the language of the game interface");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 

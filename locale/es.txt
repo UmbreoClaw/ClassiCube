@@ -59,7 +59,7 @@ View bobbing=Balanceo de vista
 Invert mouse=Invertir ratón
 Mouse sensitivity=Sensibilidad del ratón
 Language=Idioma
-&eReopen menus or restart the game for all text to update=&eReabre los menús o reinicia el juego para actualizar todo el texto
+&eChanges the language of the game interface=&eCambia el idioma de la interfaz del juego
 
 # ---- Generate level screen ----
 Flatgrass=Hierba plana

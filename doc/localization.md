@@ -15,9 +15,10 @@ The language can be changed from within ClassiCube, or by editing options:
   setting.
 * Manually: set `language=<code>` in `options.txt` (for example `language=es`).
 
-After changing the language in game, reopen the menus (or restart) for all
-text to update. The list of selectable languages is defined by `Locale_Names`
-and `Locale_Codes` in `src/Locale.c`.
+Changing the language in game rebuilds all the open menus immediately (via
+`Gui_RefreshAll`, the same mechanism used when the font changes), so the new
+language takes effect right away. The list of selectable languages is defined
+by `Locale_Names` and `Locale_Codes` in `src/Locale.c`.
 
 How it works
 ------------
