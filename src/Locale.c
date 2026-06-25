@@ -10,6 +10,11 @@ static cc_bool locale_loaded;
 
 #define LOCALE_SEPARATOR '='
 
+/* "Español" - the ñ is written as the CP437 byte 0xA4 so it renders correctly */
+/*   (the game uses CP437 internally, not UTF-8, for string literals) */
+const char* const Locale_Names[LOCALE_COUNT] = { "English", "Espa\xA4ol" };
+const char* const Locale_Codes[LOCALE_COUNT] = { "en",      "es"          };
+
 void Locale_Load(void) {
 	cc_string lang; char langBuffer[STRING_SIZE];
 	cc_string path; char pathBuffer[FILENAME_SIZE + 1];
@@ -59,4 +64,26 @@ cc_string Locale_TranslateString(const cc_string* eng) {
 cc_string Locale_Translate(const char* eng) {
 	cc_string str = String_FromReadonly(eng);
 	return Locale_TranslateString(&str);
+}
+
+int Locale_GetActive(void) {
+	cc_string lang; char langBuffer[STRING_SIZE];
+	int i;
+
+	String_InitArray(lang, langBuffer);
+	Options_Get(OPT_LANGUAGE, &lang, Locale_Codes[0]);
+
+	for (i = 0; i < LOCALE_COUNT; i++) {
+		if (String_CaselessEqualsConst(&lang, Locale_Codes[i])) return i;
+	}
+	return 0; /* Default to English when unset or unrecognised */
+}
+
+void Locale_SetActive(int index) {
+	cc_string code;
+	if (index < 0 || index >= LOCALE_COUNT) index = 0;
+
+	code = String_FromReadonly(Locale_Codes[index]);
+	Options_Set(OPT_LANGUAGE, &code);
+	Locale_Load();
 }

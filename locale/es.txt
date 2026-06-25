@@ -48,6 +48,19 @@ Chat options...=Opciones de chat...
 Hacks settings...=Ajustes de hacks...
 Env settings...=Ajustes del entorno...
 
+# ---- Misc options screen (option names) ----
+Reach distance=Distancia de alcance
+Camera Mass=Masa de la cámara
+Music volume=Volumen de música
+Sounds volume=Volumen de sonidos
+Block physics=Física de bloques
+Smooth camera=Cámara suave
+View bobbing=Balanceo de vista
+Invert mouse=Invertir ratón
+Mouse sensitivity=Sensibilidad del ratón
+Language=Idioma
+&eReopen menus or restart the game for all text to update=&eReabre los menús o reinicia el juego para actualizar todo el texto
+
 # ---- Generate level screen ----
 Flatgrass=Hierba plana
 Vanilla=Vainilla
@@ -88,6 +101,11 @@ Splitscreen (WIP)=Pantalla dividida (en desarrollo)
 2 player splitscreen=Pantalla dividida 2 jugadores
 3 player splitscreen=Pantalla dividida 3 jugadores
 4 player splitscreen=Pantalla dividida 4 jugadores
+
+# ---- Launcher: settings screen ----
+&eChange the enabled features=&eCambiar las funciones activadas
+&eChange how the launcher looks=&eCambiar la apariencia del menú
+&eChange the language=&eCambiar el idioma
 
 # ---- Launcher: server list column headers ----
 Name=Nombre

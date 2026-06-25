@@ -18,6 +18,7 @@
 #include "LBackend.h"
 #include "Http.h"
 #include "Game.h"
+#include "Locale.h"
 #include "main.h"
 
 #define LAYOUTS static const struct LLayout
@@ -1436,24 +1437,26 @@ void ServersScreen_SetActive(void) {
 *#########################################################################################################################*/
 static struct SettingsScreen {
 	LScreen_Layout
-	struct LButton btnMode, btnColours, btnBack;
-	struct LLabel  lblMode, lblColours;
+	struct LButton btnMode, btnColours, btnLanguage, btnBack;
+	struct LLabel  lblMode, lblColours, lblLanguage;
 	struct LCheckbox cbExtra, cbEmpty, cbScale;
 	struct LLine sep;
 } SettingsScreen CC_BIG_VAR;
 
-#define SETTINGS_SCREEN_MAX_WIDGETS 9
+#define SETTINGS_SCREEN_MAX_WIDGETS 11
 static struct LWidget* settings_widgets[SETTINGS_SCREEN_MAX_WIDGETS];
 
-LAYOUTS set_btnMode[]    = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -70 } };
-LAYOUTS set_lblMode[]    = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -70 } };
-LAYOUTS set_btnColours[] = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -20 } };
-LAYOUTS set_lblColours[] = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -20 } };
+LAYOUTS set_btnMode[]     = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -90 } };
+LAYOUTS set_lblMode[]     = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -90 } };
+LAYOUTS set_btnColours[]  = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,  -45 } };
+LAYOUTS set_lblColours[]  = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,  -45 } };
+LAYOUTS set_btnLanguage[] = { { ANCHOR_CENTRE,     -135 }, { ANCHOR_CENTRE,    0 } };
+LAYOUTS set_lblLanguage[] = { { ANCHOR_CENTRE_MIN,  -70 }, { ANCHOR_CENTRE,    0 } };
 
-LAYOUTS set_sep[]     = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE,  15 } };
-LAYOUTS set_cbExtra[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  44 } };
-LAYOUTS set_cbEmpty[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  84 } };
-LAYOUTS set_cbScale[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE, 124 } };
+LAYOUTS set_sep[]     = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE,  30 } };
+LAYOUTS set_cbExtra[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  55 } };
+LAYOUTS set_cbEmpty[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE,  92 } };
+LAYOUTS set_cbScale[] = { { ANCHOR_CENTRE_MIN, -190 }, { ANCHOR_CENTRE, 129 } };
 LAYOUTS set_btnBack[] = { { ANCHOR_CENTRE,        0 }, { ANCHOR_CENTRE, 170 } };
 
 
@@ -1483,17 +1486,27 @@ static void SettingsScreen_DPIScaling(struct LCheckbox* w) {
 #endif
 }
 
+static void SettingsScreen_Language(void* w) {
+	Locale_SetActive((Locale_GetActive() + 1) % LOCALE_COUNT);
+	/* Reactivate the screen so all text is rebuilt in the new language */
+	SettingsScreen_SetActive();
+}
+
 static void SettingsScreen_AddWidgets(struct SettingsScreen* s) {
 	LLine_Add(s,   &s->sep, 380, set_sep);
-	LButton_Add(s, &s->btnMode, 110, 35, "Mode", 
+	LButton_Add(s, &s->btnMode, 110, 35, "Mode",
 				SwitchToChooseMode, set_btnMode);
 	LLabel_Add(s,  &s->lblMode, "&eChange the enabled features", set_lblMode);
 
 	if (!Options_GetBool(OPT_CLASSIC_MODE, false)) {
-		LButton_Add(s, &s->btnColours, 110, 35, "Theme", 
+		LButton_Add(s, &s->btnColours, 110, 35, "Theme",
 					SwitchToThemes, set_btnColours);
 		LLabel_Add(s,  &s->lblColours, "&eChange how the launcher looks", set_lblColours);
 	}
+
+	LButton_Add(s, &s->btnLanguage, 110, 35, Locale_Names[Locale_GetActive()],
+				SettingsScreen_Language, set_btnLanguage);
+	LLabel_Add(s,  &s->lblLanguage, "&eChange the language", set_lblLanguage);
 
 #if defined CC_BUILD_MOBILE
 	LCheckbox_Add(s, &s->cbExtra, "Force landscape", 

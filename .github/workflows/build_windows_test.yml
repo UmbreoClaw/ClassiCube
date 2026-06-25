@@ -1,0 +1,78 @@
+name: Build Windows (test)
+# Builds testable 64-bit Windows executables and bundles the Spanish locale.
+# Triggered on pushes to the locale branch, or manually from the Actions tab.
+on:
+  push:
+    branches:
+      - claude/spanish-locale-language-support-8xbp2m
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-windows-test
+  cancel-in-progress: true
+
+jobs:
+  build-win64:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MinGW (64 bit)
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install gcc-mingw-w64-x86-64
+
+      - name: Compile 64 bit Windows builds
+        shell: bash
+        env:
+          LIBS: "-lwinmm -limagehlp"
+          SRCS: "src/*.c third_party/bearssl/*.c"
+          # Same setup as the main Windows workflow, minus -Werror so a stray
+          # warning never blocks a build that is only meant for testing
+          COMMON_FLAGS: "-O1 -s -fno-stack-protector -fno-math-errno -Qn"
+          WIN64_FLAGS: "-mwindows -nostartfiles -Wl,-emain_real -DCC_NOMAIN misc/windows/CCicon_64.res"
+        run: |
+          LATEST_FLAG=-DCC_COMMIT_SHA=\"$(git rev-parse --short "$GITHUB_SHA")\"
+
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o ClassiCube-Win64-Direct3D9.exe $LATEST_FLAG ${{ env.LIBS }}
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o ClassiCube-Win64-OpenGL.exe   $LATEST_FLAG -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
+
+      - name: Stage test package
+        shell: bash
+        run: |
+          mkdir -p package/locale
+          cp ClassiCube-Win64-Direct3D9.exe package/
+          cp ClassiCube-Win64-OpenGL.exe   package/
+          cp locale/es.txt package/locale/es.txt
+          # Pre-select Spanish so the download runs in Spanish straight away
+          printf 'language=es\n' > package/options.txt
+          cat > package/README-test.txt <<'EOF'
+          ClassiCube - Spanish locale test build
+          ======================================
+
+          This package is pre-configured to run in Spanish (options.txt contains
+          "language=es"). Just run one of the executables:
+
+            ClassiCube-Win64-Direct3D9.exe  (default, recommended)
+            ClassiCube-Win64-OpenGL.exe     (use if Direct3D has issues)
+
+          Switching language in-app:
+            * Launcher: Options screen -> the "Language" button cycles language
+            * In game:  Options... -> Misc options... -> "Language"
+
+          To go back to English, set "language=en" in options.txt, or use the
+          Language control above. Reopen the menus (or restart) for all text to
+          update.
+
+          The "locale/es.txt" file holds the Spanish translations. Additional
+          languages can be added by dropping another "locale/<code>.txt" file
+          next to the executable.
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-Windows-Spanish-test
+          path: package
+          if-no-files-found: error

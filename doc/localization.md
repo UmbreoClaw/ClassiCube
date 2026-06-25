@@ -5,6 +5,20 @@ ClassiCube can translate user interface text into other languages by loading a
 *locale file*. The English text built into the source code stays as the
 fallback, so any text that hasn't been translated simply shows in English.
 
+Choosing a language
+-------------------
+The language can be changed from within ClassiCube, or by editing options:
+
+* In the launcher: open the **Options** screen and click the **Language**
+  button to cycle through the available languages.
+* In game: open **Options... -> Misc options...** and use the **Language**
+  setting.
+* Manually: set `language=<code>` in `options.txt` (for example `language=es`).
+
+After changing the language in game, reopen the menus (or restart) for all
+text to update. The list of selectable languages is defined by `Locale_Names`
+and `Locale_Codes` in `src/Locale.c`.
+
 How it works
 ------------
 * The active language is chosen by the `language` option in `options.txt`

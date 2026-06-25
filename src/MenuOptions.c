@@ -34,6 +34,7 @@
 #include "Utils.h"
 #include "Errors.h"
 #include "SystemFonts.h"
+#include "Locale.h"
 
 typedef void (*Button_GetText)(struct ButtonWidget* btn, cc_string* raw);
 typedef void (*Button_SetText)(struct ButtonWidget* btn, const cc_string* raw);
@@ -135,9 +136,10 @@ static struct Widget* menuOpts_widgets[MENUOPTS_MAX_OPTS + 1];
 static void MenuOptionsScreen_Update(struct MenuOptionsScreen* s, struct ButtonWidget* btn) {
 	struct MenuOptionMetaBool* meta = (struct MenuOptionMetaBool*)btn->meta.ptr;
 	cc_string title; char titleBuffer[STRING_SIZE];
+	cc_string name = Locale_Translate(btn->optName);
 	String_InitArray(title, titleBuffer);
 
-	String_AppendConst(&title, btn->optName);
+	String_AppendString(&title, &name);
 	if (meta->GetText) {
 		String_AppendConst(&title, ": ");
 		meta->GetText(btn, &title);
@@ -1160,6 +1162,9 @@ static void MiO_SetSensitivity(int v) {
 	Options_SetInt(OPT_SENSITIVITY, v);
 }
 
+static int  MiO_GetLanguage(void)  { return Locale_GetActive(); }
+static void MiO_SetLanguage(int v) { Locale_SetActive(v); }
+
 static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 	MenuOptionsScreen_BeginButtons(s);
 	{
@@ -1185,13 +1190,16 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			MiO_GetViewBob, MiO_SetViewBob, NULL);
 		MenuOptionsScreen_AddBool(s, "Invert mouse",
 			MiO_GetInvert,  MiO_SetInvert, NULL);
-		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity", 
+		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity",
 #ifdef CC_BUILD_WIN
 			   1, 200, 40,
 #else
 			   1, 200, 30,
 #endif
 			MiO_GetSensitivity, MiO_SetSensitivity, NULL);
+		MenuOptionsScreen_AddEnum(s, "Language", Locale_Names, LOCALE_COUNT,
+			MiO_GetLanguage, MiO_SetLanguage,
+			"&eReopen menus or restart the game for all text to update");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 
