@@ -33,6 +33,8 @@
 CGContextRef win_ctx;
 UIView* view_handle;
 UIViewController* cc_controller;
+// The active window scene (set by CCSceneDelegate in interop_ios.m)
+extern UIWindowScene* cc_window_scene;
 
 UIColor* ToUIColor(BitmapCol color, float A);
 NSString* ToNSString(const cc_string* text);
@@ -751,6 +753,9 @@ static void AllocWindow(void) {
 
 	CGRect bounds = GetViewFrame();
 	win_handle    = [[CCWindow alloc] initWithFrame:bounds];
+	// Attach to the window scene - required by the modern UIScene lifecycle,
+	//  otherwise the window has no scene and nothing is displayed
+	if (cc_window_scene) [win_handle setWindowScene:cc_window_scene];
 	[win_handle setRootViewController:cc_controller];
 
 	Window_Main.Exists   = true;

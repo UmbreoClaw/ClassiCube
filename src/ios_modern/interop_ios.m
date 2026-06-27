@@ -27,11 +27,19 @@
 // shared state with Window_ios.m
 extern UIViewController* cc_controller;
 
+// The window scene the game's UIWindow attaches to. Modern iOS (apps built
+//  against the iOS 13+ SDK) requires the UIScene lifecycle, so the scene
+//  delegate below captures it for AllocWindow() in Window_ios.m to use.
+UIWindowScene* cc_window_scene;
+
 UIColor* ToUIColor(BitmapCol color, float A);
 NSString* ToNSString(const cc_string* text);
 UIInterfaceOrientationMask SupportedOrientations(void);
 void LogUnhandledNSErrors(NSException* ex);
 
+
+@interface CCSceneDelegate : NSObject<UIWindowSceneDelegate>
+@end
 
 @interface CCAppDelegate : UIResponder<UIApplicationDelegate>
 @end
@@ -47,10 +55,15 @@ void LogUnhandledNSErrors(NSException* ex);
 }
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // schedule the actual main loop to run in next CFRunLoop iteration
-    //  (as calling ios_main here doesn't work properly)
-    [self performSelector:@selector(runMainLoop) withObject:nil afterDelay:0.0];
+    // The game loop is started from CCSceneDelegate once the window scene has
+    //  connected (see below), so that a scene exists before the window is made.
     return YES;
+}
+
+- (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession options:(UISceneConnectionOptions *)options {
+    UISceneConfiguration* cfg = [UISceneConfiguration configurationWithName:@"Default Configuration" sessionRole:connectingSceneSession.role];
+    cfg.delegateClass = [CCSceneDelegate class];
+    return cfg;
 }
 
 - (void)applicationWillResignActive:(UIApplication *)application {
@@ -79,6 +92,36 @@ void LogUnhandledNSErrors(NSException* ex);
 
 - (UIInterfaceOrientationMask)application:(UIApplication *)application supportedInterfaceOrientationsForWindow:(UIWindow *)window {
     return SupportedOrientations();
+}
+@end
+
+
+@implementation CCSceneDelegate
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    // Remember the scene so AllocWindow() can attach the game's window to it
+    if ([scene isKindOfClass:[UIWindowScene class]])
+        cc_window_scene = (UIWindowScene*)scene;
+
+    // Start the game now that a scene exists. Guard against the scene
+    //  reconnecting (e.g. after returning from the background) starting it twice.
+    static cc_bool launched;
+    if (launched) return;
+    launched = true;
+
+    id appDelegate = [UIApplication sharedApplication].delegate;
+    [appDelegate performSelector:@selector(runMainLoop) withObject:nil afterDelay:0.0];
+}
+
+- (void)sceneDidBecomeActive:(UIScene *)scene {
+    Platform_LogConst("ACTIVE");
+    Window_Main.Focused = true;
+    Event_RaiseVoid(&WindowEvents.FocusChanged);
+}
+
+- (void)sceneWillResignActive:(UIScene *)scene {
+    Platform_LogConst("INACTIVE");
+    Window_Main.Focused = false;
+    Event_RaiseVoid(&WindowEvents.FocusChanged);
 }
 @end
 

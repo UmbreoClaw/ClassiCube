@@ -1,8 +1,11 @@
 name: Verify iOS Xcode project
 # Compiles misc/ios_modern/CCIOS-Modern.xcodeproj (unsigned) to verify the
-#  hand-maintained project file stays valid. Needs the iOS 18 SDK (deployment
-#  target is iOS 18), so it runs on macos-15 / Xcode 16 rather than the
-#  macOS-14 / Xcode 15 runner used for the Makefile IPA build.
+#  hand-maintained project file stays valid, and smoke-tests that the app
+#  actually launches in a simulator (catches runtime launch failures such as
+#  the UIScene lifecycle requirement that a plain compile would not catch).
+# Needs the iOS 18 SDK (deployment target is iOS 18), so it runs on
+#  macos-15 / Xcode 16 rather than the macOS-14 / Xcode 15 runner used for the
+#  Makefile IPA build.
 on:
   push:
     branches:
@@ -16,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-device:
     timeout-minutes: 20
     runs-on: macos-15
     steps:
@@ -27,7 +30,7 @@ jobs:
           xcodebuild -version
           xcodebuild -showsdks | grep -i ios || true
 
-      - name: Build CCIOS-Modern.xcodeproj (unsigned)
+      - name: Build CCIOS-Modern.xcodeproj (unsigned, device)
         run: |
           xcodebuild \
             -project misc/ios_modern/CCIOS-Modern.xcodeproj \
@@ -39,3 +42,50 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build
+
+  smoke-test:
+    timeout-minutes: 25
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build CCIOS-Modern.xcodeproj (simulator)
+        run: |
+          xcodebuild \
+            -project misc/ios_modern/CCIOS-Modern.xcodeproj \
+            -scheme ClassiCube \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -derivedDataPath build-sim \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Launch in simulator and check it doesn't crash
+        run: |
+          set -euo pipefail
+          APP=$(find build-sim -name 'ClassiCube.app' -path '*iphonesimulator*' | head -1)
+          echo "App bundle: $APP"
+          test -n "$APP"
+
+          # Pick any available iPhone simulator
+          DEVICE=$(xcrun simctl create cc-smoke "iPhone 16" 2>/dev/null \
+                || xcrun simctl create cc-smoke "iPhone 15" 2>/dev/null \
+                || xcrun simctl create cc-smoke "iPhone 14")
+          echo "Simulator: $DEVICE"
+          xcrun simctl boot "$DEVICE"
+
+          # Clear any stale host-side crash reports for the app
+          rm -f ~/Library/Logs/DiagnosticReports/ClassiCube* 2>/dev/null || true
+
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch "$DEVICE" com.classicube.client.ios
+
+          # Give it time to either run or crash on launch
+          sleep 15
+
+          if ls ~/Library/Logs/DiagnosticReports/ClassiCube* 1>/dev/null 2>&1; then
+            echo "::error::ClassiCube produced a crash report on launch"
+            cat ~/Library/Logs/DiagnosticReports/ClassiCube* || true
+            exit 1
+          fi
+          echo "No crash report - launch smoke test passed"
