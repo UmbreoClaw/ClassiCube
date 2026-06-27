@@ -87,6 +87,8 @@ texturecache
 logs
 options.txt
 ClassiCube*
+# but do keep the modern iOS Xcode scheme (the rule above is for the built binary)
+!misc/ios_modern/CCIOS-Modern.xcodeproj/xcshareddata/xcschemes/ClassiCube.xcscheme
 screenshots
 fontscache.txt
 
