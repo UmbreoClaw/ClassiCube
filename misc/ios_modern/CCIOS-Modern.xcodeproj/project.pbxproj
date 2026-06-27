@@ -214,6 +214,7 @@
 		9AC67A502F13B87A00E979B4 /* Window_ios.m in Sources */ = {isa = PBXBuildFile; fileRef = 9AC67A4D2F13B87A00E979B4 /* Window_ios.m */; };
 		9AC67A512F13B87A00E979B4 /* interop_ios.m in Sources */ = {isa = PBXBuildFile; fileRef = 9AC67A4E2F13B87A00E979B4 /* interop_ios.m */; };
 		9AC67A522F13B87A00E979B4 /* LBackend_ios.m in Sources */ = {isa = PBXBuildFile; fileRef = 9AC67A4F2F13B87A00E979B4 /* LBackend_ios.m */; };
+		9AFEED010000000000000002 /* PluginAPI.c in Sources */ = {isa = PBXBuildFile; fileRef = 9AFEED010000000000000001 /* PluginAPI.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -297,6 +298,7 @@
 		9A89D4DD27F802F600FF3F80 /* Launcher.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Launcher.c; sourceTree = "<group>"; };
 		9A89D4E327F802F600FF3F80 /* Options.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Options.c; sourceTree = "<group>"; };
 		9A89D4E427F802F600FF3F80 /* Window_SDL2.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Window_SDL2.c; sourceTree = "<group>"; };
+		9AFEED010000000000000001 /* PluginAPI.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = PluginAPI.c; sourceTree = "<group>"; };
 		9A89D4E727F802F600FF3F80 /* Audio.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Audio.c; sourceTree = "<group>"; };
 		9A89D4E827F802F600FF3F80 /* Stream.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Stream.c; sourceTree = "<group>"; };
 		9A89D4E927F802F600FF3F80 /* Vectors.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = Vectors.c; sourceTree = "<group>"; };
@@ -548,6 +550,7 @@
 				9A89D37C27F802F500FF3F80 /* Vorbis.c */,
 				9A89D4EE27F802F600FF3F80 /* Widgets.c */,
 				9A89D4E427F802F600FF3F80 /* Window_SDL2.c */,
+				9AFEED010000000000000001 /* PluginAPI.c */,
 				9A89D48727F802F600FF3F80 /* World.c */,
 			);
 			name = src;
@@ -786,6 +789,7 @@
 				9AC3D0B72E1166AB00A38E91 /* rsa_default_pub.c in Sources */,
 				9AC3D0F02E1166AB00A38E91 /* i31_muladd.c in Sources */,
 				9A89D58E27F802F600FF3F80 /* Window_SDL2.c in Sources */,
+				9AFEED010000000000000002 /* PluginAPI.c in Sources */,
 				9AC3D0E32E1166AB00A38E91 /* ec_all_m31.c in Sources */,
 				9A89D4FF27F802F600FF3F80 /* Gui.c in Sources */,
 				9A89D55027F802F600FF3F80 /* Entity.c in Sources */,
