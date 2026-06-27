@@ -1,0 +1,41 @@
+name: Verify iOS Xcode project
+# Compiles misc/ios_modern/CCIOS-Modern.xcodeproj (unsigned) to verify the
+#  hand-maintained project file stays valid. Needs the iOS 18 SDK (deployment
+#  target is iOS 18), so it runs on macos-15 / Xcode 16 rather than the
+#  macOS-14 / Xcode 15 runner used for the Makefile IPA build.
+on:
+  push:
+    branches:
+      - main
+      - master
+      - claude/classicube-ios-modernize-f71jin
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-ios-xcodeproj
+  cancel-in-progress: true
+
+jobs:
+  build:
+    timeout-minutes: 20
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Show selected Xcode / SDKs
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios || true
+
+      - name: Build CCIOS-Modern.xcodeproj (unsigned)
+        run: |
+          xcodebuild \
+            -project misc/ios_modern/CCIOS-Modern.xcodeproj \
+            -scheme ClassiCube \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
