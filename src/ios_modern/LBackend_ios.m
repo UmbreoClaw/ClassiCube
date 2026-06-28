@@ -415,6 +415,11 @@ void LInput_SetKeyboardType(UITextField* fld, int flags) {
         [fld setKeyboardType:UIKeyboardTypeNumberPad];
     } else if (type == KEYBOARD_TYPE_PASSWORD) {
         [fld setSecureTextEntry:YES];
+        // Mark as an existing-account password. Without this iOS enables
+        //  "Automatic Strong Password", which treats the form as a sign-up and
+        //  takes over the nearby username field - clearing it as you edit the
+        //  password. Declaring it a sign-in password disables that behaviour.
+        [fld setTextContentType:UITextContentTypePassword];
     }
 
     if (flags & KEYBOARD_FLAG_SEND) {
@@ -447,6 +452,12 @@ static UIView* LBackend_InputShow(struct LInput* w) {
     [fld setTextColor: [UIColor blackColor]];
     [fld setDelegate:ui_controller];
     [fld addTarget:ui_controller action:@selector(handleTextChanged:) forControlEvents:UIControlEventEditingChanged];
+
+    // Launcher fields are usernames / passwords / IPs / codes - autocorrect and
+    //  autocapitalisation just get in the way and mangle what's typed
+    [fld setAutocorrectionType:UITextAutocorrectionTypeNo];
+    [fld setAutocapitalizationType:UITextAutocapitalizationTypeNone];
+    [fld setSpellCheckingType:UITextSpellCheckingTypeNo];
 
     LInput_SetKeyboardType(fld, w->inputType);
     LInput_SetPlaceholder(fld,  w->hintText);

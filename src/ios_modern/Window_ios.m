@@ -199,13 +199,19 @@ static cc_bool kb_active;
     CGRect kbFrame    = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue];
     CGRect winFrame   = [view_handle frame];
 
-    cc_bool can_shift = true;
-    // would the active input widget be pushed offscreen?
+    // Shift the view up only as much as needed to lift the focused field above
+    //  the keyboard. Shifting by the full keyboard height (the old behaviour)
+    //  pushes the launcher logo off the top of the screen on larger displays.
+    CGFloat shift = kbFrame.size.height; // fallback when no field is tracked (e.g. in-game chat)
     if (kb_widget) {
-        CGRect curFrame = [kb_widget frame];
-        can_shift = curFrame.origin.y > kbFrame.size.height;
+        // Convert the keyboard frame into view space so this is correct in landscape too
+        CGRect kbInView     = [view_handle convertRect:kbFrame fromView:nil];
+        CGRect fieldFrame   = [kb_widget frame];
+        CGFloat fieldBottom = fieldFrame.origin.y + fieldFrame.size.height + 10; // small margin
+        CGFloat keyboardTop = kbInView.origin.y;
+        shift = fieldBottom > keyboardTop ? (fieldBottom - keyboardTop) : 0;
     }
-    if (can_shift) winFrame.origin.y = -kbFrame.size.height;
+    winFrame.origin.y = -shift;
     Window_SetKBWidget(nil);
 
     [UIView animateWithDuration:interval delay: 0.0 options:curve animations:^{
