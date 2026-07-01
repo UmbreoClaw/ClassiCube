@@ -70,6 +70,41 @@ static void PerspectiveCamera_GetPickedBlock(struct RayTracer* t) {
 	Picking_CalcPickedBlock(&eyePos, &dir, p->ReachDistance, t);
 }
 
+/* Same as above, but casts the ray through an arbitrary screen pixel instead */
+/*  of the centre, so touch input can place/break wherever the finger is.      */
+void Camera_GetPickedBlockAtScreen(int x, int y, struct RayTracer* t) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Entity* e      = &p->Base;
+	Vec3 eyePos = Entity_GetEyePosition(e);
+	Vec3 fwd    = Vec3_GetDirVector(e->Yaw * MATH_DEG2RAD, e->Pitch * MATH_DEG2RAD + Camera.TiltPitch);
+	Vec3 right, up, dir, tmp;
+	float halfFov, tanY, tanX, ndcX, ndcY;
+
+	/* Reconstruct a roll-free camera basis so the pixel offset can be applied. */
+	/*  right = normalise(fwd x worldUp),  up = right x fwd                      */
+	right.x = -fwd.z; right.y = 0.0f; right.z = fwd.x; /* fwd x (0,1,0) */
+	Vec3_Normalise(&right);
+	up.x = right.y * fwd.z - right.z * fwd.y;
+	up.y = right.z * fwd.x - right.x * fwd.z;
+	up.z = right.x * fwd.y - right.y * fwd.x;
+	Vec3_Normalise(&up);
+
+	/* Camera.Fov is the vertical field of view (see PerspectiveCamera_GetProjection) */
+	halfFov = Camera.Fov * MATH_DEG2RAD * 0.5f;
+	tanY    = Math_SinF(halfFov) / Math_CosF(halfFov);
+	tanX    = tanY * ((float)Game.Width / (float)Game.Height);
+
+	ndcX = 2.0f * x / (float)Game.Width  - 1.0f;
+	ndcY = 1.0f - 2.0f * y / (float)Game.Height;
+
+	dir = fwd;
+	Vec3_Mul1(&tmp, &right, ndcX * tanX); Vec3_Add(&dir, &dir, &tmp);
+	Vec3_Mul1(&tmp, &up,    ndcY * tanY); Vec3_Add(&dir, &dir, &tmp);
+	Vec3_Normalise(&dir);
+
+	Picking_CalcPickedBlock(&eyePos, &dir, p->ReachDistance, t);
+}
+
 #define CAMERA_SENSI_FACTOR (0.0002f / 3.0f * MATH_RAD2DEG)
 
 static Vec2 PerspectiveCamera_GetMouseDelta(float delta) {

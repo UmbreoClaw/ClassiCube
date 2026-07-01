@@ -84,6 +84,9 @@ void Camera_CheckFocus(void);
 void Camera_UpdateProjection(void);
 void Camera_SetFov(int fov);
 void Camera_KeyLookUpdate(float delta);
+/* Picks the block under the given screen coordinate (in pixels), rather than */
+/*  the crosshair at screen centre. Used for touch 'interact where you tap'.   */
+void Camera_GetPickedBlockAtScreen(int x, int y, struct RayTracer* t);
 
 CC_END_HEADER
 #endif

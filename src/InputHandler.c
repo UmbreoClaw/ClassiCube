@@ -456,9 +456,16 @@ static void InputHandler_PickBlock(void) {
 #ifdef CC_BUILD_TOUCH
 static cc_bool AnyBlockTouches(void);
 #endif
+#ifdef CC_BUILD_TOUCH
+static int FirstBlockTouch(void);
+#endif
 void InputHandler_Tick(float delta) {
 	cc_bool left, middle, right;
-	
+#ifdef CC_BUILD_TOUCH
+	struct RayTracer touchSel;
+	cc_bool touchRepick = false;
+#endif
+
 	input_deltaAcc += delta;
 	if (Gui.InputGrab) return;
 
@@ -488,6 +495,18 @@ void InputHandler_Tick(float delta) {
 		if (middle) MouseStateUpdate(MOUSE_MIDDLE, true);
 	}
 
+#ifdef CC_BUILD_TOUCH
+	/* Act on the block under the held finger rather than the crosshair */
+	if (Input_TouchMode && Input_PlaceAtFinger && (left || right || middle)) {
+		int idx = FirstBlockTouch();
+		if (idx >= 0) {
+			touchSel     = Game_SelectedPos;
+			touchRepick  = true;
+			Camera_GetPickedBlockAtScreen(Pointers[idx].x, Pointers[idx].y, &Game_SelectedPos);
+		}
+	}
+#endif
+
 	if (left) {
 		InputHandler_DeleteBlock();
 	} else if (right) {
@@ -495,6 +514,10 @@ void InputHandler_Tick(float delta) {
 	} else if (middle) {
 		InputHandler_PickBlock();
 	}
+
+#ifdef CC_BUILD_TOUCH
+	if (touchRepick) Game_SelectedPos = touchSel;
+#endif
 }
 
 
@@ -514,8 +537,19 @@ static cc_bool AnyBlockTouches(void) {
 	return false;
 }
 
+/* Index of the touch currently used for block interaction, or -1 if none */
+static int FirstBlockTouch(void) {
+	int i;
+	for (i = 0; i < Pointers_Count; i++) {
+		if (touches[i].type & TOUCH_TYPE_BLOCKS) return i;
+	}
+	return -1;
+}
+
 /* Quickly tapping should trigger a block place/delete */
 static void CheckBlockTap(int i) {
+	struct RayTracer touchSel;
+	cc_bool touchRepick = false;
 	int btn, pressed;
 	if (Game.Time > touches[i].start + 0.25) return;
 	if (touches[i].type != TOUCH_TYPE_ALL)   return;
@@ -526,15 +560,24 @@ static void CheckBlockTap(int i) {
 		btn = MOUSE_LEFT;
 	} else { return; }
 
+	/* Act on the block the finger tapped rather than the crosshair */
+	if (Input_PlaceAtFinger) {
+		touchSel     = Game_SelectedPos;
+		touchRepick  = true;
+		Camera_GetPickedBlockAtScreen(touches[i].begX, touches[i].begY, &Game_SelectedPos);
+	}
+
 	pressed = input_buttonsDown[btn];
 	MouseStatePress(btn);
 
-	if (btn == MOUSE_LEFT) { 
+	if (btn == MOUSE_LEFT) {
 		InputHandler_DeleteBlock();
-	} else { 
+	} else {
 		InputHandler_PlaceBlock();
 	}
 	if (!pressed) MouseStateRelease(btn);
+
+	if (touchRepick) Game_SelectedPos = touchSel;
 }
 #endif
 

@@ -155,6 +155,9 @@ extern int Pointers_Count;
 extern int Input_TapMode, Input_HoldMode;
 /* Whether touch input is being used. */
 extern cc_bool Input_TouchMode;
+/* Whether touch place/delete acts on the block under the finger (true) */
+/*  rather than the block under the crosshair at screen centre (false). */
+extern cc_bool Input_PlaceAtFinger;
 void Input_SetTouchMode(cc_bool enabled);
 
 void Input_AddTouch(long id,    int x, int y);

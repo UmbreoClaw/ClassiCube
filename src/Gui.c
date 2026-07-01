@@ -136,6 +136,9 @@ static void LoadOptions(void) {
 	Gui.RawTouchScale     = Options_GetFloat(OPT_TOUCH_SCALE,     0.25f, 5.0f, 1.0f);
 
 	Gui.AutoScaleChat     = Options_GetBool(OPT_CHAT_AUTO_SCALE, true);
+#ifdef CC_BUILD_TOUCH
+	Input_PlaceAtFinger   = Options_GetBool(OPT_TOUCH_AT_FINGER, true);
+#endif
 }
 
 static void LoseAllScreens(void) {

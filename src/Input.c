@@ -31,6 +31,7 @@ int Pointers_Count;
 int Input_TapMode  = INPUT_MODE_PLACE;
 int Input_HoldMode = INPUT_MODE_DELETE;
 cc_bool Input_TouchMode;
+cc_bool Input_PlaceAtFinger = true;
 
 static void MouseStatePress(int button);
 static void MouseStateRelease(int button);
