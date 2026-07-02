@@ -1,14 +1,99 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-Branch: `claude/c030-s-gamemode-8fpmns`
+Branch: `survival-test` (renamed from `claude/c030-s-gamemode-8fpmns`)
 
 This file is the living context/handoff for the c0.30-s survival gamemode recreation.
 Goal: a **faithful from-scratch recreation** of Minecraft Classic Survival Test (0.30),
-cross-referenced against the Minecraft Wiki, that does **not** disturb creative mode.
+cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
+(primary ground truth) and the Minecraft Wiki, that does **not** disturb creative mode.
 
 ---
 
-## SESSION LOG — Mob-player push + hotbar slot pop animation (latest)
+## SESSION LOG — Full source audit + faithfulness fixes (latest)
+
+Four parallel audits cross-referenced every survival mechanic against the
+decompiled Java (`Item`, `PrimedTnt`, `Level.explode`, `Mob`, `BasicAI`,
+`BasicAttackAI`, `Creeper`, `Sheep`, `Pig`, `MobSpawner`, `Player`,
+`Inventory`, `SurvivalGameMode`, `BlockUtils`, `Particle`/`SmokeParticle`,
+`Arrow`, `GameOverScreen`). Everything found was fixed across four commits:
+
+### Items (`Item drops: match Item.java spawn, physics and pickup exactly`)
+- Spawn scatter `rand*0.7+0.15` per axis per item; ctor velocity ±0.1/tick
+  horizontal + fixed 0.2/tick vertical; gravity 0.04/tick (16 blocks/s²);
+  the missing *0.98 drag added; invented terminal-velocity clamp, zero-snap
+  and 0.5s pickup delay removed; despawn at age 6000 ticks; double slab
+  drops 2; full inventory leaves the drop on the ground (`AddBlock` returns
+  acceptance); pickup anim lands fully on the player (target y+0.62).
+
+### TNT/explosions (`TNT/explosions: match PrimedTnt, Level.explode...`)
+- **Liquids explode** — `canExplode`'s immunity list is exactly the solid
+  stone/metal-sound blocks; water/lava are destroyed (and flood back in).
+- Genuine blast box `(int)(c-r-1)..(int)(c+r+1)` with +0.5 block-centre
+  distances; entity damage measured from `entity.y = feet + heightOffset`
+  (1.62 humanoids/player, 1.72 sheep/pig, 0.72 spider — added to the mob
+  type table), NOT the bbox centre.
+- Primed TNT lands dead/stops at walls (move() zeroes clipped axes; the
+  `yd*=-0.5` bounce is dead code); fuse post-decrement (smokes 40 ticks,
+  explodes on the 41st); smoke lifetime post-increment (+1 move tick).
+- Skeleton aim reproduces the genuine pitch quirk `-atan2(dy, sqrt(dist3d))`.
+- Debris: `Particles_BreakBlockEffect` burst at detonation (approximation of
+  the genuine 100 TNT / 500 LEAVES gaussian TerrainParticles).
+
+### Player (`Player & mobs: port genuine hurt/invuln/spawn/drop semantics`)
+- **Dual-threshold invulnerability** ported (was a flat 0.5s block-all):
+  20-tick window; fresher than half → only excess over the opening hit lands;
+  staler → full hit + re-arm. Lava/drowning are now genuine per-tick
+  `hurt(null,10)`/`hurt(null,2)` calls shaped by that window — the separate
+  cadence timers were deleted outright.
+- Knockback on entity hits; fall damage `ceil(dist-3)`; lava doesn't cushion
+  falls; air refills instantly on surfacing; red mushroom = ordinary
+  `hurt(null,3)`; `heal()` grants half-window invuln.
+- Hardness: dirt/sand 12, slab/double-slab 20, **brick 0** (absent from
+  `getHardness`'s switch → instant break; looks like an upstream omission but
+  it IS the ground truth); cracks = `(hits-1)/hardness`.
+- **Respawn exists** (previous "c0.30-s has no respawn" note was wrong —
+  `GameOverScreen.java` has the button): clears inventory, health 20,
+  arrows 20, air **20 ticks** (genuine quirk, not 300), teleport to spawn,
+  score kept. Death drops carry each slot's full stack count (one drop per
+  slot, `Item(level, x,y,z, block, count)`), so they can be re-collected.
+- Arrow pickup uses the item pickup's `bb.grow(1,0,1)` reach.
+
+### Mobs (same commit)
+- Water/lava 80% bob-jump applies to EVERY mob (was chase-only).
+- Spawner: min-of-two-uniforms Y bias restored (the `min()` macro was
+  re-evaluating its RNG-call args → uniform, no bias); `level.isFree` bb
+  check before adding (no wall-clipped wide mobs); initial population passes
+  a NULL avoid-position (`prepareLevel` uses null, not the spawn point).
+- Liquid tests use the genuine `bb.grow(0,-0.4,0)` shrunk box (`ST_InLiquid`).
+- Sheep death drops 1-2 WHITE wool (prior "identical to Pig" note was wrong).
+- Creeper self-hurt passes the player as cause → knockback + 200 pts credit;
+  genuine damage-scaled `sin(tickCount)` brightness pulse in `Mob_GetColor`.
+- `MOB_MAX` 32 → 256 (genuine caps: `area*20` live, `volume/800` initial).
+
+### Audit findings NOT acted on (verified false or documented gaps)
+- "Arrows defuse primed TNT" — **false**: `Arrow.tick` hits via
+  `isShootable()` (PrimedTnt doesn't override it) and passes the ARROW as
+  cause, while `PrimedTnt.hurt` only defuses for `cause instanceof Player`.
+  Melee-only defuse is faithful as-is.
+- Mob infighting (`attackTarget = cause` on being hurt, e.g. a skeleton
+  arrow aggroing a zombie onto the skeleton) — NOT ported; our target is a
+  player-only boolean. Known gap, single-target simplification.
+- The 36-slot inventory (vs genuine 9) is a deliberate extension; genuine
+  overflow behaviour (drop on the ground when 9 slots full) applies only
+  after 36 here.
+- Debris particle bursts approximate the gaussian scatter with the engine's
+  block-break burst (public particle API has no arbitrary-velocity spawn).
+
+### Condensing done alongside
+- `Explosion_Damage` helper deduplicates the player/mob blast falloff.
+- `Mob_PushAgainst` helper deduplicates mob-mob/mob-player push.
+- `Mob_SpawnDeathDrops(m, block)` replaces the mushroom-only spawner.
+- Lava/drown cadence timers, pickup-delay field and terminal-velocity clamp
+  deleted (superseded by faithful mechanics above).
+
+---
+
+## SESSION LOG — Mob-player push + hotbar slot pop animation
 
 ### Mob-player push (`SurvivalTest.c` / `Mob_PushApart`)
 
