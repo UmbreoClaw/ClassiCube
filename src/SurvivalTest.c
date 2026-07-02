@@ -23,6 +23,7 @@
 #include "Stream.h"
 #include "Bitmap.h"
 #include "HeldBlockRenderer.h"
+#include "Camera.h"
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
@@ -60,6 +61,7 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 static float st_airTimer;
 static cc_bool st_headInWater; /* whether the player's head is submerged (drives the HUD air bubbles) */
 static float st_invincTimer; /* Mob.invulnerableTime, in seconds (counts down from 1.0) */
+static int   st_deathTicks;  /* Mob.deathTime - ticks since dying, drives the death camera */
 static int   st_lastHealth;  /* Mob.lastHealth - health snapshot when the window opened */
 static float st_fallPeakY;    /* highest Y reached during the current fall */
 static cc_bool st_falling;    /* whether a fall is currently being tracked */
@@ -812,6 +814,15 @@ void SurvivalTest_ApplyHurtTilt(struct Matrix* view, float t) {
 	float degrees, dir, dirRad;
 	struct Matrix rot;
 
+	/* Renderer.hurtEffect: once dead the camera keels sideways - */
+	/*  glRotatef(40 - 8000/(deathTime + partial + 200), 0,0,1), easing from */
+	/*  0 toward ~40 degrees as deathTime grows. */
+	if (SurvivalTest_Enabled && st_isDead) {
+		float roll = 40.0f - 8000.0f / ((float)st_deathTicks + t + 200.0f);
+		Matrix_RotateZ(&rot, roll * MATH_DEG2RAD);
+		Matrix_MulBy(view, &rot);
+	}
+
 	if (!SurvivalTest_GetHurtTilt(t, &degrees, &dir)) return;
 	dirRad = dir * MATH_DEG2RAD;
 
@@ -833,6 +844,20 @@ void SurvivalTest_Heal(int amount) {
 
 /* Player.getScore() */
 int SurvivalTest_Score(void) { return st_score; }
+
+/* Mob.invulnerableTime in ticks, and the health snapshot from when the */
+/*  window opened - the HUD flashes ghost "lastHealth" hearts while fresh. */
+int SurvivalTest_InvulnTicks(void) { return (int)(st_invincTimer * 20.0f); }
+int SurvivalTest_LastHealth(void)  { return st_lastHealth; }
+
+/* Minecraft.setupCamera: while dead the FOV is divided by */
+/*  (1 - 500/(deathTime + 500)) * 2 + 1 - a slow zoom-in from 1x toward 3x. */
+float SurvivalTest_DeathFovZoom(void) {
+	float dt;
+	if (!SurvivalTest_Enabled || !st_isDead) return 1.0f;
+	dt = (float)st_deathTicks;
+	return (1.0f - 500.0f / (dt + 500.0f)) * 2.0f + 1.0f;
+}
 
 /* Player.isUnderWater() - drives whether the HUD draws the air bubble row. */
 cc_bool SurvivalTest_HeadUnderwater(void) { return SurvivalTest_Enabled && st_headInWater; }
@@ -1440,6 +1465,11 @@ struct Mob {
 	cc_bool grazing;
 	int     grazingTime;
 
+	/* Entity.walkDist/nextStep - footstep sound cadence (Entity.move plays a
+	    step sound for EVERY entity with makeStepSound, mobs included) */
+	float   walkDist;
+	int     nextStep;
+
 	/* Zombie/skeleton-only (HumanoidMob.helmet/armor): independent ~20% rolls */
 	/*  made once at spawn time (see SurvivalTest_SpawnMobAt), purely cosmetic - */
 	/*  no damage reduction in the original. Forwarded to e->Anim.HasHelmet/ */
@@ -1688,6 +1718,9 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	if (m->type == MOB_TYPE_SHEEP && m->hasFur &&
 		Entities.CurPlayer && attacker == &Entities.CurPlayer->Base) {
 		m->hasFur = false;
+		/* Sheep.renderModel only draws the fur layer while hasFur - swap to */
+		/*  the engine's furless sheep model so shearing is actually visible. */
+		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); }
 		woolCount = (int)(Random_Float(&st_mobRng) * 3.0f + 1.0f); /* 1-3 */
 
 		coords.x = Math_Floor(e->Position.x);
@@ -1861,10 +1894,17 @@ static void Mob_SheepUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 		} else {
 			if (m->grazingTime++ == 60) {
 				Game_UpdateBlock(x, y, z, BLOCK_DIRT);
-				if (Random_Next(&st_mobRng, 5) == 0) m->hasFur = true;
+				if (Random_Next(&st_mobRng, 5) == 0) {
+					cc_string mdl = String_FromReadonly("sheep");
+					m->hasFur = true;
+					Entity_SetModel(&m->Base, &mdl);
+				}
 			}
 			m->moveStrafe  = 0.0f;
 			m->moveForward = 0.0f;
+			/* SheepAI.update: xRot = 40 + grazingTime/2 % 2 * 10 - the head */
+			/*  nods between 40 and 50 degrees pitch while munching. */
+			e->Pitch = 40.0f + (float)(m->grazingTime / 2 % 2) * 10.0f;
 		}
 	} else {
 		if (overGrass) {
@@ -2216,6 +2256,30 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
 	Mob_UpdateBodyYaw(m, oldPos);
 
+	/* Entity.move: walkDist += horizontal distance * 0.6; each time it passes
+	    the next whole step the block under the feet plays its step sound.
+	    playSound's entity overload only reaches 32 blocks (1024 sq) - the
+	    engine's API is non-positional, so gate by distance to the player. */
+	{
+		float sdx = e->Position.x - oldPos.x, sdz = e->Position.z - oldPos.z;
+		m->walkDist += Math_SqrtF(sdx * sdx + sdz * sdz) * 0.6f;
+		if (m->walkDist > (float)m->nextStep) {
+			struct LocalPlayer* sp = Entities.CurPlayer;
+			int bx = Math_Floor(e->Position.x);
+			int by = Math_Floor(e->Position.y - 0.2f);
+			int bz = Math_Floor(e->Position.z);
+			BlockID under = World_Contains(bx, by, bz) ? World_GetBlock(bx, by, bz) : BLOCK_AIR;
+
+			m->nextStep++;
+			if (under != BLOCK_AIR && sp) {
+				sdx = e->Position.x - sp->Base.Position.x;
+				sdz = e->Position.z - sp->Base.Position.z;
+				if (sdx * sdx + sdz * sdz < 1024.0f)
+					Audio_PlayStepSound(Blocks.StepSounds[under]);
+			}
+		}
+	}
+
 	/* Fall damage (Mob.causeFallDamage) - same peak-tracking approach as the */
 	/*  player's SurvivalTest_UpdateFall, but using e->Position directly since */
 	/*  it's already this tick's fresh, fully-resolved value here (the prev/ */
@@ -2246,12 +2310,22 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	/*  that eases to a stop), via the same RotZ roll Entity_GetTransform */
 	/*  already applies for the paperdoll. Reset to upright while alive in */
 	/*  case a future change ever lets a mob's health recover after dying. */
-	if (m->health <= 0) {
-		float deathT = (float)m->deathTicks;
-		float roll   = deathT * deathT * 2.0f; /* (deathT/20)^2 * 800, simplified */
+	/* Mob.render's roll: while hurtTime counts down, sin((t/10)^4 * PI) * 14 */
+	/*  degrees of hurt-wobble; once dead, (deathTime/20)^2 * 800 keel-over is */
+	/*  ADDED on top, the sum capped at 90. (Genuine rotates this within the */
+	/*  hurtDir yaw frame; this port rolls about the model Z axis directly - */
+	/*  same simplification the death roll always used here.) */
+	{
+		float roll = 0.0f;
+		if (m->hurtTicks > 0) {
+			float ht = (float)m->hurtTicks / 10.0f;
+			roll = Math_SinF(ht * ht * ht * ht * MATH_PI) * 14.0f;
+		}
+		if (m->health <= 0) {
+			float deathT = (float)m->deathTicks;
+			roll += deathT * deathT * 2.0f; /* (deathT/20)^2 * 800, simplified */
+		}
 		e->next.rotZ = min(roll, 90.0f);
-	} else {
-		e->next.rotZ = 0.0f;
 	}
 
 	/* Snapshot this tick's final, fully-resolved state as the interpolation */
@@ -2279,8 +2353,13 @@ static cc_bool Mob_SpawnBlockedBy(BlockID b) {
 /*  position) since mobs aren't real Entities.List[] entries, plus a brief */
 /*  red hit-flash while hurtTicks counts down from 10 (Mob.hurtTime), */
 /*  blended into the lit colour rather than drawn as a separate pass. */
+/* Set while RenderMobs is drawing the additive white hit-flash pass, so the */
+/*  model VTABLE colour below turns flat translucent white for that pass. */
+static cc_bool st_mobFlashPass;
+
 static PackedCol Mob_GetColor(struct Entity* e) {
 	struct Mob* m = (struct Mob*)e; /* Base is the first field of struct Mob */
+	if (st_mobFlashPass) return PackedCol_Make(255, 255, 255, 191);
 	Vec3 eyePos = Entity_GetEyePosition(e);
 	IVec3 pos;
 	PackedCol col;
@@ -2353,6 +2432,7 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->Collisions.StepSize = 0.5f; /* matches LocalPlayer's default step size */
 
 	m->type     = type;
+	m->nextStep = 1; /* Entity.nextStep's field initialiser */
 	m->health   = MOB_MAX_HEALTH;
 	m->airTicks = MOB_AIR_TICKS;
 	m->active   = true;
@@ -2501,6 +2581,19 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 		if (!e->ShouldRender) continue;
 
 		Model_Render(e->Model, e);
+
+		/* Mob.render: while invulnerableTime is within 10 ticks of a fresh */
+		/*  hit, the model is drawn a SECOND time additively in translucent */
+		/*  white (glColor4f(1,1,1,0.75) + SRC_ALPHA/ONE) - the hit flash. */
+		if (m->invincTicks > MOB_INVINC_TICKS - 10 && m->health > 0) {
+			st_mobFlashPass = true;
+			Gfx_SetAlphaBlendingAdditive(true);
+			Gfx_SetDepthWrite(false);
+			Model_Render(e->Model, e);
+			Gfx_SetDepthWrite(true);
+			Gfx_SetAlphaBlendingAdditive(false);
+			st_mobFlashPass = false;
+		}
 	}
 	Gfx_SetAlphaTest(false);
 }
@@ -2595,6 +2688,12 @@ struct ArrowEntity {
 	cc_bool  ownerIsPlayer;
 	cc_int8  ownerMobSlot; /* index into st_mobs when fired by a mob, else -1 */
 	cc_bool  active;
+
+	/* TakeEntityAnim - like item drops, a collected arrow flies to the player */
+	/*  over 3 ticks ((t/3)^2 ease) before being removed. */
+	cc_bool  pickingUp;
+	float    pickupTime;
+	Vec3     pickupFrom;
 };
 static struct ArrowEntity st_arrows[ARROW_MAX];
 static RNGState st_arrowRng;
@@ -2826,7 +2925,11 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 	if (!AABB_Intersects(&arrowBB, &playerBB)) return;
 
 	st_playerArrows++;
-	a->active = false;
+	/* Arrow.playerTouch: arrows++ happens immediately, then a TakeEntityAnim */
+	/*  zips the arrow into the player before the entity is removed. */
+	a->pickingUp  = true;
+	a->pickupTime = 0.0f;
+	a->pickupFrom = a->pos;
 }
 
 static void SurvivalTest_TickArrows(void) {
@@ -2835,6 +2938,23 @@ static void SurvivalTest_TickArrows(void) {
 	for (i = 0; i < ARROW_MAX; i++) {
 		a = &st_arrows[i];
 		if (!a->active) continue;
+
+		if (a->pickingUp) {
+			struct LocalPlayer* p = Entities.CurPlayer;
+			float dist;
+			a->prevPos = a->pos;
+			a->pickupTime += 1.0f / 20.0f;
+			dist = a->pickupTime / DROP_PICKUP_ANIM_SECS;
+			if (dist > 1.0f) dist = 1.0f;
+			dist = dist * dist;
+			if (p) {
+				a->pos.x = a->pickupFrom.x + ( p->Base.Position.x          - a->pickupFrom.x) * dist;
+				a->pos.y = a->pickupFrom.y + ((p->Base.Position.y + 0.62f) - a->pickupFrom.y) * dist;
+				a->pos.z = a->pickupFrom.z + ( p->Base.Position.z          - a->pickupFrom.z) * dist;
+			}
+			if (a->pickupTime >= DROP_PICKUP_ANIM_SECS) a->active = false;
+			continue;
+		}
 
 		Arrow_Tick(a);
 		if (a->active) Arrow_TryPickup(a);
@@ -3128,6 +3248,9 @@ cc_bool SurvivalTest_TryEat(void) {
 	}
 
 	SurvivalTest_ConsumeSelected();
+	/* Minecraft.onMouseClick: a successful useItem resets heldPosition - the */
+	/*  held block dips down and rises back as the eating feedback. */
+	HeldBlockRenderer_ClickAnim(false);
 	return true;
 }
 
@@ -3522,8 +3645,14 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	if (!p) return;
 	e = &p->Base;
 
-	/* While dead the Game Over screen is up and the world is frozen */
-	if (st_isDead) return;
+	/* While dead the Game Over screen is up and the world is frozen, but */
+	/*  deathTime keeps counting - it drives the death camera roll + FOV zoom */
+	/*  (the projection matrix is cached, so poke it while the FOV animates). */
+	if (st_isDead) {
+		st_deathTicks++;
+		Camera_UpdateProjection();
+		return;
+	}
 
 	if (st_invincTimer > 0.0f) {
 		st_invincTimer -= delta;
@@ -3607,6 +3736,8 @@ void SurvivalTest_Respawn(void) {
 	st_airTimer     = 20.0f / 20.0f; /* airSupply = 20 ticks, not 300 */
 	st_playerArrows = ARROW_PLAYER_START;
 	st_isDead       = false;
+	st_deathTicks   = 0;
+	Camera_UpdateProjection(); /* undo the death FOV zoom immediately */
 
 	/* Player.resetPos() - back to the spawn point, facing its stored angles */
 	update.flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH | LU_POS_ABSOLUTE_INSTANT;
@@ -3621,6 +3752,7 @@ static void SurvivalTest_ResetState(void) {
 	int i;
 	st_falling      = false;
 	st_isDead       = false;
+	st_deathTicks   = 0;
 	st_score        = 0;
 	st_invincTimer  = 0.0f;
 	st_lastHealth   = SURVIVAL_MAX_HEALTH;
@@ -3688,6 +3820,11 @@ static void SurvivalTest_Init(void) {
 	Random_SeedFromCurrentTime(&st_mobRng);
 	Random_SeedFromCurrentTime(&st_arrowRng);
 	SurvivalTest_ResetState();
+
+	/* Renderer.updateFog: Survival Test's lava fog is denser than ClassiCube's
+	    stock value (EXP density 2.0 vs 1.8) - override while survival is on. */
+	Blocks.FogDensity[BLOCK_LAVA]       = 2.0f;
+	Blocks.FogDensity[BLOCK_STILL_LAVA] = 2.0f;
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);

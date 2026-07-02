@@ -9,7 +9,62 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Full source audit + faithfulness fixes (latest)
+## SESSION LOG — Polish batch: sounds, HUD flash, combat feedback, death camera (latest)
+
+Implemented the prioritized gaps from the three fidelity surveys (sounds /
+models+HUD / environment). Environment survey found NO gaps - the engine's
+BlockPhysics.c already covers Level.tick's random-tick behaviours (saplings,
+grass, flowers/mushrooms, liquids, sponge) and is on by default.
+
+Key finding from the sound survey: **genuine c0.30 has only FOUR sound
+events** - footsteps, block break, block place, background music. No mob
+voices, no hurt/TNT/explosion/arrow/pickup/splash sounds exist. Do not add
+them.
+
+### Added this session
+- **Mob footsteps** (`Entity.move`): per-mob `walkDist += horizDist*0.6`,
+  step sound of the block under the feet each time it passes `nextStep`,
+  gated to 32 blocks from the player (engine audio is non-positional).
+- **Block place sound**: removed `!Game_ClassicMode` gate in Audio.c -
+  genuine classic plays the placed block's step sound.
+- **Sheared sheep switch to the engine's `sheep_nofur` model** (and back on
+  regrow) - previously fur was visually permanent. Plus the grazing head
+  pitch nod (40-50 degrees alternating, `SheepAI.update`).
+- **Heart-row invulnerability flash** (`HUDScreen.render`): while
+  `invuln/3 % 2 == 1` (fresh half of the window) the heart backgrounds swap
+  to the white-flash sprite and ghost `lastHealth` hearts (U=70/79) draw on
+  top. New accessors `SurvivalTest_InvulnTicks/LastHealth`.
+- **Per-heart jitter** seeded `ticks*312871` (stable within a tick), and
+  hearts/bubbles now pack 8px apart (9px sprites overlap 1px) as genuine.
+- **Mob hurt wobble**: `sin((hurtTime/10)^4*PI)*14` degrees of roll while
+  hurtTime decays; death keel-over ADDS on top, sum capped at 90. (Rolled
+  about model Z, not the genuine hurtDir frame - same simplification the
+  death roll already used.)
+- **Mob white hit flash**: second additive render pass (white, 75% alpha)
+  while `invulnerableTime > duration - 10`, via a `Mob_GetColor` flag +
+  `Gfx_SetAlphaBlendingAdditive`.
+- **Death camera**: `st_deathTicks` keeps counting while dead; camera rolls
+  `40 - 8000/(deathTime+t+200)` degrees and the projection FOV divides by
+  `(1 - 500/(deathTime+500))*2 + 1` (1x->3x zoom) via
+  `SurvivalTest_DeathFovZoom` hooked into `PerspectiveCamera_GetProjection`.
+- **Arrow pickup fly-in**: collected arrows zip to the player over 3 ticks
+  (TakeEntityAnim), like item drops, instead of vanishing.
+- **Eating feedback**: successful mushroom eat triggers the held-block dip
+  (`HeldBlockRenderer_ClickAnim(false)`).
+- **Lava fog density 2.0** (was ClassiCube's stock 1.8) - overridden in
+  the survival init path only.
+
+### Known remaining polish (documented, not yet done)
+- Random per-play volume/pitch on sounds (`vol/(rand*0.4+1)*0.5` etc);
+  sand-breaks-as-gravel and glass-breaks-as-stone dig-sound quirks;
+  music gap 300-1200s (engine default 2-7 min, user-configurable).
+- Sheep grazing head Y-dip (needs model plumbing; pitch nod is done).
+- Underwater/lava ambient light-model tint on entities.
+- Mob hurtDir frame for the wobble; mob infighting (see prior session log).
+
+---
+
+## SESSION LOG — Full source audit + faithfulness fixes
 
 Four parallel audits cross-referenced every survival mechanic against the
 decompiled Java (`Item`, `PrimedTnt`, `Level.explode`, `Mob`, `BasicAI`,

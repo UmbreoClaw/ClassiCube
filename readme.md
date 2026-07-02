@@ -61,25 +61,28 @@ Specific systems ported so far:
 
 | System | Notes |
 |---|---|
-| Hearts / health HUD | 10-heart row, DPI-aware scaling, low-health jitter |
+| Hearts / health HUD | 10-heart row, DPI-aware scaling, per-heart low-health jitter, invulnerability flash with ghost hearts |
 | Hostile mob AI | Zombie, skeleton, creeper, spider, pig, sheep — authentic pathfinding and attack |
 | Mob armour | Zombies and skeletons can spawn wearing armour; geometry matches original 1px inflate |
-| Dropped item physics | Spin, bob, glow, gravity, ground damping, pickup fly-in animation |
+| Dropped item physics | Spin, bob, glow, gravity+drag matching `Item.tick`, pickup fly-in, 5-minute despawn |
 | Hotbar slot pop animation | Slot briefly jumps and scales when a block lands in it |
 | Mob–mob and mob–player push | Equal-and-opposite separation forces matching `BasicAI.tick()` |
 | TNT entity | Fuse timer, smoke particles, glow overlay, chain-reaction with partial fuse |
 | Explosion drops | 30% per-item drop chance before block is cleared, matching `Level.explode()` |
-| Arrows | Fired by player (Tab), fired by skeletons, stick into surfaces, HUD count |
-| Hurt camera tilt | Rolls toward/away from attacker direction, decays over ~5 ticks |
+| Explosions destroy liquids | Only hard rock/metal blocks are blast-immune, exactly as `canExplode` lists |
+| Arrows | Fired by player (Tab), fired by skeletons, stick into surfaces, HUD count, fly-to-player pickup |
+| Hurt camera tilt | Rolls toward/away from attacker direction; death keels the camera sideways with a slow FOV zoom |
+| Player knockback | Mob melee and arrow hits shove the player, per `Mob.knockback` |
 | Fall damage | Mirrors `Player.hurt` fall threshold and damage formula |
-| Lava / drowning damage | Air bubble HUD depletes underwater; lava drains health continuously |
+| Lava / drowning damage | Air bubble HUD depletes underwater; genuine per-tick hurts shaped by the dual-threshold invulnerability window |
 | Score | Awarded on player-credited kills, displayed in HUD corner |
 | Mining with hardness | Blocks require sustained mining; crack overlay tracks progress |
-| Death / game over screen | Permadeath with score display |
+| Death / game over screen | Game Over with score and the genuine **Respawn** button (inventory drops where you died and can be re-collected) |
 | Mushroom eating | Right-click brown mushroom to restore 5 HP |
-| Arm swing | Third-person punch animation on melee/mining |
-| Mob death roll | Bodies roll 90° on death before despawning |
-| Inventory (hotbar only) | Nine-slot hotbar, stack counts, no crafting, faithful to c0.30 |
+| Mob hit feedback | Red flash, white additive hit flash, 14° hurt wobble, death keel-over roll |
+| Sheep | Shear for wool (punch), graze grass with head-down nod, fur regrows and the model visibly switches |
+| Mob footsteps | Every mob plays step sounds while walking, within the genuine 32-block radius |
+| Inventory | Nine-slot hotbar with stack counts (36 slots with the optional Enhanced screen), no crafting |
 
 ### Screenshots
 

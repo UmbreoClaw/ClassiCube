@@ -418,8 +418,10 @@ static void HUDScreen_Update(void* screen, float delta) {
 		s->dirty      = true;
 	}
 	/* Survival Test: the heart bar jitters while at 2 hearts (4 HP) or less, */
-	/*  so keep rebuilding the HUD each frame to animate the shake */
-	if (SurvivalTest_Enabled && SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) {
+	/*  and flashes while the invulnerability window is live - keep rebuilding */
+	/*  the HUD each frame to animate both. */
+	if (SurvivalTest_Enabled &&
+		((SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) || SurvivalTest_InvulnTicks() > 0)) {
 		s->dirty = true;
 	}
 
@@ -481,12 +483,22 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 #define HEART_HALF_U2  (70/256.0f)
 #define HEART_V1  (0/64.0f)
 #define HEART_V2  (9/64.0f)
+/* White-flash heart background: 9x9 at pixel (25,0) */
+#define HEART_FLASH_BG_U1 (25/256.0f)
+#define HEART_FLASH_BG_U2 (34/256.0f)
+/* Ghost (lastHealth) hearts drawn while the invuln window flashes: (70,0)/(79,0) */
+#define HEART_GHOST_FULL_U1 (70/256.0f)
+#define HEART_GHOST_FULL_U2 (79/256.0f)
+#define HEART_GHOST_HALF_U1 (79/256.0f)
+#define HEART_GHOST_HALF_U2 (88/256.0f)
 
 static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
 	struct Texture tex;
 	struct VertexTextured* cur = dst;
-	int fullHearts, i, x, y, heartSize;
-	cc_bool hasHalf;
+	int fullHearts, i, x, y, heartSize, step, invuln;
+	int jitter[10];
+	RNGState jitterRng;
+	cc_bool hasHalf, glow, shaking;
 	float scale;
 
 	if (!SurvivalTest_Enabled) return 0;
@@ -498,27 +510,50 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	/*  keeps the whole survival HUD scaling as one unit. No-op when ScaleY==1. */
 	scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
 	heartSize = (int)(9.0f * scale);
+	step      = (int)(8.0f * scale); /* genuine packs icons 8 units apart (9px sprites overlap 1px) */
+
+	/* HUDScreen.render: glow = invulnerableTime / 3 % 2 == 1 (and only during */
+	/*  the fresher half of the window) - background flashes white and the */
+	/*  pre-hit "lastHealth" ghost hearts are drawn over it. */
+	invuln = SurvivalTest_InvulnTicks();
+	glow   = invuln >= 10 && (invuln / 3) % 2 == 1;
 
 	/* Survival Test draws the heart row flush with the hotbar's left edge */
 	/*  (not centred), so the bar grows rightwards from the first slot. */
 	x = s->hotbar.x;
 	y = s->hotbar.y - heartSize - (int)(2.0f * scale);
 
-	/* At 2 hearts (4 HP) or less the bar shakes, as it did in Survival Test */
-	if (SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) {
-		static RNGState shakeRng;
-		static cc_bool  shakeInit;
-		if (!shakeInit) { Random_SeedFromCurrentTime(&shakeRng); shakeInit = true; }
-		y += Random_Next(&shakeRng, 2);
-	}
+	/* HUDScreen seeds its jitter RNG with ticks * 312871, so the offsets are */
+	/*  stable within a tick but reroll each tick - and each heart jitters */
+	/*  INDEPENDENTLY (only at 2 hearts / 4 HP or less). */
+	Random_Seed(&jitterRng, (int)(Game.Time * 20.0) * 312871);
+	shaking = SurvivalTest_Health > 0 && SurvivalTest_Health <= 4;
 
 	tex.ID = Gui.IconsTex;
 
-	/* Draw 10 empty heart backgrounds */
-	Tex_SetUV(tex, HEART_BG_U1, HEART_V1, HEART_BG_U2, HEART_V2);
+	/* Draw 10 heart backgrounds (white-flash variant while glowing) */
+	if (glow) { Tex_SetUV(tex, HEART_FLASH_BG_U1, HEART_V1, HEART_FLASH_BG_U2, HEART_V2); }
+	else      { Tex_SetUV(tex, HEART_BG_U1,       HEART_V1, HEART_BG_U2,       HEART_V2); }
 	for (i = 0; i < 10; i++) {
-		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
+		jitter[i] = shaking ? Random_Next(&jitterRng, 2) : 0;
+		Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	/* While glowing, the health from before the hit is drawn as ghost hearts */
+	if (glow) {
+		int last = SurvivalTest_LastHealth();
+		fullHearts = last / 2;
+		Tex_SetUV(tex, HEART_GHOST_FULL_U1, HEART_V1, HEART_GHOST_FULL_U2, HEART_V2);
+		for (i = 0; i < fullHearts; i++) {
+			Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
+		if (last & 1) {
+			Tex_SetUV(tex, HEART_GHOST_HALF_U1, HEART_V1, HEART_GHOST_HALF_U2, HEART_V2);
+			Tex_SetRect(tex, x + fullHearts * step, y + jitter[fullHearts], heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
 	}
 
 	/* Draw filled hearts according to current health (2 HP per heart) */
@@ -527,13 +562,13 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 
 	Tex_SetUV(tex, HEART_FULL_U1, HEART_V1, HEART_FULL_U2, HEART_V2);
 	for (i = 0; i < fullHearts; i++) {
-		Tex_SetRect(tex, x + i * heartSize, y, heartSize, heartSize);
+		Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 
 	if (hasHalf) {
 		Tex_SetUV(tex, HEART_HALF_U1, HEART_V1, HEART_HALF_U2, HEART_V2);
-		Tex_SetRect(tex, x + fullHearts * heartSize, y, heartSize, heartSize);
+		Tex_SetRect(tex, x + fullHearts * step, y + jitter[fullHearts], heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 
@@ -647,7 +682,8 @@ static int HUDScreen_BuildBubblesMesh(struct HUDScreen* s, struct VertexTextured
 		} else {
 			Tex_SetUV(tex, BUBBLE_POP_U1,  BUBBLE_V1, BUBBLE_POP_U2,  BUBBLE_V2);
 		}
-		Tex_SetRect(tex, x + i * size, y, size, size);
+		/* Genuine packs icons 8 units apart (9px sprites overlap 1px) */
+		Tex_SetRect(tex, x + i * (int)(8.0f * scale), y, size, size);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
 	}
 	return (int)(cur - dst);

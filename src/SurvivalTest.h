@@ -49,6 +49,13 @@ void SurvivalTest_Heal(int amount);
 void SurvivalTest_Respawn(void);
 /* Gets the player's current score (Player.getScore() - awarded on credited mob kills). */
 int SurvivalTest_Score(void);
+/* Remaining invulnerability window in ticks (Mob.invulnerableTime), and the */
+/*  health snapshot when it opened - drives the HUD's flashing ghost hearts. */
+int SurvivalTest_InvulnTicks(void);
+int SurvivalTest_LastHealth(void);
+/* FOV divisor for the death camera zoom (1.0 while alive). Applied by the */
+/*  perspective camera's projection so the view slowly zooms in while dead. */
+float SurvivalTest_DeathFovZoom(void);
 
 /* Whether the player's head is underwater (Player.isUnderWater()), i.e. whether */
 /*  the HUD should draw the depleting air bubble row. */
