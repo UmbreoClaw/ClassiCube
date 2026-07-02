@@ -6,6 +6,7 @@ name: Survival branch CI (compile check + artifacts)
 on:
   push:
     branches:
+      - 'survival-test'
       - 'claude/**'
   pull_request:
   workflow_dispatch:
