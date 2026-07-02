@@ -97,7 +97,7 @@ static RNGState st_dropRng;
 static RNGState st_mobRng;
 /* Defined later, in the Inventory section - forward declared so the */
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
-static void SurvivalTest_AddBlock(BlockID block);
+static cc_bool SurvivalTest_AddBlock(BlockID block);
 /* Defined later, in the Ticking section - forward declared so the Mobs */
 /*  section below (which ticks before Ticking is reached) can reuse it. */
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
@@ -120,9 +120,14 @@ static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks);
 /*  of putting mined blocks straight into the inventory - the player has */
 /*  to walk over them to collect them. */
 #define DROP_MAX           64
-#define DROP_GRAVITY        20.0f  /* blocks/sec^2 */
-#define DROP_TERMINAL_VEL   10.0f  /* blocks/sec   */
-#define DROP_PICKUP_DELAY    0.5f  /* seconds before a fresh drop can be collected */
+/* Item.tick(): yd -= 0.04F per tick = 0.04 * 20^2 = 16 blocks/sec^2, then all */
+/*  three axes are damped by *0.98F every tick (which is also what limits fall */
+/*  speed - there is no explicit terminal-velocity clamp in the original). */
+#define DROP_GRAVITY        16.0f  /* blocks/sec^2 */
+#define DROP_DRAG            0.98f /* per-tick */
+/* Item.tick(): ++age; if (age >= 6000) remove() - drops despawn after 6000 */
+/*  ticks (5 minutes at 20 TPS) if never collected. */
+#define DROP_LIFETIME_SECS 300.0f
 /* Survival Test items spin about Y at 3 degrees/tick = 60 deg/sec (20 TPS) */
 #define DROP_SPIN_DEG_PER_SEC 60.0f
 /* The spin angle also drives the bob and white-glow pulse, exactly as the */
@@ -143,7 +148,6 @@ struct DropItem {
 	                 /*  instead of at the 20 Hz tick rate. */
 	Vec3 velocity;
 	BlockID block;
-	float pickupDelay;
 	float age;       /* seconds alive - drives spin/bob/glow */
 	float prevAge;   /* age as of the end of the previous tick - RenderDropBlocks blends */
 	                 /*  prevAge->age by the partial-tick t so the spin/bob/glow animation */
@@ -289,11 +293,12 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 	return -1;
 }
 
-/* Spawns one physical item drop at the given world position, with a small */
-/*  random scatter-pop velocity (matches Survival Test's look). */
+/* Spawns one physical item drop at the given world position. Item's ctor pop */
+/*  velocity: xd/zd = rand*0.2-0.1 and yd = 0.2 blocks/tick, i.e. each */
+/*  horizontal axis independently uniform in +/-2 blocks/sec and a fixed 4 */
+/*  blocks/sec vertical hop. */
 static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	struct DropItem* d;
-	float ang, speed;
 	int slot = SurvivalTest_FindFreeDropSlot();
 	if (slot < 0) return; /* drop limit reached - oldest drops simply aren't replaced */
 
@@ -303,26 +308,25 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	d->position = pos;
 	d->prevPos  = pos; /* seed so the first frame doesn't lerp in from (0,0,0) */
 
-	ang   = Random_Float(&st_dropRng) * 2.0f * MATH_PI;
-	speed = 0.6f + Random_Float(&st_dropRng) * 0.6f;
-	d->velocity.x = Math_CosF(ang) * speed;
-	d->velocity.z = Math_SinF(ang) * speed;
-	d->velocity.y = 2.5f + Random_Float(&st_dropRng) * 1.0f;
+	d->velocity.x = (Random_Float(&st_dropRng) * 0.2f - 0.1f) * 20.0f;
+	d->velocity.z = (Random_Float(&st_dropRng) * 0.2f - 0.1f) * 20.0f;
+	d->velocity.y = 0.2f * 20.0f;
 
 	d->block       = block;
-	d->pickupDelay = DROP_PICKUP_DELAY;
 	d->age         = 0.0f;
 	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
 	d->active      = true;
 }
 
-/* Spawns one physical item drop at the centre of the given block coords. */
+/* Spawns one physical item drop inside the given block. BlockUtils.dropItems */
+/*  rolls a fresh rand*0.7 + 0.15 offset (0.15..0.85) per axis per item, so */
+/*  multi-item drops (logs, ores) start scattered rather than stacked. */
 static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	Vec3 pos;
-	pos.x = coords.x + 0.5f;
-	pos.y = coords.y + 0.3f;
-	pos.z = coords.z + 0.5f;
+	pos.x = coords.x + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+	pos.y = coords.y + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+	pos.z = coords.z + Random_Float(&st_dropRng) * 0.7f + 0.15f;
 	SurvivalTest_SpawnDropAt(pos, block);
 }
 
@@ -377,6 +381,7 @@ static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, i
 		break;
 	case BLOCK_DOUBLE_SLAB:
 		*dropBlock = BLOCK_SLAB; /* SlabBlock.getDrop() always returns SLAB.id */
+		*count     = 2;          /* getDropCount(): a double slab drops both halves */
 		break;
 	case BLOCK_BOOKSHELF:
 		/* BookshelfBlock.getDropCount() == 0 - never drops anything */
@@ -446,7 +451,6 @@ static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
 	struct CollisionsComp coll;
 
 	d->velocity.y -= DROP_GRAVITY * delta;
-	if (d->velocity.y < -DROP_TERMINAL_VEL) d->velocity.y = -DROP_TERMINAL_VEL;
 
 	Mem_Set(&scratch, 0, sizeof(scratch));
 	scratch.Position = d->position;
@@ -470,17 +474,21 @@ static void SurvivalTest_DropPhysics(struct DropItem* d, float delta) {
 	d->velocity.y = scratch.Velocity.y / delta;
 	d->velocity.z = scratch.Velocity.z / delta;
 
+	/* Item.tick() after move(): *0.98 air drag on all three axes, plus *0.7 */
+	/*  extra ground friction while resting. (The original's yd *= -0.5 bounce */
+	/*  is dead code - move() zeroes yd on any vertical clip first, exactly as */
+	/*  Collisions_MoveAndWallSlide does here.) */
+	d->velocity.x *= DROP_DRAG;
+	d->velocity.y *= DROP_DRAG;
+	d->velocity.z *= DROP_DRAG;
 	if (d->onGround) {
 		d->velocity.x *= 0.7f;
 		d->velocity.z *= 0.7f;
-		if (Math_AbsF(d->velocity.x) < 0.01f) d->velocity.x = 0.0f;
-		if (Math_AbsF(d->velocity.z) < 0.01f) d->velocity.z = 0.0f;
 	}
 }
 
 static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	struct AABB pbb, ibb;
-	if (d->pickupDelay > 0.0f) return;
 
 	/* Player.tick(): entities = level.findEntities(this, this.bb.grow(1, 0, 1)) - an */
 	/*  AABB overlap test against the player's own bounding box widened a full block */
@@ -497,10 +505,11 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	ibb.Min.z = d->position.z - DROP_ITEM_HALF; ibb.Max.z = d->position.z + DROP_ITEM_HALF;
 	if (!AABB_Intersects(&pbb, &ibb)) return;
 
-	SurvivalTest_AddBlock(d->block);
-	/* Item.playerTouch(): addResource() happens immediately, but the item */
-	/*  entity itself isn't removed until the TakeEntityAnim finishes - start */
-	/*  the fly-to-player animation instead of vanishing right away. */
+	/* Item.playerTouch(): only collected if addResource() accepts it - with a */
+	/*  full inventory the drop simply stays on the ground. On success the item */
+	/*  entity isn't removed until the TakeEntityAnim finishes - start the */
+	/*  fly-to-player animation instead of vanishing right away. */
+	if (!SurvivalTest_AddBlock(d->block)) return;
 	d->pickingUp  = true;
 	d->pickupTime = 0.0f;
 	d->pickupFrom = d->position;
@@ -521,26 +530,23 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 
 		if (d->pickingUp) {
 			/* TakeEntityAnim.tick(): distance = (time/3)^2, eased towards the */
-			/*  player's current position every tick, removed once time >= 3. */
+			/*  player every tick (Y target is player.y - 1 = ~0.62 above the */
+			/*  feet), landing fully on the player before removal at time 3. */
 			d->pickupTime += delta;
-			if (d->pickupTime >= DROP_PICKUP_ANIM_SECS) { d->active = false; continue; }
-
 			distance = d->pickupTime / DROP_PICKUP_ANIM_SECS;
+			if (distance > 1.0f) distance = 1.0f;
 			distance = distance * distance;
-			d->position.x = d->pickupFrom.x + (pe->Position.x - d->pickupFrom.x) * distance;
-			d->position.y = d->pickupFrom.y + (pe->Position.y - d->pickupFrom.y) * distance;
-			d->position.z = d->pickupFrom.z + (pe->Position.z - d->pickupFrom.z) * distance;
+			d->position.x = d->pickupFrom.x + ( pe->Position.x          - d->pickupFrom.x) * distance;
+			d->position.y = d->pickupFrom.y + ((pe->Position.y + 0.62f) - d->pickupFrom.y) * distance;
+			d->position.z = d->pickupFrom.z + ( pe->Position.z          - d->pickupFrom.z) * distance;
+			if (d->pickupTime >= DROP_PICKUP_ANIM_SECS) d->active = false;
 			continue;
 		}
 
 		d->age += delta;
+		if (d->age >= DROP_LIFETIME_SECS) { d->active = false; continue; }
 		SurvivalTest_DropPhysics(d, delta);
-
-		if (d->pickupDelay > 0.0f) {
-			d->pickupDelay -= delta;
-		} else {
-			SurvivalTest_DropTryPickup(d, pe);
-		}
+		SurvivalTest_DropTryPickup(d, pe);
 	}
 }
 
@@ -799,12 +805,15 @@ int SurvivalTest_AirSupply(void) { return (int)(st_airTimer / AIR_SUPPLY_SECS * 
 /*  (both derive from the same original explosion code). */
 #define EXPLOSION_RADIUS 4
 
-/* Mirrors BlockPhysics.c's private BlocksTNT immunity check (liquids and */
-/*  metal/stone-sounding solid blocks survive blasts) - duplicated here since */
-/*  that function isn't exposed outside BlockPhysics.c. */
+/* Level.explode's canExplode check: only the hard rock/metal blocks (stone, */
+/*  cobblestone, bedrock, the three ores, gold/iron blocks, both slabs, brick, */
+/*  mossy cobblestone, obsidian) survive a blast. That is exactly the set of */
+/*  solid blocks with stone or metal dig sounds - and notably liquids are NOT */
+/*  in it: TNT genuinely blows water and lava away in c0.30 (neighbouring */
+/*  liquid then floods back in through normal physics). */
 static cc_bool SurvivalTest_ExplosionImmune(BlockID b) {
-	return (b >= BLOCK_WATER && b <= BLOCK_STILL_LAVA) ||
-		(Blocks.ExtendedCollide[b] == COLLIDE_SOLID && (Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE));
+	return Blocks.ExtendedCollide[b] == COLLIDE_SOLID &&
+		(Blocks.DigSounds[b] == SOUND_METAL || Blocks.DigSounds[b] == SOUND_STONE);
 }
 
 /* level.explode(attacker, x, y, z, radius) - destroys a sphere of blocks and */
@@ -1664,15 +1673,20 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	}
 }
 
+/* Level.explode's entity damage: (int)((1 - dist/radius)*15 + 1) - 16 HP */
+/*  point-blank tapering to 1 HP at the rim, 0 beyond. Distance is measured to */
+/*  the entity's vertical centre (Position.y + Size.y/2), matching genuine */
+/*  Entity.distanceTo (Entity.y is the bbox centre, CC's Position.y the feet). */
+static int Explosion_Damage(struct Entity* e, Vec3 center, float inv) {
+	float dx =  e->Position.x                    - center.x;
+	float dy = (e->Position.y + e->Size.y * 0.5f) - center.y;
+	float dz =  e->Position.z                    - center.z;
+	float dist = Math_SqrtF(dx * dx + dy * dy + dz * dz) * inv;
+	return dist <= 1.0f ? (int)((1.0f - dist) * 15.0f + 1.0f) : 0;
+}
+
 /* level.explode(attacker, x, y, z, radius) - destroys a sphere of blocks */
-/*  around center, then damages every entity (player + mobs) whose centre is */
-/*  within the blast, using the genuine falloff (int)((1 - dist/radius)*15 + 1): */
-/*  16 HP point-blank, tapering to 1 HP at the rim, 0 beyond. Recovered from */
-/*  the decompiled Level.explode - the earlier note that the curve was */
-/*  unrecoverable was wrong, it's the same (1-d)*15+1 the original always used, */
-/*  and it hits mobs too, not just the player. Distance is measured to each */
-/*  entity's vertical centre (Position.y + Size.y/2), matching Entity.distanceTo */
-/*  (genuine Entity.y is the bbox centre, CC's Position.y is the feet). Used by */
+/*  around center, then damages every entity (player + mobs) in range. Used by */
 /*  both TNT (PrimedTnt's expiry) and the creeper's death blast. */
 /* Explosion kills never credit the player's score: attacker is null for TNT */
 /*  and the creeper itself for a creeper blast, and awardKillScore only fires */
@@ -1682,20 +1696,25 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 static void SurvivalTest_Explode(Vec3 center, int radius) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	struct Mob* m;
-	int x = Math_Floor(center.x);
-	int y = Math_Floor(center.y);
-	int z = Math_Floor(center.z);
-	int dx, dy, dz, xx, yy, zz, i;
+	/* Level.explode's exact box: (int)(c - r - 1) to (int)(c + r + 1), each */
+	/*  block tested by the distance from its centre (+0.5) to the blast point, */
+	/*  strictly inside r. */
+	int x0 = (int)(center.x - radius - 1.0f), x1 = (int)(center.x + radius + 1.0f);
+	int y0 = (int)(center.y - radius - 1.0f), y1 = (int)(center.y + radius + 1.0f);
+	int z0 = (int)(center.z - radius - 1.0f), z1 = (int)(center.z + radius + 1.0f);
+	int xx, yy, zz, i, dmg;
+	float fx, fy, fz;
 	BlockID block;
 	IVec3 coords;
-	Vec3 diff;
-	float dist, inv = 1.0f / (float)radius;
+	float inv = 1.0f / (float)radius;
 
-	for (dy = -radius; dy <= radius; dy++) {
-	for (dz = -radius; dz <= radius; dz++) {
-	for (dx = -radius; dx <= radius; dx++) {
-		if (dx * dx + dy * dy + dz * dz > radius * radius) continue;
-		xx = x + dx; yy = y + dy; zz = z + dz;
+	for (yy = y0; yy < y1; yy++) {
+	for (zz = z0; zz < z1; zz++) {
+	for (xx = x0; xx < x1; xx++) {
+		fx = xx + 0.5f - center.x;
+		fy = yy + 0.5f - center.y;
+		fz = zz + 0.5f - center.z;
+		if (fx * fx + fy * fy + fz * fz >= radius * radius) continue;
 		if (!World_Contains(xx, yy, zz)) continue;
 
 		block = World_GetBlock(xx, yy, zz);
@@ -1716,23 +1735,13 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 		}
 	}}}
 
-	if (p) {
-		diff.x =  p->Base.Position.x                          - center.x;
-		diff.y = (p->Base.Position.y + p->Base.Size.y * 0.5f) - center.y;
-		diff.z =  p->Base.Position.z                          - center.z;
-		dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) * inv;
-		if (dist <= 1.0f) SurvivalTest_Hurt((int)((1.0f - dist) * 15.0f + 1.0f));
-	}
+	if (p && (dmg = Explosion_Damage(&p->Base, center, inv))) SurvivalTest_Hurt(dmg);
 
 	for (i = 0; i < MOB_MAX; i++) {
 		m = &st_mobs[i];
 		if (!m->active || m->health <= 0) continue;
 
-		diff.x =  m->Base.Position.x                          - center.x;
-		diff.y = (m->Base.Position.y + m->Base.Size.y * 0.5f) - center.y;
-		diff.z =  m->Base.Position.z                          - center.z;
-		dist   = Math_SqrtF(diff.x * diff.x + diff.y * diff.y + diff.z * diff.z) * inv;
-		if (dist <= 1.0f) Mob_Hurt(m, NULL, (int)((1.0f - dist) * 15.0f + 1.0f), false);
+		if ((dmg = Explosion_Damage(&m->Base, center, inv))) Mob_Hurt(m, NULL, dmg, false);
 	}
 }
 
@@ -1967,57 +1976,45 @@ static void Mob_UpdateBodyYaw(struct Mob* m, Vec3 oldPos) {
 /*  runs from BOTH mobs' ticks each pair is processed twice per tick - faithful */
 /*  to the original, which has the same double-processing. Debug frozen (noAI) */
 /*  mobs are skipped on both sides so they stay put for inspection. */
-static void Mob_PushApart(struct Mob* m) {
+/* Entity.push(Entity): if `other` overlaps m's grown box, shove the pair */
+/*  apart with equal-and-opposite XZ impulses of 0.05/dist^2 (normalise /dist, */
+/*  /dist again, *0.05), skipping near-coincident pairs (sqXZDiff >= 0.01). */
+static void Mob_PushAgainst(struct Mob* m, const struct AABB* selfBB, struct Entity* other) {
 	struct Entity* e = &m->Base;
-	struct AABB selfBB, otherBB;
-	struct Mob* n;
-	struct LocalPlayer* p;
+	struct AABB otherBB;
 	float dx, dz, sq, fx, fz;
+
+	Entity_GetBounds(other, &otherBB);
+	if (!AABB_Intersects(selfBB, &otherBB)) return;
+
+	dx = e->Position.x - other->Position.x;
+	dz = e->Position.z - other->Position.z;
+	sq = dx * dx + dz * dz;
+	if (sq < 0.01f) return;
+
+	fx = dx / sq * 0.05f;
+	fz = dz / sq * 0.05f;
+	other->Velocity.x -= fx; other->Velocity.z -= fz;
+	e->Velocity.x     += fx; e->Velocity.z     += fz;
+}
+
+/* BasicAI.tick: level.findEntities(mob, bb.grow(0.2, 0, 0.2)) then push each */
+/*  result - which includes both other mobs AND the player (isPushable=true, */
+/*  pushthrough=0 for all, so the same force applies to everyone). */
+static void Mob_PushApart(struct Mob* m) {
+	struct AABB selfBB;
 	int i;
 	if (m->noAI) return;
 
-	Entity_GetBounds(e, &selfBB);
+	Entity_GetBounds(&m->Base, &selfBB);
 	selfBB.Min.x -= 0.2f; selfBB.Max.x += 0.2f;
 	selfBB.Min.z -= 0.2f; selfBB.Max.z += 0.2f;
 
-	/* mob-mob push: BasicAI.tick's findEntities loop over other mobs */
 	for (i = 0; i < MOB_MAX; i++) {
-		n = &st_mobs[i];
-		if (n == m || !n->active || n->noAI) continue;
-
-		Entity_GetBounds(&n->Base, &otherBB);
-		if (!AABB_Intersects(&selfBB, &otherBB)) continue;
-
-		dx = e->Position.x - n->Base.Position.x;
-		dz = e->Position.z - n->Base.Position.z;
-		sq = dx * dx + dz * dz;
-		if (sq < 0.01f) continue; /* Entity.push's sqXZDiff >= 0.01 guard */
-
-		/* normalise (/dist) then /dist again then *0.05 == *0.05/dist^2 == /sq*0.05 */
-		fx = dx / sq * 0.05f;
-		fz = dz / sq * 0.05f;
-		/* this(=n).push(-f); entity(=m).push(+f) - shove the pair apart. */
-		n->Base.Velocity.x -= fx; n->Base.Velocity.z -= fz;
-		e->Velocity.x      += fx; e->Velocity.z      += fz;
+		if (&st_mobs[i] == m || !st_mobs[i].active || st_mobs[i].noAI) continue;
+		Mob_PushAgainst(m, &selfBB, &st_mobs[i].Base);
 	}
-
-	/* mob-player push: BasicAI.tick's findEntities also finds the player entity
-	   (player.isPushable() returns true; pushthrough=0 so factor=1 same as mobs). */
-	p = Entities.CurPlayer;
-	if (p) {
-		Entity_GetBounds(&p->Base, &otherBB);
-		if (AABB_Intersects(&selfBB, &otherBB)) {
-			dx = e->Position.x - p->Base.Position.x;
-			dz = e->Position.z - p->Base.Position.z;
-			sq = dx * dx + dz * dz;
-			if (sq >= 0.01f) {
-				fx = dx / sq * 0.05f;
-				fz = dz / sq * 0.05f;
-				e->Velocity.x      += fx; e->Velocity.z      += fz;
-				p->Base.Velocity.x -= fx; p->Base.Velocity.z -= fz;
-			}
-		}
-	}
+	if (Entities.CurPlayer) Mob_PushAgainst(m, &selfBB, &Entities.CurPlayer->Base);
 }
 
 static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
@@ -2962,9 +2959,11 @@ void SurvivalTest_SwapSlots(int a, int b) {
 
 /* Adds one of the given block: stacks onto an existing matching slot if */
 /*  possible, otherwise fills the first empty slot (hotbar slots first). */
-static void SurvivalTest_AddBlock(BlockID block) {
+/* Returns whether it was accepted - Inventory.addResource() returns false on */
+/*  a full inventory, and Item.playerTouch then leaves the drop on the ground. */
+static cc_bool SurvivalTest_AddBlock(BlockID block) {
 	int i;
-	if (block == BLOCK_AIR) return;
+	if (block == BLOCK_AIR) return true;
 
 	/* Prefer topping up an existing, non-full stack of this block */
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
@@ -2973,7 +2972,7 @@ static void SurvivalTest_AddBlock(BlockID block) {
 			/* Inventory.addResource(): popTime[slot] = 5 triggers the pop animation */
 			if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
 			SurvivalTest_SyncHotbar();
-			return;
+			return true;
 		}
 	}
 	/* Otherwise place it into the first empty slot */
@@ -2983,9 +2982,9 @@ static void SurvivalTest_AddBlock(BlockID block) {
 		st_inv[i].count = 1;
 		if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
 		SurvivalTest_SyncHotbar();
-		return;
+		return true;
 	}
-	/* Inventory full - drop is discarded */
+	return false;
 }
 
 /* Consumes one block from the currently selected hotbar slot. */
