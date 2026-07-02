@@ -43,6 +43,10 @@ void SurvivalTest_Hurt(int damage);
 void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos);
 /* Restores health to the player (capped at SURVIVAL_MAX_HEALTH). */
 void SurvivalTest_Heal(int amount);
+/* GameOverScreen's Respawn: clears the inventory, restores health/arrows */
+/*  (air only to 20 ticks - a genuine quirk), teleports back to the spawn */
+/*  point and unfreezes the world. The score is kept. */
+void SurvivalTest_Respawn(void);
 /* Gets the player's current score (Player.getScore() - awarded on credited mob kills). */
 int SurvivalTest_Score(void);
 

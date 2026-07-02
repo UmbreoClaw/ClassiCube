@@ -2767,23 +2767,25 @@ void SurvivalInvScreen_Show(void) {
 /*########################################################################################################################*
 *------------------------------------------------------GameOverScreen-----------------------------------------------------*
 *#########################################################################################################################*/
-/* Shown when the player dies in Survival Test. Faithful to Classic 0.30-s: */
-/* there is no respawn - the world is over, and the only way forward is to  */
-/* generate a fresh level (or quit the game).                               */
+/* Shown when the player dies in Survival Test. The genuine c0.30 screen has */
+/*  a Respawn button (clear inventory, restore health, back to spawn - see */
+/*  SurvivalTest_Respawn) alongside its exit option; "Generate new level" and */
+/*  "Quit game" fill the main-menu role in this port. */
 static struct GameOverScreen {
 	Screen_Body
 	struct FontDesc titleFont, messageFont, btnFont;
 	struct TextWidget title, message;
-	struct ButtonWidget gen, quit;
-	struct Widget* __widgets[4];
+	struct ButtonWidget respawn, gen, quit;
+	struct Widget* __widgets[5];
 } GameOverScreen CC_BIG_VAR;
 
 static void GameOverScreen_Layout(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
-	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -60);
-	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -20);
-	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  40);
-	Widget_SetLocation(&s->quit,    ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  90);
+	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -70);
+	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -30);
+	Widget_SetLocation(&s->respawn, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  20);
+	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  70);
+	Widget_SetLocation(&s->quit,    ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 120);
 }
 
 static void GameOverScreen_ContextLost(void* screen) {
@@ -2812,8 +2814,14 @@ static void GameOverScreen_ContextRecreated(void* screen) {
 	String_Format1(&msg, "Score: &e%i", &score);
 	TextWidget_Set(&s->message, &msg, &s->messageFont);
 
-	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
-	ButtonWidget_SetConst(&s->quit, "Quit game",             &s->btnFont);
+	ButtonWidget_SetConst(&s->respawn, "Respawn",               &s->btnFont);
+	ButtonWidget_SetConst(&s->gen,     "Generate new level...", &s->btnFont);
+	ButtonWidget_SetConst(&s->quit,    "Quit game",             &s->btnFont);
+}
+
+static void GameOverScreen_OnRespawn(void* screen, void* w) {
+	Gui_Remove((struct Screen*)&GameOverScreen);
+	SurvivalTest_Respawn();
 }
 
 static void GameOverScreen_OnGen(void* screen, void* w) {
@@ -2833,8 +2841,9 @@ static void GameOverScreen_Init(void* screen) {
 
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->message);
-	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
-	ButtonWidget_Add(s, &s->quit, 400, GameOverScreen_OnQuit);
+	ButtonWidget_Add(s, &s->respawn, 400, GameOverScreen_OnRespawn);
+	ButtonWidget_Add(s, &s->gen,     400, GameOverScreen_OnGen);
+	ButtonWidget_Add(s, &s->quit,    400, GameOverScreen_OnQuit);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }

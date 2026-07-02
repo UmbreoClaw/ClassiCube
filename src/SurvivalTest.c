@@ -36,19 +36,16 @@ cc_bool SurvivalTest_Enabled;
 cc_bool SurvivalTest_Enhanced;
 int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
-/* How long (seconds) the player is invincible after taking damage */
-#define INVINCIBILITY_SECS 0.5f
-/* Lava damages this often (seconds) while the player is touching it. */
-/*  Mob.tick() calls hurt(null,10) every tick in lava, but the 20-tick (1s) */
-/*  invulnerability window only lets a real hit land once it has decayed past */
-/*  its halfway point (~10 ticks), so a fresh 10-damage hit effectively lands */
-/*  every ~0.5s - i.e. 20 HP/sec, draining a full 20-HP player in one second. */
-#define LAVA_DMG_INTERVAL  0.5f
-/* Damage dealt per lava damage tick (Mob.tick: hurt(null, 10)) */
+/* Mob.invulnerableDuration: 20 ticks (1s). hurt() uses a dual threshold - */
+/*  while the window is fresher than its half-point only the excess over the */
+/*  hit that opened it lands; past the half-point any hit lands in full and */
+/*  re-arms the window. This is what turns Mob.tick's every-tick hurt(null,10) */
+/*  lava / hurt(null,2) drowning calls into their effective once-per-0.5s */
+/*  cadence - no separate damage timers exist in the original. */
+#define INVULN_DURATION_SECS 1.0f
+/* Damage dealt per lava tick (Mob.tick: hurt(null, 10)) */
 #define LAVA_DAMAGE        10
-/* Drowning damages this often (seconds) once air is depleted */
-#define DROWN_DMG_INTERVAL 1.0f
-/* Damage dealt per drowning tick (2 HP/sec, matching Survival Test) */
+/* Damage dealt per drowning tick (Mob.tick: hurt(null, 2)) */
 #define DROWN_DAMAGE       2
 /* Starting air supply in seconds (15s before drowning, as in Survival Test) */
 #define AIR_SUPPLY_SECS    15.0f
@@ -62,9 +59,8 @@ int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
 static float st_airTimer;
 static cc_bool st_headInWater; /* whether the player's head is submerged (drives the HUD air bubbles) */
-static float st_invincTimer;
-static float st_lavaTimer;
-static float st_drownTimer;
+static float st_invincTimer; /* Mob.invulnerableTime, in seconds (counts down from 1.0) */
+static int   st_lastHealth;  /* Mob.lastHealth - health snapshot when the window opened */
 static float st_fallPeakY;    /* highest Y reached during the current fall */
 static cc_bool st_falling;    /* whether a fall is currently being tracked */
 static cc_bool st_isDead;
@@ -112,6 +108,20 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks);
 #define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
 
+/* Entity.isInWater()/isInLava(): the liquid test box is bb.grow(0, -0.4, 0) - */
+/*  shrunk 0.4 blocks at both top and bottom - so sliver contact at the feet */
+/*  or head doesn't count as being in the liquid. Used by the player's lava/ */
+/*  fall-cushion checks and the mobs' swim logic (Entity_TouchesAnyWater/Lava */
+/*  test the FULL-height box, which is subtly different). */
+static cc_bool ST_IsLavaBlock(BlockID b)  { return Blocks.ExtendedCollide[b] == COLLIDE_LAVA; }
+static cc_bool ST_IsWaterBlock(BlockID b) { return Blocks.ExtendedCollide[b] == COLLIDE_WATER; }
+static cc_bool ST_InLiquid(struct Entity* e, cc_bool lava) {
+	struct AABB bb;
+	Entity_GetBounds(e, &bb);
+	bb.Min.y += 0.4f; bb.Max.y -= 0.4f;
+	return Entity_TouchesAny(&bb, lava ? ST_IsLavaBlock : ST_IsWaterBlock);
+}
+
 
 /*########################################################################################################################*
 *------------------------------------------------------Dropped items-------------------------------------------------------*
@@ -148,6 +158,8 @@ struct DropItem {
 	                 /*  instead of at the 20 Hz tick rate. */
 	Vec3 velocity;
 	BlockID block;
+	int  count;      /* Item.count - how many blocks this one drop entity carries */
+	                 /*  (death scatters one drop per slot with its full stack) */
 	float age;       /* seconds alive - drives spin/bob/glow */
 	float prevAge;   /* age as of the end of the previous tick - RenderDropBlocks blends */
 	                 /*  prevAge->age by the partial-tick t so the spin/bob/glow animation */
@@ -297,7 +309,7 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 /*  velocity: xd/zd = rand*0.2-0.1 and yd = 0.2 blocks/tick, i.e. each */
 /*  horizontal axis independently uniform in +/-2 blocks/sec and a fixed 4 */
 /*  blocks/sec vertical hop. */
-static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
+static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block, int count) {
 	struct DropItem* d;
 	int slot = SurvivalTest_FindFreeDropSlot();
 	if (slot < 0) return; /* drop limit reached - oldest drops simply aren't replaced */
@@ -313,6 +325,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block) {
 	d->velocity.y = 0.2f * 20.0f;
 
 	d->block       = block;
+	d->count       = max(count, 1);
 	d->age         = 0.0f;
 	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
@@ -327,7 +340,7 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
 	pos.x = coords.x + Random_Float(&st_dropRng) * 0.7f + 0.15f;
 	pos.y = coords.y + Random_Float(&st_dropRng) * 0.7f + 0.15f;
 	pos.z = coords.z + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-	SurvivalTest_SpawnDropAt(pos, block);
+	SurvivalTest_SpawnDropAt(pos, block, 1);
 }
 
 /* BlockUtils.getDrop()/getDropCount(): decides what a block *would* drop and */
@@ -506,10 +519,14 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	if (!AABB_Intersects(&pbb, &ibb)) return;
 
 	/* Item.playerTouch(): only collected if addResource() accepts it - with a */
-	/*  full inventory the drop simply stays on the ground. On success the item */
-	/*  entity isn't removed until the TakeEntityAnim finishes - start the */
-	/*  fly-to-player animation instead of vanishing right away. */
-	if (!SurvivalTest_AddBlock(d->block)) return;
+	/*  full inventory the drop simply stays on the ground. A multi-block drop */
+	/*  (a death-scattered stack) transfers as many blocks as fit and keeps the */
+	/*  remainder. On success the item entity isn't removed until the */
+	/*  TakeEntityAnim finishes - start the fly-to-player animation instead of */
+	/*  vanishing right away. */
+	while (d->count > 0 && SurvivalTest_AddBlock(d->block)) d->count--;
+	if (d->count > 0) return;
+
 	d->pickingUp  = true;
 	d->pickupTime = 0.0f;
 	d->pickupFrom = d->position;
@@ -703,10 +720,8 @@ static float SurvivalTest_CalcHurtDir(const Vec3* attackerPos) {
 }
 
 /* Player.die(): scatters one item drop per non-empty inventory slot at the */
-/*  player's position. c0.30-s has no respawn (death ends the world), so these */
-/*  are never re-collected - they're spawned for parity with the genuine death */
-/*  behaviour. Java spawns one Item entity per slot carrying its full count; */
-/*  our drops are single blocks, so a slot becomes one tumbling block here. */
+/*  player's position, each carrying the slot's full stack count - so a */
+/*  respawned player can walk back and re-collect their whole inventory. */
 static void SurvivalTest_DropInventory(void) {
 	struct Entity* p = &Entities.CurPlayer->Base;
 	Vec3 pos = p->Position;
@@ -715,39 +730,62 @@ static void SurvivalTest_DropInventory(void) {
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		if (st_inv[i].block == BLOCK_AIR || st_inv[i].count <= 0) continue;
-		SurvivalTest_SpawnDropAt(pos, st_inv[i].block);
+		SurvivalTest_SpawnDropAt(pos, st_inv[i].block, st_inv[i].count);
 	}
 }
 
-/* Applies damage. When ignoreInvinc is set the invincibility window is */
-/*  bypassed and not refreshed (used for self-inflicted poison damage). */
-/*  attackerPos is NULL for environmental damage (fall/lava/drown/poison/ */
-/*  explosion), matching the original's hurt(null, damage) call sites. */
-static void SurvivalTest_Damage(int damage, cc_bool ignoreInvinc, const Vec3* attackerPos) {
-	if (!SurvivalTest_Enabled) return;
+/* Mob.knockback(cause, ...): halve the current velocity, then shove 0.4 */
+/*  horizontally away from the attacker and 0.4 up (upward capped at 0.4). */
+/*  Player inherits this - mob melee and arrow hits visibly shove the player. */
+static void SurvivalTest_Knockback(struct Entity* e, const Vec3* attackerPos) {
+	float dx = attackerPos->x - e->Position.x;
+	float dz = attackerPos->z - e->Position.z;
+	float dist = Math_SqrtF(dx * dx + dz * dz);
+	if (dist < 0.001f) return;
+
+	e->Velocity.x = e->Velocity.x * 0.5f - dx / dist * 0.4f;
+	e->Velocity.y = e->Velocity.y * 0.5f + 0.4f;
+	e->Velocity.z = e->Velocity.z * 0.5f - dz / dist * 0.4f;
+	if (e->Velocity.y > 0.4f) e->Velocity.y = 0.4f;
+}
+
+/* Mob.hurt(cause, damage), as inherited by Player. Implements the genuine */
+/*  dual-threshold invulnerability: while the 20-tick window is fresher than */
+/*  its half-point, only the excess over the hit that opened it lands (and the */
+/*  window/hurt-flash are NOT re-armed); past the half-point the hit lands in */
+/*  full and re-opens the window. attackerPos is NULL for environmental damage */
+/*  (fall/lava/drown/poison/explosion), matching hurt(null, damage) - which */
+/*  also means no knockback and a random 0/180 hurtDir. */
+static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!SurvivalTest_Enabled || !p) return;
 	if (st_isDead)             return;
 	if (st_godMode)            return; /* debug invincibility - blocks every damage source */
 	if (damage <= 0)           return;
-	if (!ignoreInvinc && st_invincTimer > 0.0f) return;
 
-	SurvivalTest_Health -= damage;
-	if (!ignoreInvinc) st_invincTimer = INVINCIBILITY_SECS;
+	if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) {
+		if (st_lastHealth - damage >= SurvivalTest_Health) return;
+		SurvivalTest_Health = st_lastHealth - damage;
+	} else {
+		st_lastHealth  = SurvivalTest_Health;
+		st_invincTimer = INVULN_DURATION_SECS;
+		SurvivalTest_Health -= damage;
+		st_hurtTicks = HURT_TILT_TICKS;
+	}
 
-	st_hurtTicks = HURT_TILT_TICKS;
-	st_hurtDir   = SurvivalTest_CalcHurtDir(attackerPos);
+	st_hurtDir = SurvivalTest_CalcHurtDir(attackerPos);
+	if (attackerPos) SurvivalTest_Knockback(&p->Base, attackerPos);
 
 	if (SurvivalTest_Health <= 0) {
 		SurvivalTest_Health = 0;
 		st_isDead = true;
 		SurvivalTest_DropInventory();
-		/* Classic 0.30-s had no respawn: death ends the world. The Game */
-		/*  Over screen offers generating a fresh level or quitting. */
 		GameOverScreen_Show();
 	}
 }
 
-void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, false, NULL); }
-void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos) { SurvivalTest_Damage(damage, false, &attackerPos); }
+void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, NULL); }
+void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos) { SurvivalTest_Damage(damage, &attackerPos); }
 
 /* Current hurt camera-tilt roll (Renderer.hurtEffect), eased via sin(t^4*pi) */
 /*  over the HURT_TILT_TICKS window, t being the render partial-tick fraction. */
@@ -789,6 +827,8 @@ void SurvivalTest_Heal(int amount) {
 	SurvivalTest_Health += amount;
 	if (SurvivalTest_Health > SURVIVAL_MAX_HEALTH)
 		SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
+	/* Mob.heal also grants a half invulnerability window (10 ticks) */
+	st_invincTimer = INVULN_DURATION_SECS * 0.5f;
 }
 
 /* Player.getScore() */
@@ -986,7 +1026,7 @@ static cc_bool SurvivalTest_TryDefuseTnt(Vec3 eyePos, Vec3 dir, float reach) {
 
 	tnt = &st_tnt[best];
 	tnt->active = false;
-	SurvivalTest_SpawnDropAt(tnt->pos, BLOCK_TNT);
+	SurvivalTest_SpawnDropAt(tnt->pos, BLOCK_TNT, 1);
 	return true;
 }
 
@@ -1030,6 +1070,7 @@ static void SurvivalTest_TntPhysics(struct TntFuse* tnt) {
 
 static void SurvivalTest_TickTnt(void) {
 	struct TntFuse* tnt;
+	IVec3 coords;
 	int i;
 
 	SurvivalTest_TickTntSmoke();
@@ -1051,6 +1092,15 @@ static void SurvivalTest_TickTnt(void) {
 
 		tnt->active = false;
 		SurvivalTest_Explode(tnt->pos, EXPLOSION_RADIUS);
+
+		/* PrimedTnt.tick: 100 TNT-textured TerrainParticles burst out at */
+		/*  gaussian offsets after the blast. Approximated with the engine's */
+		/*  block-break burst at the detonation point (the gaussian scatter */
+		/*  isn't reachable through the public particle API). */
+		coords.x = Math_Floor(tnt->pos.x);
+		coords.y = Math_Floor(tnt->pos.y);
+		coords.z = Math_Floor(tnt->pos.z);
+		Particles_BreakBlockEffect(coords, BLOCK_TNT, BLOCK_AIR);
 	}
 }
 
@@ -1307,7 +1357,11 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 /*  simulated client-side in a fixed array, the same way dropped items are -  */
 /*  they are NOT real Entities.List[]/NetPlayer entries, just enough of an */
 /*  Entity to reuse the model/animation/collision systems. */
-#define MOB_MAX            32
+/* Genuine spawn caps: the periodic spawner allows area*20 live mobs (320 on */
+/*  a 256x256x64 map) and the initial population is volume/800 spawn attempts */
+/*  of up to 9 mobs each. 256 slots comfortably covers the practical steady- */
+/*  state population (the old cap of 32 silently strangled both). */
+#define MOB_MAX            256
 #define MOB_MAX_HEALTH     20  /* Mob.java's default health - same scale as the player's */
 #define MOB_INVINC_TICKS   20  /* Mob.invulnerableDuration - the *full* window; equal-damage hits */
                                /*  are actually only blocked for half of it (see Mob_Hurt) */
@@ -1506,14 +1560,9 @@ static void Mob_DoJump(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	}
 }
 
-/* Spawns 1-2 brown mushrooms at the mob's position. (int)(rand+rand+1.0) */
+/* Spawns 1-2 of the given block at the mob's position. (int)(rand+rand+1.0) */
 /*  mathematically only ever yields 1 or 2 - never the "1-3" some ports guess. */
-/* Pig.die() and Sheep.die() are byte-for-byte identical in the decompiled */
-/*  source - both drop 1-2 brown mushrooms. Confirmed against the Wiki too */
-/*  ("pigs and sheep would drop mushrooms, which was the only food item at */
-/*  the time") - this isn't a copy-paste bug we're choosing to skip, it's */
-/*  genuine Survival Test behaviour for both mobs. */
-static void Mob_SpawnMushroomDrops(struct Mob* m) {
+static void Mob_SpawnDeathDrops(struct Mob* m, BlockID block) {
 	IVec3 coords;
 	int count = (int)(Random_Float(&st_mobRng) + Random_Float(&st_mobRng) + 1.0f);
 	int i;
@@ -1521,7 +1570,7 @@ static void Mob_SpawnMushroomDrops(struct Mob* m) {
 	coords.x = Math_Floor(m->Base.Position.x);
 	coords.y = Math_Floor(m->Base.Position.y);
 	coords.z = Math_Floor(m->Base.Position.z);
-	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_BROWN_SHROOM); }
+	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, block); }
 }
 
 /* die(Entity) - called the instant health reaches 0 (separate from the mob's */
@@ -1529,10 +1578,12 @@ static void Mob_SpawnMushroomDrops(struct Mob* m) {
 /* playerCredit mirrors `var1 != null` in the decompiled die(Entity var1) - */
 /*  every mob type here awards points on a credited kill (Mob.deathScore for */
 /*  most types, a flat 10 hardcoded in Pig.die()/Sheep.die() for those two - */
-/*  see mobTypeInfo's deathScore column). */
+/*  see mobTypeInfo's deathScore column). Pig.die drops 1-2 brown mushrooms; */
+/*  Sheep.die drops 1-2 white wool (NOT mushrooms - the two differ). */
 static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
 	if (playerCredit) st_score += mobTypeInfo[m->type].deathScore;
-	if (m->type == MOB_TYPE_PIG || m->type == MOB_TYPE_SHEEP) Mob_SpawnMushroomDrops(m);
+	if (m->type == MOB_TYPE_PIG)   Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
+	if (m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_WHITE);
 }
 
 /* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
@@ -1597,8 +1648,15 @@ static void Mob_SkeletonDeathBurst(struct Mob* m) {
 static void Mob_CreeperExplode(struct Mob* m) {
 	/* level.explode(this, x, y, z, 4) - genuine mob.y = feet + heightOffset */
 	Vec3 center = m->Base.Position;
+	IVec3 coords;
 	center.y += mobTypeInfo[m->type].heightOff;
 	SurvivalTest_Explode(center, EXPLOSION_RADIUS);
+
+	/* CreeperAI.beforeRemove: 500 LEAVES-textured TerrainParticles burst out */
+	/*  at gaussian offsets. Approximated with the engine's block-break burst */
+	/*  (see the TNT detonation note in SurvivalTest_TickTnt). */
+	IVec3_Floor(&coords, &center);
+	Particles_BreakBlockEffect(coords, BLOCK_LEAVES, BLOCK_AIR);
 }
 
 /* hurt(Entity attacker, int damage) - implements Mob.java's dual-threshold */
@@ -1774,8 +1832,12 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	if (m->hasTarget) {
 		m->moveForward = info->runSpeed;
 		m->jumping = Random_Next(&st_mobRng, 100) < 4;
-		if (inWater || inLava) m->jumping = Random_Next(&st_mobRng, 100) < 80;
 	}
+
+	/* BasicAI.update: the water/lava bob roll (80% jump) is applied to EVERY */
+	/*  mob unconditionally, not just chasing ones - it's what keeps passive */
+	/*  mobs (pigs/sheep) bobbing at the surface instead of sinking and drowning. */
+	if (inWater || inLava) m->jumping = Random_Next(&st_mobRng, 100) < 80;
 }
 
 /* Sheep.SheepAI.update(): a sheep standing over grass stops to graze. After 60 */
@@ -1926,9 +1988,12 @@ static void Mob_DoAttack(struct Mob* m) {
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
 		SurvivalTest_HurtFrom(damage, e->Position);
 
-		/* Creeper$1.attack: headbutting the player also hurts the creeper - */
-		/*  after ~4 hits this kills it and triggers its death explosion. */
-		if (info->isCreeper) Mob_Hurt(m, NULL, 6, false);
+		/* CreeperAI.attack: this.mob.hurt(entity, 6) - headbutting the player */
+		/*  also hurts the creeper WITH THE PLAYER AS CAUSE, so each landed hit */
+		/*  knocks the creeper back away from the player, and when the self- */
+		/*  damage kills it (after ~4 hits) the death explosion credits the */
+		/*  player its 200 points (die(cause) with cause = the player). */
+		if (info->isCreeper) Mob_Hurt(m, pe, 6, true);
 	}
 }
 
@@ -2066,8 +2131,8 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		}
 	}
 
-	inWater = Entity_TouchesAnyWater(e);
-	inLava  = Entity_TouchesAnyLava(e);
+	inWater = ST_InLiquid(e, false);
+	inLava  = ST_InLiquid(e, true);
 
 	/* Environmental damage - Mob.tick()'s airSupply/lava handling. Both */
 	/*  damage calls go through the same flat invincibility window as combat */
@@ -2162,7 +2227,8 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		if (m->falling) {
 			float dist = m->fallPeakY - e->Position.y;
 			if (dist > FALL_SAFE_BLOCKS) {
-				int damage = (int)dist - (int)FALL_SAFE_BLOCKS;
+				/* Mob.causeFallDamage: (int)Math.ceil(distance - 3) */
+				int damage = Math_Ceil(dist - FALL_SAFE_BLOCKS);
 				Mob_Hurt(m, NULL, damage, false);
 			}
 		}
@@ -2203,6 +2269,12 @@ static cc_bool Mob_BlockIsSolid(int x, int y, int z) {
 	return Blocks.Collide[World_GetBlock(x, y, z)] == COLLIDE_SOLID;
 }
 
+/* Level.isFree's per-block test: any solid OR liquid block occupying the */
+/*  candidate mob's bounding box vetoes the spawn. */
+static cc_bool Mob_SpawnBlockedBy(BlockID b) {
+	return Blocks.Collide[b] == COLLIDE_SOLID || Blocks.Collide[b] == COLLIDE_LIQUID;
+}
+
 /* Duplicates the private Entity_GetColor (lighting at the entity's eye */
 /*  position) since mobs aren't real Entities.List[] entries, plus a brief */
 /*  red hit-flash while hurtTicks counts down from 10 (Mob.hurtTime), */
@@ -2214,6 +2286,18 @@ static PackedCol Mob_GetColor(struct Entity* e) {
 	PackedCol col;
 	IVec3_Floor(&pos, &eyePos);
 	col = Lighting.Color(pos.x, pos.y, pos.z);
+
+	/* Creeper.getBrightness: the classic "creeper flickers brighter as it */
+	/*  takes damage" pulse - hurt = (20-health)/20, then the base brightness */
+	/*  is scaled by (sin(tickCount)*0.5+0.5)*hurt*0.5 + 0.25 + hurt*0.25. */
+	/*  At full health that's a steady 0.25x... note the ORIGINAL is this dim */
+	/*  too - creepers genuinely render darker than other mobs. */
+	if (mobTypeInfo[m->type].isCreeper) {
+		float hurt  = (20 - m->health) / 20.0f;
+		float pulse = (Math_SinF((float)m->ticksAlive) * 0.5f + 0.5f) * hurt * 0.5f
+		            + 0.25f + hurt * 0.25f;
+		col = PackedCol_Scale(col, min(pulse, 1.0f));
+	}
 
 	if (m->hurtTicks > 0) {
 		float f  = m->hurtTicks / 10.0f;
@@ -2233,6 +2317,7 @@ static const struct EntityVTABLE mob_VTABLE = { NULL, NULL, NULL, Mob_GetColor, 
 
 static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	struct Mob* m;
+	struct AABB bb;
 	cc_string model;
 	int slot = SurvivalTest_FindFreeMobSlot();
 	if (slot < 0) return NULL;
@@ -2246,6 +2331,14 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	Entity_SetModel(&m->Base, &model);
 
 	m->Base.Position = pos;
+
+	/* MobSpawner.spawn only adds the mob if level.isFree(mob.bb) - the full */
+	/*  bounding box must be clear of solid AND liquid blocks, so wide mobs */
+	/*  (pig/sheep/spider) can't spawn clipping into walls that the spawner's */
+	/*  1-wide air-column check missed. (m->active is still false, so the slot */
+	/*  simply stays free on rejection.) */
+	Entity_GetBounds(&m->Base, &bb);
+	if (Entity_TouchesAny(&bb, Mob_SpawnBlockedBy)) return NULL;
 	m->Base.Yaw      = Random_Float(&st_mobRng) * 360.0f;
 	m->Base.RotY     = m->Base.Yaw; /* body faces the same way as the head (see TickOneMob) */
 
@@ -2290,9 +2383,14 @@ static void Mob_SpawnerRun(int count, Vec3* avoidPos) {
 	float dx, dy, dz, distSq;
 
 	for (attempt = 0; attempt < count; attempt++) {
+		/* Y is min-of-two-uniforms (biased toward low altitude). Deliberately */
+		/*  NOT the min() macro - it re-evaluates the winning argument, which */
+		/*  would draw a third RNG float and destroy the bias. */
+		float r1 = Random_Float(&st_mobRng), r2 = Random_Float(&st_mobRng);
+
 		type = (cc_uint8)Random_Next(&st_mobRng, MOB_TYPE_COUNT);
 		x    = Random_Next(&st_mobRng, World.Width);
-		y    = (int)(min(Random_Float(&st_mobRng), Random_Float(&st_mobRng)) * World.Height);
+		y    = (int)((r1 < r2 ? r1 : r2) * World.Height);
 		z    = Random_Next(&st_mobRng, World.Length);
 
 		if (Mob_BlockIsSolid(x, y, z)) continue;
@@ -2318,11 +2416,15 @@ static void Mob_SpawnerRun(int count, Vec3* avoidPos) {
 				candidate.y = (float)(cy + 1);
 				candidate.z = cz + 0.5f;
 
-				dx = candidate.x - avoidPos->x;
-				dy = candidate.y - avoidPos->y;
-				dz = candidate.z - avoidPos->z;
-				distSq = dx * dx + dy * dy + dz * dz;
-				if (distSq < MOB_SPAWN_MIN_DIST_SQ) continue;
+				/* MobSpawner.spawn skips the distance check entirely when */
+				/*  called with a null avoid entity (the initial population). */
+				if (avoidPos) {
+					dx = candidate.x - avoidPos->x;
+					dy = candidate.y - avoidPos->y;
+					dz = candidate.z - avoidPos->z;
+					distSq = dx * dx + dy * dy + dz * dz;
+					if (distSq < MOB_SPAWN_MIN_DIST_SQ) continue;
+				}
 
 				SurvivalTest_SpawnMobAt(type, candidate);
 			}
@@ -2343,18 +2445,12 @@ static void SurvivalTest_TrySpawnMobs(void) {
 }
 
 /* SurvivalGameMode.prepareLevel() - the one-time initial population done */
-/*  when a new map finishes loading, avoiding the player's spawn point. */
+/*  when a new map finishes loading. It calls spawner.spawn(count, null, ...) */
+/*  with NO avoid entity, so mobs may legitimately spawn right at spawn. */
 static void SurvivalTest_SpawnInitialMobs(void) {
-	struct LocalPlayer* p = Entities.CurPlayer;
-	cc_int64 volume;
-	int area;
-	if (!p) return;
-
-	volume = (cc_int64)World.Width * World.Height * World.Length;
-	area   = (int)(volume / 800);
-	if (area <= 0) return;
-
-	Mob_SpawnerRun(area, &p->Spawn);
+	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
+	int area = (int)(volume / 800);
+	if (area > 0) Mob_SpawnerRun(area, NULL);
 }
 
 static void SurvivalTest_TickMobs(float delta) {
@@ -2711,8 +2807,9 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 	}
 }
 
-/* playerTouch() - pickup is a plain AABB touch test (no pickup radius), and */
-/*  only ever applies to player-owned arrows that are already stuck. */
+/* Arrow.playerTouch() - fed by the same Player.aiStep bb.grow(1, 0, 1) */
+/*  entity sweep as item pickup, so arrows share the items' 1-block sideways */
+/*  pickup reach. Only ever applies to player-owned arrows already stuck. */
 static void Arrow_TryPickup(struct ArrowEntity* a) {
 	struct LocalPlayer* p;
 	struct AABB arrowBB, playerBB;
@@ -2724,6 +2821,8 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 
 	Arrow_BoxAt(&a->pos, &arrowBB);
 	Entity_GetBounds(&p->Base, &playerBB);
+	playerBB.Min.x -= 1.0f; playerBB.Max.x += 1.0f;
+	playerBB.Min.z -= 1.0f; playerBB.Max.z += 1.0f;
 	if (!AABB_Intersects(&arrowBB, &playerBB)) return;
 
 	st_playerArrows++;
@@ -3016,11 +3115,14 @@ cc_bool SurvivalTest_TryEat(void) {
 	if (st_inv[slot].count <= 0) return false;
 	block = st_inv[slot].block;
 
-	/* Survival Test: mushrooms are food, eaten with right-click */
+	/* SurvivalGameMode.useItem: mushrooms are food, eaten with right-click. */
+	/*  Red is player.hurt(null, 3) - an ordinary hurt that respects (and */
+	/*  re-arms) the invulnerability window, so it can't be spam-eaten faster */
+	/*  than any other damage source. */
 	if (block == BLOCK_BROWN_SHROOM) {
 		SurvivalTest_Heal(5);            /* brown mushroom restores 5 HP */
 	} else if (block == BLOCK_RED_SHROOM) {
-		SurvivalTest_Damage(3, true, NULL); /* red mushroom is poisonous: -3 HP */
+		SurvivalTest_Hurt(3);            /* red mushroom is poisonous: -3 HP */
 	} else {
 		return false;                    /* not food - let normal placement run */
 	}
@@ -3057,14 +3159,14 @@ static int SurvivalTest_Hardness(BlockID block) {
 	switch (block) {
 		case BLOCK_STONE:       return 20;  /* 1.0s */
 		case BLOCK_GRASS:       return 12;  /* 0.6s */
-		case BLOCK_DIRT:        return 10;  /* 0.5s */
+		case BLOCK_DIRT:        return 12;  /* 0.6s */
 		case BLOCK_COBBLE:      return 30;  /* 1.5s */
 		case BLOCK_WOOD:        return 30;  /* 1.5s (planks) */
 		case BLOCK_BEDROCK:     return 19980; /* 999.0s - effectively unbreakable */
 		case BLOCK_WATER: case BLOCK_STILL_WATER:
 		case BLOCK_LAVA:  case BLOCK_STILL_LAVA:
 			return 2000; /* 100.0s */
-		case BLOCK_SAND:        return 10;  /* 0.5s */
+		case BLOCK_SAND:        return 12;  /* 0.6s */
 		case BLOCK_GRAVEL:      return 12;  /* 0.6s */
 		case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE:
 			return 60;  /* 3.0s */
@@ -3080,12 +3182,13 @@ static int SurvivalTest_Hardness(BlockID block) {
 		case BLOCK_GOLD:        return 60;  /* 3.0s */
 		case BLOCK_IRON:        return 100; /* 5.0s */
 		case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB:
-			return 40;  /* 2.0s */
-		case BLOCK_BRICK:       return 40;  /* 2.0s */
+			return 20;  /* 1.0s (grouped with stone/mossy cobblestone) */
 		case BLOCK_BOOKSHELF:   return 30;  /* 1.5s */
 		case BLOCK_MOSSY_ROCKS: return 20;  /* 1.0s */
 		case BLOCK_OBSIDIAN:    return 200; /* 10.0s */
-		/* DANDELION, ROSE, BROWN_SHROOM, RED_SHROOM, SAPLING, TNT: hardness 0.0s */
+		/* BRICK is absent from getHardness's switch, so it falls through to the */
+		/*  default 0 - brick breaks instantly. Same for DANDELION, ROSE, both */
+		/*  mushrooms, SAPLING and TNT (all explicit hardness 0). */
 		default: return 0;
 	}
 }
@@ -3104,13 +3207,17 @@ static cc_bool st_breaking;
 static int st_breakHits;
 static int st_breakDelay;
 
-/* Progress through the current hit, 0-1, for the crack overlay - hits/(hardness+1) */
+/* SurvivalGameMode.applyBlockCracks: cracks = (hits + time - 1) / hardness, */
+/*  0 when no hits yet. (time, the render partial-tick, is omitted here as */
+/*  this is only sampled once per frame at an arbitrary phase - the -1/hardness */
+/*  offset and denominator are what visibly set the crack stages.) */
 float SurvivalTest_BreakProgress(void) {
 	int hardness;
 	if (!st_breaking || st_breakHits <= 0) return 0.0f;
 
 	hardness = SurvivalTest_Hardness(World_GetBlock(st_breakPos.x, st_breakPos.y, st_breakPos.z));
-	return (float)st_breakHits / (float)(hardness + 1);
+	if (hardness <= 0) return 0.0f;
+	return (float)(st_breakHits - 1) / (float)hardness;
 }
 
 cc_bool SurvivalTest_BreakTargeted(IVec3* pos) {
@@ -3384,8 +3491,9 @@ static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_
 		if (st_falling && onGround) {
 			float dist = st_fallPeakY - y;
 			if (dist > FALL_SAFE_BLOCKS) {
-				/* Survival Test: ~1 HP per block past the 3-block safe drop */
-				int damage = (int)dist - (int)FALL_SAFE_BLOCKS;
+				/* Mob.causeFallDamage: (int)Math.ceil(distance - 3) - the ceil */
+				/*  means even a 3.1-block fall deals its first HP. */
+				int damage = Math_Ceil(dist - FALL_SAFE_BLOCKS);
 				SurvivalTest_Hurt(damage);
 			}
 		}
@@ -3425,43 +3533,32 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	if (st_hurtTicks > 0) st_hurtTicks--;
 
 	onGround    = e->OnGround;
-	inLava      = Entity_TouchesAnyLava(e);
-	inWater     = Entity_TouchesAnyWater(e);
+	inLava      = ST_InLiquid(e, true);
+	inWater     = ST_InLiquid(e, false);
 	headInWater = SurvivalTest_IsHeadInWater(e);
 
 	/* Fall damage -------------------------------------------------------- */
-	/* Touching liquid breaks the fall (water/lava cushions the landing) */
-	if (inWater || inLava) st_falling = false;
+	/* Mob.tick resets fallDistance for water ONLY (isInWater) - landing in */
+	/*  shallow lava does NOT cushion a fall. */
+	if (inWater) st_falling = false;
 	SurvivalTest_UpdateFall(e, p, onGround);
 
-	/* Lava damage -------------------------------------------------------- */
-	if (inLava) {
-		st_lavaTimer -= delta;
-		if (st_lavaTimer <= 0.0f) {
-			SurvivalTest_Hurt(LAVA_DAMAGE);
-			st_lavaTimer = LAVA_DMG_INTERVAL;
-		}
-	} else {
-		st_lavaTimer = 0.0f;
-	}
+	/* Lava damage - Mob.tick: hurt(null, 10) every tick; the invulnerability */
+	/*  window's dual threshold (see SurvivalTest_Damage) is what shapes this */
+	/*  into the effective 10 HP per half-second cadence. */
+	if (inLava) SurvivalTest_Hurt(LAVA_DAMAGE);
 
-	/* Drowning ----------------------------------------------------------- */
+	/* Drowning - Mob.tick: airSupply-- while the head is underwater, then */
+	/*  hurt(null, 2) every tick once it's empty; instant refill on surfacing. */
 	st_headInWater = headInWater; /* exposed to the HUD for the air bubbles */
 	if (headInWater) {
 		st_airTimer -= delta;
 		if (st_airTimer <= 0.0f) {
-			st_airTimer    = 0.0f;
-			st_drownTimer -= delta;
-			if (st_drownTimer <= 0.0f) {
-				SurvivalTest_Hurt(DROWN_DAMAGE);
-				st_drownTimer = DROWN_DMG_INTERVAL;
-			}
+			st_airTimer = 0.0f;
+			SurvivalTest_Hurt(DROWN_DAMAGE);
 		}
 	} else {
-		/* Refill air at double speed once the head surfaces */
-		st_airTimer += delta * 2.0f;
-		if (st_airTimer > AIR_SUPPLY_SECS) st_airTimer = AIR_SUPPLY_SECS;
-		st_drownTimer = 0.0f;
+		st_airTimer = AIR_SUPPLY_SECS;
 	}
 
 	/* Dropped items --------------------------------------------------------- */
@@ -3484,14 +3581,49 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 /*########################################################################################################################*
 *--------------------------------------------------------Component--------------------------------------------------------*
 *#########################################################################################################################*/
+/* GameOverScreen's Respawn button - the genuine c0.30 death screen DOES offer */
+/*  respawning (the earlier claim here that "death ends the world" was wrong): */
+/*  every inventory slot is cleared, health and arrows are restored, the air */
+/*  supply resets to a mere 20 ticks (a genuine quirk - NOT the full 300), and */
+/*  the player teleports back to the spawn point. Score persists, and the */
+/*  death-scattered inventory drops stay in the world to be re-collected. */
+void SurvivalTest_Respawn(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct LocationUpdate update;
+	int i;
+	if (!SurvivalTest_Enabled || !p) return;
+
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		st_inv[i].block = BLOCK_AIR;
+		st_inv[i].count = 0;
+	}
+	SurvivalTest_SyncHotbar();
+
+	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
+	st_lastHealth   = SURVIVAL_MAX_HEALTH;
+	st_invincTimer  = 0.0f;
+	st_hurtTicks    = 0;
+	st_falling      = false;
+	st_airTimer     = 20.0f / 20.0f; /* airSupply = 20 ticks, not 300 */
+	st_playerArrows = ARROW_PLAYER_START;
+	st_isDead       = false;
+
+	/* Player.resetPos() - back to the spawn point, facing its stored angles */
+	update.flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH | LU_POS_ABSOLUTE_INSTANT;
+	update.pos   = p->Spawn;
+	update.yaw   = p->SpawnYaw;
+	update.pitch = p->SpawnPitch;
+	p->Base.VTABLE->SetLocation(&p->Base, &update);
+	Vec3_Set(p->Base.Velocity, 0.0f, 0.0f, 0.0f);
+}
+
 static void SurvivalTest_ResetState(void) {
 	int i;
 	st_falling      = false;
-	st_lavaTimer    = 0.0f;
-	st_drownTimer   = 0.0f;
 	st_isDead       = false;
 	st_score        = 0;
 	st_invincTimer  = 0.0f;
+	st_lastHealth   = SURVIVAL_MAX_HEALTH;
 	st_hurtTicks    = 0;
 	st_hurtDir      = 0.0f;
 	st_breaking     = false;
@@ -3652,7 +3784,7 @@ void SurvivalTest_DebugSpawnDrops(void) {
 	if (!SurvivalTest_DebugFrontPos(2.0f, &pos)) return;
 
 	for (i = 0; i < (int)Array_Elems(kinds); i++) {
-		SurvivalTest_SpawnDropAt(pos, kinds[i]);
+		SurvivalTest_SpawnDropAt(pos, kinds[i], 1);
 	}
 }
 
