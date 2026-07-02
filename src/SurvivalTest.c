@@ -901,6 +901,8 @@ static void SurvivalTest_SpawnTntSmoke(float x, float y, float z) {
 
 /* SmokeParticle.tick()/Particle.tick() with noPhysics=true (smoke ignores */
 /*  block collision): integrate position, gently accelerate upward, damp. */
+/* Particle.tick tests age++ >= lifetime (old value) and still runs the move */
+/*  on its removal tick, so a puff gets lifetime+1 movement ticks in total. */
 static void SurvivalTest_TickTntSmoke(void) {
 	struct TntSmoke* s;
 	int i;
@@ -909,7 +911,7 @@ static void SurvivalTest_TickTntSmoke(void) {
 		if (!s->active) continue;
 
 		s->prevPos = s->pos;
-		if (++s->age >= s->life) { s->active = false; continue; }
+		if (s->age++ >= s->life) s->active = false;
 
 		s->vel.y += 0.004f;
 		s->pos.x += s->vel.x;
@@ -989,9 +991,9 @@ static cc_bool SurvivalTest_TryDefuseTnt(Vec3 eyePos, Vec3 dir, float reach) {
 }
 
 /* PrimedTnt.tick()'s physics: gravity, a swept move with real block collision, */
-/*  air drag, and a damped bounce when it lands. vel stays the *intended* */
-/*  per-tick velocity (as in Java, where move() never touches xd/yd/zd) so the */
-/*  yd*=-0.5 bounce uses the full impact speed, not the collision-clamped one. */
+/*  then air drag. Entity.move() zeroes each velocity axis it clips, so genuine */
+/*  primed TNT lands dead and stops against walls - the yd *= -0.5 "bounce" */
+/*  after it always multiplies an already-zeroed yd (dead code, same as items). */
 static void SurvivalTest_TntPhysics(struct TntFuse* tnt) {
 	struct Entity scratch;
 	struct CollisionsComp coll;
@@ -1015,6 +1017,7 @@ static void SurvivalTest_TntPhysics(struct TntFuse* tnt) {
 	tnt->pos.y   = scratch.Position.y + TNT_HEIGHT_OFF;
 	tnt->pos.z   = scratch.Position.z;
 	tnt->onGround = scratch.OnGround;
+	tnt->vel      = scratch.Velocity; /* clipped axes come back zeroed, like move() */
 
 	tnt->vel.x *= 0.98f;
 	tnt->vel.y *= 0.98f;
@@ -1022,7 +1025,6 @@ static void SurvivalTest_TntPhysics(struct TntFuse* tnt) {
 	if (tnt->onGround) {
 		tnt->vel.x *= 0.7f;
 		tnt->vel.z *= 0.7f;
-		tnt->vel.y *= -0.5f;
 	}
 }
 
@@ -1039,11 +1041,13 @@ static void SurvivalTest_TickTnt(void) {
 		tnt->prevPos = tnt->pos;
 		SurvivalTest_TntPhysics(tnt);
 
-		/* PrimedTnt.tick(): one smoke puff per remaining fuse tick, at the */
-		/*  entity centre + 0.6 (drifts up off the top of the cube). */
-		SurvivalTest_SpawnTntSmoke(tnt->pos.x, tnt->pos.y + 0.6f, tnt->pos.z);
-
-		if (--tnt->ticksLeft > 0) continue;
+		/* PrimedTnt.tick(): if (life-- > 0) smoke else explode - post-decrement, */
+		/*  so a life=40 TNT smokes on 40 ticks (centre + 0.6, drifting up off the */
+		/*  top of the cube) and detonates on the 41st, with no puff that tick. */
+		if (tnt->ticksLeft-- > 0) {
+			SurvivalTest_SpawnTntSmoke(tnt->pos.x, tnt->pos.y + 0.6f, tnt->pos.z);
+			continue;
+		}
 
 		tnt->active = false;
 		SurvivalTest_Explode(tnt->pos, EXPLOSION_RADIUS);
@@ -1325,16 +1329,18 @@ struct MobTypeInfo {
 	int         damage;
 	cc_bool     isCreeper; /* self-damages 6 HP per attack and explodes on death */
 	int         deathScore; /* points awarded to the player on a credited kill (Mob.deathScore) */
+	float       heightOff;  /* Entity.heightOffset - genuine entity.y is feet + this (an */
+	                        /*  eye-ish anchor), used for blast distances and LOS rays */
 };
 /* Order matches MobSpawner.spawn's `type = random.nextInt(6)` exactly, so */
 /*  Mob_SpawnerRun can index straight into this table with that roll. */
 static const struct MobTypeInfo mobTypeInfo[MOB_TYPE_COUNT] = {
-	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false,  80 },
-	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false, 120 },
-	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10 },
-	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200 },
-	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105 },
-	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10 },
+	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false,  80, 1.62f },
+	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false, 120, 1.62f },
+	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f },
+	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200, 1.62f },
+	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105, 0.72f },
+	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f },
 };
 
 struct Mob {
@@ -1589,17 +1595,17 @@ static void Mob_SkeletonDeathBurst(struct Mob* m) {
 /*  see Mob_Hurt). Shares its block-destruction/player-damage logic with TNT */
 /*  via SurvivalTest_Explode, since both derive from the same original code. */
 static void Mob_CreeperExplode(struct Mob* m) {
-	/* Genuine centres the blast on mob.y (the bbox centre), not the feet */
+	/* level.explode(this, x, y, z, 4) - genuine mob.y = feet + heightOffset */
 	Vec3 center = m->Base.Position;
-	center.y += m->Base.Size.y * 0.5f;
+	center.y += mobTypeInfo[m->type].heightOff;
 	SurvivalTest_Explode(center, EXPLOSION_RADIUS);
 }
 
-/* hurt(Entity attacker, int damage) - simplified to a single flat */
-/*  invincibility window rather than porting Mob.java's dual-threshold */
-/*  invulnerableTime mechanic (matches the player's own damage code, which */
-/*  already uses the same simplification). knockback() pushes the mob */
-/*  directly away from its attacker; aggroes attack-type mobs onto whoever */
+/* hurt(Entity attacker, int damage) - implements Mob.java's dual-threshold */
+/*  invulnerableTime mechanic: inside the first half of the 20-tick window all */
+/*  damage is absorbed; inside the second half only the excess over the hit */
+/*  that opened the window (lastHealth - health) lands. knockback() pushes the */
+/*  mob directly away from its attacker; aggroes attack-type mobs onto whoever */
 /*  hit them (BasicAttackAI.hurt). */
 /* playerCredit is distinct from attacker (which is only ever used for the */
 /*  knockback direction math below) - it answers "should a kill from this hit */
@@ -1674,13 +1680,13 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 }
 
 /* Level.explode's entity damage: (int)((1 - dist/radius)*15 + 1) - 16 HP */
-/*  point-blank tapering to 1 HP at the rim, 0 beyond. Distance is measured to */
-/*  the entity's vertical centre (Position.y + Size.y/2), matching genuine */
-/*  Entity.distanceTo (Entity.y is the bbox centre, CC's Position.y the feet). */
-static int Explosion_Damage(struct Entity* e, Vec3 center, float inv) {
-	float dx =  e->Position.x                    - center.x;
-	float dy = (e->Position.y + e->Size.y * 0.5f) - center.y;
-	float dz =  e->Position.z                    - center.z;
+/*  point-blank tapering to 1 HP at the rim, 0 beyond. Distance is measured */
+/*  from genuine entity.y = feet + heightOffset (1.62 player/humanoids, 1.72 */
+/*  sheep/pig, 0.72 spider) - an eye-ish anchor, NOT the bbox centre. */
+static int Explosion_Damage(struct Entity* e, float heightOff, Vec3 center, float inv) {
+	float dx =  e->Position.x               - center.x;
+	float dy = (e->Position.y + heightOff)  - center.y;
+	float dz =  e->Position.z               - center.z;
 	float dist = Math_SqrtF(dx * dx + dy * dy + dz * dz) * inv;
 	return dist <= 1.0f ? (int)((1.0f - dist) * 15.0f + 1.0f) : 0;
 }
@@ -1735,13 +1741,14 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 		}
 	}}}
 
-	if (p && (dmg = Explosion_Damage(&p->Base, center, inv))) SurvivalTest_Hurt(dmg);
+	if (p && (dmg = Explosion_Damage(&p->Base, 1.62f, center, inv))) SurvivalTest_Hurt(dmg);
 
 	for (i = 0; i < MOB_MAX; i++) {
 		m = &st_mobs[i];
 		if (!m->active || m->health <= 0) continue;
 
-		if ((dmg = Explosion_Damage(&m->Base, center, inv))) Mob_Hurt(m, NULL, dmg, false);
+		dmg = Explosion_Damage(&m->Base, mobTypeInfo[m->type].heightOff, center, inv);
+		if (dmg) Mob_Hurt(m, NULL, dmg, false);
 	}
 }
 
@@ -1893,21 +1900,24 @@ static void Mob_DoAttack(struct Mob* m) {
 	/*  argument is the cosine (x) axis, the SECOND is the sine (y) axis (see */
 	/*  its use in InputHandler's gamepad code: cos(atan2f(x,y))==x). To match */
 	/*  Vec3_GetDirVector's basis (dir.x=sin(Yaw), dir.z=-cos(Yaw)) the yaw */
-	/*  facing (diff.x, diff.z) is Math_Atan2f(-diff.z, diff.x), and the pitch */
-	/*  (dir.y=-sin(Pitch)) is Math_Atan2f(horDist, -diff.y). Both chase */
+	/*  facing (diff.x, diff.z) is Math_Atan2f(-diff.z, diff.x). Both chase */
 	/*  movement (Mob_MoveRelative's sin/cos(Yaw)) and arrow aim */
 	/*  (Mob_ShootArrow's Vec3_GetDirVector) depend on this. */
-	horDist  = Math_SqrtF(diff.x * diff.x + diff.z * diff.z);
+	/* BasicAttackAI.doAttack's pitch is xRot = -atan2(dy, sqrt(distance)) where */
+	/*  distance is the 3D distance - so the "adjacent" is sqrt(dist3d), NOT the */
+	/*  horizontal distance. A genuine Notch quirk that steeply over-pitches at */
+	/*  range; skeleton arrow aim (which reads e->Pitch) depends on reproducing it. */
+	horDist  = Math_SqrtF(Math_SqrtF(distSq));
 	e->Yaw   = Math_Atan2f(-diff.z, diff.x) * MATH_RAD2DEG;
 	e->Pitch = Math_Atan2f(horDist, -diff.y) * MATH_RAD2DEG;
 
 	if (distSq < 4.0f && m->attackDelay <= 0) {
 		/* BasicAttackAI.attack: a solid block between the mob's and player's */
-		/*  centres blocks the hit entirely - no damage to either side, and */
-		/*  attackDelay is left at 0 so it retries next tick once line of sight */
-		/*  clears (clip is between entity centres, not feet, hence Size.y/2). */
-		Vec3 mc = e->Position;  mc.y  += e->Size.y  * 0.5f;
-		Vec3 pc = pe->Position; pc.y  += pe->Size.y * 0.5f;
+		/*  eye points (level.clip from mob.y to player.y = feet + heightOffset) */
+		/*  blocks the hit entirely - no damage to either side, and attackDelay */
+		/*  is left at 0 so it retries next tick once line of sight clears. */
+		Vec3 mc = e->Position;  mc.y  += mobTypeInfo[m->type].heightOff;
+		Vec3 pc = pe->Position; pc.y  += 1.62f;
 		if (Mob_SightBlocked(mc, pc)) return;
 
 		m->attackTime   = 5;  /* BasicAttackAI.attack: triggers the model arm swing */
