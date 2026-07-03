@@ -30,10 +30,21 @@ SurvivalGameMode.java: periodic gate is `rand(100) < area` with
 cap 320, clamped by the 256 mob slots); 512x64x512 -> area 64 (64%/tick).
 Only caveat: MOB_MAX=256 slots clamp the cap on very large maps.
 
-### Still-open polish
-- Sheep grazing head Y-dip and underwater/lava ambient entity tint both need
-  engine-level plumbing (per-part model translation / a tint hook in every
-  entity colour path) - deferred, pitch-nod and fog already convey both.
+### Engine plumbing done in the follow-up commit (backlog cleared)
+- **Sheep grazing head dip**: Sheep.renderModel moves the head part's render
+  origin down 8/16 and forward 1/16 blocks * graze. Since Model_DrawRotate
+  emits R*(v-p)+p, translating the origin equals translating the emitted
+  vertices - Model.c's SheepModel_DipHead shifts the just-drawn head (and
+  fur head) verts in place, driven by a new Anim.Graze field. graze/grazeO
+  ease at 0.2/tick in Mob_SheepUpdate (Sheep.aiStep) and lerp at render.
+- **Underwater/lava ambient tint** (GL_LIGHT_MODEL_AMBIENT): while the
+  camera block is water, survival-rendered entity colours are multiplied by
+  (0.4, 0.4, 0.9); in lava by (0.4, 0.3, 0.3). One helper
+  (SurvivalTest_AmbientTint) applied in Mob_GetColor and DropItem_WorldColor
+  (which drops/arrows/TNT/smoke all share). Engine entities (other players)
+  are untouched.
+- **Debug**: F9 menu gained "Mob census" - prints live count / area*20 cap /
+  per-tick spawn roll so world-size spawn scaling can be observed in-game.
 
 ---
 

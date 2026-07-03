@@ -219,11 +219,37 @@ static float DropItem_GlowAmount(struct DropItem* d, float age) {
 
 /* Drops are lit by the world like in Survival Test (darker in shade); */
 /*  the white pulse is a separate additive pass, not a tint here. */
+/* Renderer.updateFog's GL_LIGHT_MODEL_AMBIENT: while the CAMERA is inside */
+/*  water everything renders with a bluish (0.4, 0.4, 0.9) ambient cast, and */
+/*  inside lava a dark reddish (0.4, 0.3, 0.3) one. Applied to the colours of */
+/*  everything survival renders (mobs, drops, arrows, TNT). */
+static PackedCol SurvivalTest_AmbientTint(PackedCol col) {
+	IVec3 pos;
+	BlockID b;
+	cc_uint8 collide;
+	if (!SurvivalTest_Enabled || !World.Loaded) return col;
+
+	IVec3_Floor(&pos, &Camera.CurrentPos);
+	if (!World_Contains(pos.x, pos.y, pos.z)) return col;
+	b = World_GetBlock(pos.x, pos.y, pos.z);
+	collide = Blocks.ExtendedCollide[b];
+
+	if (collide == COLLIDE_WATER) {
+		return PackedCol_Make((cc_uint8)(PackedCol_R(col) * 2 / 5), (cc_uint8)(PackedCol_G(col) * 2 / 5),
+		                      (cc_uint8)(PackedCol_B(col) * 9 / 10), PackedCol_A(col));
+	}
+	if (collide == COLLIDE_LAVA) {
+		return PackedCol_Make((cc_uint8)(PackedCol_R(col) * 2 / 5), (cc_uint8)(PackedCol_G(col) * 3 / 10),
+		                      (cc_uint8)(PackedCol_B(col) * 3 / 10), PackedCol_A(col));
+	}
+	return col;
+}
+
 static PackedCol DropItem_WorldColor(Vec3* pos) {
 	int x = Math_Floor(pos->x);
 	int y = Math_Floor(pos->y);
 	int z = Math_Floor(pos->z);
-	return Lighting.Color(x, y, z);
+	return SurvivalTest_AmbientTint(Lighting.Color(x, y, z));
 }
 
 /* Computes the 4 rotated XZ corners (A=--, B=+-, C=++, D=-+) of a square of */
@@ -1467,6 +1493,7 @@ struct Mob {
 	/*  chance to regrow its fur (so a sheared sheep can become shearable again). */
 	cc_bool grazing;
 	int     grazingTime;
+	float   graze, grazeO; /* Sheep.graze/grazeO - eased 0..1 head-dip, lerped at render */
 
 	/* Entity.walkDist/nextStep - footstep sound cadence (Entity.move plays a
 	    step sound for EVERY entity with makeStepSound, mobs included) */
@@ -1900,6 +1927,11 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 /*  one below the feet, matching the original's (mob.x+xDiff, mob.y-2, mob.z+zDiff). */
 static void Mob_SheepUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	struct Entity* e = &m->Base;
+
+	/* Sheep.aiStep: graze eases toward grazing at 0.2/tick, clamped 0..1 */
+	m->grazeO = m->graze;
+	m->graze += m->grazing ? 0.2f : -0.2f;
+	Math_Clamp(m->graze, 0.0f, 1.0f);
 	float sinYaw = Math_SinF(e->Yaw * MATH_DEG2RAD);
 	float cosYaw = Math_CosF(e->Yaw * MATH_DEG2RAD);
 	int x = Math_Floor(e->Position.x + 0.7f * sinYaw);
@@ -2427,7 +2459,7 @@ static PackedCol Mob_GetColor(struct Entity* e) {
 		b = (int)(b * (1.0f - f));
 		col = PackedCol_Make((cc_uint8)r, (cc_uint8)g, (cc_uint8)b, PackedCol_A(col));
 	}
-	return col;
+	return SurvivalTest_AmbientTint(col);
 }
 
 /* Mobs are ticked/rendered by hand (SurvivalTest_TickOneMob/RenderMobs), */
@@ -2616,6 +2648,7 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 			if (prog < 0.0f) prog = 0.0f;
 			e->Anim.AttackSwing = prog / 5.0f;
 			e->Anim.Age         = (float)m->ticksAlive + t;
+		e->Anim.Graze       = Math_Lerp(m->grazeO, m->graze, t);
 			e->Anim.HasHelmet   = m->hasHelmet;
 			e->Anim.HasArmor    = m->hasArmor;
 		}

@@ -1928,8 +1928,24 @@ static void SheepModel_MakeParts(void) {
 	BoxDesc_BuildBox(&fur_rightLegBack,  &frBack);
 }
 
+/* Sheep.renderModel's grazing head-dip: the head part's render origin is */
+/*  moved down 8 and forward 1 model units * graze. Since DrawRotate emits */
+/*  R*(v-p)+p, translating the origin equals translating the emitted verts - */
+/*  so shift the just-drawn head's vertices in place. */
+static void SheepModel_DipHead(struct Entity* e, int headStart) {
+	struct VertexTextured* v = &Models.Vertices[headStart];
+	float dy = e->Anim.Graze * (8.0f/16.0f);
+	float dz = e->Anim.Graze * (1.0f/16.0f);
+	int i;
+	if (e->Anim.Graze <= 0.0f) return;
+
+	for (i = 0; i < MODEL_BOX_VERTICES; i++, v++) { v->y -= dy; v->z -= dz; }
+}
+
 static void SheepModel_DrawBody(struct Entity* e) {
+	int headStart = Models.Active->index;
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &sheep_head, true);
+	SheepModel_DipHead(e, headStart);
 	Model_DrawPart(&sheep_torso);
 	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &sheep_leftLegFront,  false);
 	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &sheep_rightLegFront, false);
@@ -1952,7 +1968,11 @@ static void SheepModel_Draw(struct Entity* e) {
 	Model_LockVB(e, SHEEP_BODY_VERTICES + SHEEP_FUR_VERTICES);
 
 	SheepModel_DrawBody(e);
-	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &fur_head, true);
+	{
+		int furHeadStart = Models.Active->index;
+		Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &fur_head, true);
+		SheepModel_DipHead(e, furHeadStart); /* fur head copies the dip (Sheep.renderModel) */
+	}
 	Model_DrawPart(&fur_torso);
 	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &fur_leftLegFront,  false);
 	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &fur_rightLegFront, false);

@@ -40,6 +40,11 @@ struct AnimatedComp {
 	/*  anything else, so 0 (the default) is harmless for the player/other models. */
 	float Age;
 
+	/* Sheep.graze (interpolated grazeO->graze) - 0..1 head-dip while grazing. */
+	/*  Sheep.renderModel translates the head pivot down 8/16 and forward 1/16 */
+	/*  blocks * this. Only ever non-zero for sheep; 0 is a no-op elsewhere. */
+	float Graze;
+
 	/* c0.30 HumanoidMob.helmet/armor - purely cosmetic plate-armor overlay flags, */
 	/*  rolled once (independently, ~20% each) when a zombie/skeleton spawns (see */
 	/*  SurvivalTest's SurvivalTest_SpawnMobAt), copied here per render frame by */
