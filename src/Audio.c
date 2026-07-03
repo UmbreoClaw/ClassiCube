@@ -12,6 +12,7 @@
 #include "Stream.h"
 #include "Utils.h"
 #include "Options.h"
+#include "SurvivalTest.h"
 #include "Deflate.h"
 #ifdef CC_BUILD_MOBILE
 /* TODO: Refactor maybe to not rely on checking WinInfo.Handle != NULL */
@@ -200,7 +201,15 @@ static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
 		data.volume /= 2;
 		if (type == SOUND_METAL) data.rate = 140;
 	}
-	
+
+	/* Survival Test randomizes every play: StepSound.getPitch divides the base
+	    by (rand*0.2 + 0.9) (~91%-111%) and getVolume by (rand*0.4 + 1)
+	    (~71%-100%, its constant *0.5 being absorbed by our own volume scale). */
+	if (SurvivalTest_Enabled) {
+		data.rate   = (int)(data.rate   / (Random_Float(&sounds_rnd) * 0.2f + 0.9f));
+		data.volume = (int)(data.volume / (Random_Float(&sounds_rnd) * 0.4f + 1.0f));
+	}
+
 	res = AudioPool_Play(&data);
 	if (res) Sounds_Fail(res);
 }
@@ -503,8 +512,11 @@ static void Music_Stop(void) {
 static void Music_Init(void) {
 	int volume;
 	/* music is delayed between 2 - 7 minutes by default */
-	music_minDelay = Options_GetInt(OPT_MIN_MUSIC_DELAY, 0, 3600, 120) * MILLIS_PER_SEC;
-	music_maxDelay = Options_GetInt(OPT_MAX_MUSIC_DELAY, 0, 3600, 420) * MILLIS_PER_SEC;
+	/* Survival Test's genuine gap between calm tracks is 300 + rand(900) */
+	/*  seconds (Minecraft.tick's lastBGM roll) - only the DEFAULTS change, a */
+	/*  user-configured delay still wins. */
+	music_minDelay = Options_GetInt(OPT_MIN_MUSIC_DELAY, 0, 3600, SurvivalTest_Enabled ? 300  : 120) * MILLIS_PER_SEC;
+	music_maxDelay = Options_GetInt(OPT_MAX_MUSIC_DELAY, 0, 3600, SurvivalTest_Enabled ? 1200 : 420) * MILLIS_PER_SEC;
 	music_waitable = Waitable_Create("Music sleep");
 
 	volume = Options_GetInt(OPT_MUSIC_VOLUME, 0, 100, DEFAULT_MUSIC_VOLUME);

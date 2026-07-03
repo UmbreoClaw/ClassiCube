@@ -9,7 +9,35 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Death camera fix + mob infighting + sound quirks (latest)
+## SESSION LOG — Sound randomization, music gap, spawn-scaling verification (latest)
+
+### Added
+- **Per-play sound randomization** (StepSound.getVolume/getPitch): every dig/
+  step/place sound now divides its pitch by (rand*0.2+0.9) (~91-111%) and its
+  volume by (rand*0.4+1) (~71-100%), survival-only, in Audio.c's Sounds_Play.
+- **Music gap**: survival DEFAULTS are now 300-1200s between calm tracks
+  (Minecraft.tick's `lastBGM = now + 300000 + rand(900000)`); a user-set
+  music-delay option still wins. Engine default (120-420s) unchanged outside
+  survival.
+
+### Mob spawn scaling - VERIFIED ALREADY FAITHFUL (no change)
+User suspected spawns were static across world sizes. Checked against
+SurvivalGameMode.java: periodic gate is `rand(100) < area` with
+`area = w*h*d / 64^3` and live cap `area*20`; initial population is
+`volume/800` spawner attempts. Our port implements exactly these formulas
+(SurvivalTest_TrySpawnMobs / SpawnInitialMobs), so spawn pressure DOES scale:
+128x64x128 -> area 4 (4%/tick gate, cap 80); 256x64x256 -> area 16 (16%/tick,
+cap 320, clamped by the 256 mob slots); 512x64x512 -> area 64 (64%/tick).
+Only caveat: MOB_MAX=256 slots clamp the cap on very large maps.
+
+### Still-open polish
+- Sheep grazing head Y-dip and underwater/lava ambient entity tint both need
+  engine-level plumbing (per-part model translation / a tint hook in every
+  entity colour path) - deferred, pitch-nod and fog already convey both.
+
+---
+
+## SESSION LOG — Death camera fix + mob infighting + sound quirks
 
 ### Death camera was invisible - root cause found
 `GameOverScreen_Show` set `blocksWorld = true`, which makes the engine skip
