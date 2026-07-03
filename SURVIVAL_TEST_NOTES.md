@@ -9,7 +9,26 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Sound randomization, music gap, spawn-scaling verification (latest)
+## SESSION LOG — Entity pool overflow fixes (drops vanishing on littered maps) (latest)
+
+User report confirmed NOT faithful: with 64+ drops in the world, breaking a
+block yielded nothing - the fixed pools silently discarded the NEW entity
+when full, while genuine Level.addEntity is an unbounded ArrayList.add (no
+entity cap exists anywhere in c0.30).
+
+- **Drops**: DROP_MAX 64 -> 256; on overflow the OLDEST drop (largest age,
+  never one mid-pickup) is evicted so fresh drops always spawn - it was
+  nearest its 5-minute despawn anyway.
+- **Arrows**: on overflow evict the longest-STUCK arrow first (inert
+  scenery closest to despawn), else the oldest in flight - firing never
+  silently fails.
+- **TNT**: TNT_MAX 8 -> 64 fuses; if a 64+ chain reaction still overflows,
+  the overflow TNT drops as a pickup item instead of vanishing (no material
+  loss; can't recursively explode from inside the chain loop).
+
+---
+
+## SESSION LOG — Sound randomization, music gap, spawn-scaling verification
 
 ### Added
 - **Per-play sound randomization** (StepSound.getVolume/getPitch): every dig/

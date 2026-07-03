@@ -131,7 +131,11 @@ static cc_bool ST_InLiquid(struct Entity* e, cc_bool lava) {
 /* Survival Test (since 0.24-s) drops physical items on the ground instead */
 /*  of putting mined blocks straight into the inventory - the player has */
 /*  to walk over them to collect them. */
-#define DROP_MAX           64
+/* Genuine c0.30 has NO entity cap at all (Level.addEntity is an unbounded
+    ArrayList.add) - so the pool is generous, and when it does overflow the
+    OLDEST drop is evicted so fresh drops always spawn (silently discarding
+    the new drop made mining on a littered map yield nothing). */
+#define DROP_MAX           256
 /* Item.tick(): yd -= 0.04F per tick = 0.04 * 20^2 = 16 blocks/sec^2, then all */
 /*  three axes are damped by *0.98F every tick (which is also what limits fall */
 /*  speed - there is no explicit terminal-velocity clamp in the original). */
@@ -326,11 +330,22 @@ static void DropItem_BuildGlowCube(struct DropItem* d, Vec3 pos, float age, Pack
 }
 
 static int SurvivalTest_FindFreeDropSlot(void) {
-	int i;
+	int i, oldest = 0;
+	float oldestAge = -1.0f;
+
 	for (i = 0; i < DROP_MAX; i++) {
 		if (!st_drops[i].active) return i;
+		/* Mid-pickup drops are moments from freeing themselves - never evict */
+		/*  those (their blocks were already added to the inventory). */
+		if (!st_drops[i].pickingUp && st_drops[i].age > oldestAge) {
+			oldestAge = st_drops[i].age;
+			oldest    = i;
+		}
 	}
-	return -1;
+	/* Pool full: evict the longest-lived drop (it was nearest to its 5-minute */
+	/*  despawn anyway) - genuine never fails to spawn an item. */
+	st_drops[oldest].active = false;
+	return oldest;
 }
 
 /* Spawns one physical item drop at the given world position. Item's ctor pop */
@@ -339,8 +354,7 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 /*  blocks/sec vertical hop. */
 static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block, int count) {
 	struct DropItem* d;
-	int slot = SurvivalTest_FindFreeDropSlot();
-	if (slot < 0) return; /* drop limit reached - oldest drops simply aren't replaced */
+	int slot = SurvivalTest_FindFreeDropSlot(); /* always succeeds - evicts the oldest when full */
 
 	d = &st_drops[slot];
 	Mem_Set(d, 0, sizeof(struct DropItem));
@@ -926,7 +940,7 @@ static void SurvivalTest_Explode(Vec3 center, int radius);
 /*  Physics_HandleTnt now skips while in survival mode. */
 /* Like drops/arrows/mobs, the entity is simulated by hand in a fixed array */
 /*  (never a real Entities.List[] entry) and rendered as a textured cube. */
-#define TNT_MAX        8
+#define TNT_MAX        64
 #define TNT_SIZE       0.98f /* PrimedTnt.setSize(0.98, 0.98) */
 #define TNT_HALF       (TNT_SIZE * 0.5f)
 #define TNT_HEIGHT_OFF (TNT_SIZE * 0.5f) /* heightOffset = bbHeight/2; pos is the centre */
@@ -1022,7 +1036,15 @@ static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks) {
 	for (i = 0; i < TNT_MAX; i++) {
 		if (!st_tnt[i].active) { slot = i; break; }
 	}
-	if (slot < 0) return; /* no free slot - block just vanishes, untracked */
+	if (slot < 0) {
+		/* Pool full (needs a 64+ simultaneous chain reaction): drop the TNT */
+		/*  as a pickup item rather than deleting it - genuine has no cap, so */
+		/*  at least no material silently vanishes. */
+		Vec3 pos;
+		pos.x = coords.x + 0.5f; pos.y = coords.y + 0.5f; pos.z = coords.z + 0.5f;
+		SurvivalTest_SpawnDropAt(pos, BLOCK_TNT, 1);
+		return;
+	}
 	tnt = &st_tnt[slot];
 
 	/* InputHandler_DeleteBlock already cleared the block to air; unlike before */
@@ -2776,10 +2798,19 @@ static int st_playerArrows = ARROW_PLAYER_START;
 static GfxResourceID st_arrowVB;
 static GfxResourceID st_arrowsTexId;
 
+/* Genuine c0.30 has no arrow cap either - when the pool fills, evict the */
+/*  longest-STUCK arrow first (already inert scenery, nearest to despawning), */
+/*  falling back to the oldest in-flight one, so firing never silently fails. */
 static int SurvivalTest_FindFreeArrowSlot(void) {
-	int i;
-	for (i = 0; i < ARROW_MAX; i++) { if (!st_arrows[i].active) return i; }
-	return -1;
+	int i, oldest = 0, bestScore = -1, score;
+	for (i = 0; i < ARROW_MAX; i++) {
+		if (!st_arrows[i].active) return i;
+		/* stuck arrows always outrank in-flight ones; older beats newer */
+		score = st_arrows[i].hasHit ? 100000 + st_arrows[i].stickTime : st_arrows[i].age;
+		if (score > bestScore) { bestScore = score; oldest = i; }
+	}
+	st_arrows[oldest].active = false;
+	return oldest;
 }
 
 /* Arrow's constructor - spawns at pos, backed off slightly opposite the */
@@ -2793,8 +2824,7 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot) {
 	struct ArrowEntity* a;
 	Vec3 dir;
-	int slot = SurvivalTest_FindFreeArrowSlot();
-	if (slot < 0) return;
+	int slot = SurvivalTest_FindFreeArrowSlot(); /* always succeeds - evicts when full */
 
 	dir = Vec3_GetDirVector(yaw * MATH_DEG2RAD, pitch * MATH_DEG2RAD);
 
