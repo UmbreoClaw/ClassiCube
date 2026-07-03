@@ -2907,7 +2907,10 @@ static const struct ScreenVTABLE GameOverScreen_VTABLE = {
 void GameOverScreen_Show(void) {
 	struct GameOverScreen* s = &GameOverScreen;
 	s->grabsInput  = true;
-	s->blocksWorld = true;
+	/* The world MUST keep rendering behind the translucent red gradient - */
+	/*  the death camera (sideways keel + slow FOV zoom, see SurvivalTest's */
+	/*  ApplyHurtTilt/DeathFovZoom) plays out behind the Game Over screen. */
+	s->blocksWorld = false;
 	s->VTABLE      = &GameOverScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_DISCONNECT);
 }

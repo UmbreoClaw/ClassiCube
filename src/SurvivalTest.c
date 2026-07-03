@@ -1428,6 +1428,9 @@ struct Mob {
 	cc_uint8 type;
 	cc_bool  active;
 	cc_bool  hasTarget;
+	cc_int8  targetSlot;  /* who hasTarget points at: -1 = the player, else an */
+	                      /*  st_mobs[] index (BasicAttackAI.attackTarget - mobs */
+	                      /*  aggro onto whatever hurt them, not just the player) */
 	cc_bool  jumping;
 
 	int health;
@@ -1481,6 +1484,10 @@ struct Mob {
 	cc_bool noAI;
 };
 static struct Mob st_mobs[MOB_MAX];
+/* Which st_mobs[] slot dealt the hurt currently being applied (-1 = player or
+    environment). Set by attack/arrow code right before Mob_Hurt so BasicAttack-
+    AI.hurt's attackTarget=cause aggro can identify a mob attacker. */
+static int st_hurtCauseSlot = -1;
 
 static int SurvivalTest_CountMobs(void) {
 	int i, n = 0;
@@ -1732,7 +1739,19 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 
 	/* ai.hurt(cause, damage): aggro + the despawn-timer reset happen on every */
 	/*  hit, even one fully absorbed by the invulnerability window below. */
-	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) m->hasTarget = true;
+	/* BasicAttackAI.hurt: attackTarget = cause (arrows resolve to their OWNER, */
+	/*  see Arrow_ApplyHit), skipped when the cause is the same species - so a */
+	/*  stray skeleton arrow turns a zombie against the skeleton, but skeletons */
+	/*  never aggro each other. st_hurtCauseSlot carries the attacking mob's */
+	/*  slot (-1 = player/environment), set by the caller just before hurting. */
+	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) {
+		if (st_hurtCauseSlot < 0) {
+			m->hasTarget = true; m->targetSlot = -1;
+		} else if (st_mobs[st_hurtCauseSlot].type != m->type) {
+			m->hasTarget = true; m->targetSlot = (cc_int8)st_hurtCauseSlot;
+		}
+	}
+	st_hurtCauseSlot = -1; /* consumed - callers must re-arm per hit */
 	m->noActionTime = 0; /* BasicAI.hurt: being hurt counts as "doing something" */
 
 	/* Mob.hurt()'s dual-threshold invulnerability. While invulnerableTime is */
@@ -1977,24 +1996,38 @@ static void Mob_DoAttack(struct Mob* m) {
 	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
 	struct Entity* e = &m->Base;
 	struct LocalPlayer* p = Entities.CurPlayer;
-	struct Entity* pe;
+	struct Mob* tm = NULL;   /* target mob, when aggroed onto another mob */
+	struct Entity* te;       /* target entity - the player or tm */
+	float targetHeightOff;
 	Vec3 diff;
 	float distSq, horDist;
 	int damage;
 
 	if (!p) return;
-	pe = &p->Base;
 
-	diff.x = pe->Position.x - e->Position.x;
-	diff.y = pe->Position.y - e->Position.y;
-	diff.z = pe->Position.z - e->Position.z;
+	/* BasicAttackAI.doAttack: a removed/dead attackTarget is dropped */
+	if (m->hasTarget && m->targetSlot >= 0) {
+		tm = &st_mobs[(int)m->targetSlot];
+		if (!tm->active || tm->health <= 0) {
+			m->hasTarget = false; m->targetSlot = -1; tm = NULL;
+		}
+	}
+	te = tm ? &tm->Base : &p->Base;
+	targetHeightOff = tm ? mobTypeInfo[tm->type].heightOff : 1.62f;
+
+	diff.x = te->Position.x - e->Position.x;
+	diff.y = te->Position.y - e->Position.y;
+	diff.z = te->Position.z - e->Position.z;
 	distSq = diff.x * diff.x + diff.y * diff.y + diff.z * diff.z;
 
-	if (!m->hasTarget && distSq <= 256.0f) m->hasTarget = true; /* aggroRange = 16 */
+	/* Only the PLAYER is ever acquired by proximity (doAttack's null-target */
+	/*  branch checks level.getPlayer() alone) - mob targets come exclusively */
+	/*  from being hurt (BasicAttackAI.hurt, see Mob_Hurt). */
+	if (!m->hasTarget && distSq <= 256.0f) { m->hasTarget = true; m->targetSlot = -1; } /* aggroRange = 16 */
 	if (!m->hasTarget) return;
 
 	if (distSq > 1024.0f && Random_Next(&st_mobRng, 100) == 0) { /* 2x aggroRange give-up roll */
-		m->hasTarget = false;
+		m->hasTarget = false; m->targetSlot = -1;
 		return;
 	}
 
@@ -2019,21 +2052,29 @@ static void Mob_DoAttack(struct Mob* m) {
 		/*  blocks the hit entirely - no damage to either side, and attackDelay */
 		/*  is left at 0 so it retries next tick once line of sight clears. */
 		Vec3 mc = e->Position;  mc.y  += mobTypeInfo[m->type].heightOff;
-		Vec3 pc = pe->Position; pc.y  += 1.62f;
+		Vec3 pc = te->Position; pc.y  += targetHeightOff;
 		if (Mob_SightBlocked(mc, pc)) return;
 
 		m->attackTime   = 5;  /* BasicAttackAI.attack: triggers the model arm swing */
 		m->attackDelay  = 10 + Random_Next(&st_mobRng, 20); /* 10-29 ticks (0.5-1.45s) */
 		m->noActionTime = 0; /* BasicAttackAI.attack: landing a hit also resets the despawn timer */
 		damage = (int)((Random_Float(&st_mobRng) + Random_Float(&st_mobRng)) / 2.0f * info->damage + 1.0f);
-		SurvivalTest_HurtFrom(damage, e->Position);
+		if (tm) {
+			st_hurtCauseSlot = (int)(m - st_mobs);
+			Mob_Hurt(tm, e, damage, false); /* mob-vs-mob: no score credit */
+		} else {
+			SurvivalTest_HurtFrom(damage, e->Position);
+		}
 
-		/* CreeperAI.attack: this.mob.hurt(entity, 6) - headbutting the player */
-		/*  also hurts the creeper WITH THE PLAYER AS CAUSE, so each landed hit */
-		/*  knocks the creeper back away from the player, and when the self- */
-		/*  damage kills it (after ~4 hits) the death explosion credits the */
-		/*  player its 200 points (die(cause) with cause = the player). */
-		if (info->isCreeper) Mob_Hurt(m, pe, 6, true);
+		/* CreeperAI.attack: this.mob.hurt(entity, 6) - headbutting also hurts */
+		/*  the creeper WITH ITS VICTIM AS CAUSE, so each landed hit knocks the */
+		/*  creeper back away from them, and when the self-damage kills it */
+		/*  (after ~4 hits) the death blast credits its 200 points only if the */
+		/*  victim was the player (die(cause) awards Player causes alone). */
+		if (info->isCreeper) {
+			if (tm) st_hurtCauseSlot = (int)(tm - st_mobs);
+			Mob_Hurt(m, te, 6, tm == NULL);
+		}
 	}
 }
 
@@ -2431,8 +2472,9 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->Collisions.Entity   = &m->Base;
 	m->Collisions.StepSize = 0.5f; /* matches LocalPlayer's default step size */
 
-	m->type     = type;
-	m->nextStep = 1; /* Entity.nextStep's field initialiser */
+	m->type       = type;
+	m->targetSlot = -1;
+	m->nextStep   = 1; /* Entity.nextStep's field initialiser */
 	m->health   = MOB_MAX_HEALTH;
 	m->airTicks = MOB_AIR_TICKS;
 	m->active   = true;
@@ -2831,6 +2873,10 @@ static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, stru
 	fakeAttacker.Position = a->pos;
 
 	if (hitMob) {
+		/* BasicAttackAI.hurt resolves an Arrow cause to its OWNER - so a mob */
+		/*  struck by a skeleton's arrow aggros onto that skeleton (-1 = the */
+		/*  player fired it, aggroing onto the player as before). */
+		st_hurtCauseSlot = a->ownerIsPlayer ? -1 : a->ownerMobSlot;
 		Mob_Hurt(hitMob, &fakeAttacker, a->damage, a->ownerIsPlayer);
 	} else {
 		SurvivalTest_HurtFrom(a->damage, a->pos);
@@ -3825,6 +3871,12 @@ static void SurvivalTest_Init(void) {
 	    stock value (EXP density 2.0 vs 1.8) - override while survival is on. */
 	Blocks.FogDensity[BLOCK_LAVA]       = 2.0f;
 	Blocks.FogDensity[BLOCK_STILL_LAVA] = 2.0f;
+
+	/* GameMode.breakBlock quirks: breaking SAND plays the GRAVEL sound, and */
+	/*  glass breaks with its METAL step sound (stone at 2x pitch) - c0.30 has */
+	/*  no glass shatter sound. Overridden here so creative stays stock. */
+	Blocks.DigSounds[BLOCK_SAND]  = SOUND_GRAVEL;
+	Blocks.DigSounds[BLOCK_GLASS] = SOUND_METAL;
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);

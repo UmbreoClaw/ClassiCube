@@ -9,7 +9,33 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Polish batch: sounds, HUD flash, combat feedback, death camera (latest)
+## SESSION LOG — Death camera fix + mob infighting + sound quirks (latest)
+
+### Death camera was invisible - root cause found
+`GameOverScreen_Show` set `blocksWorld = true`, which makes the engine skip
+`Render3DFrame` entirely - the roll/FOV math ran but the world was never
+drawn behind the screen. Now `blocksWorld = false`: the world keeps rendering
+behind the translucent red gradient while the camera keels and zooms, as
+genuine. (Note the genuine ease is slow: ~4 degrees after 1s, ~13 after 5s.)
+
+### Mob infighting (BasicAttackAI.hurt attackTarget = cause)
+- `struct Mob.targetSlot` (-1 = player, else st_mobs index) alongside
+  hasTarget; `st_hurtCauseSlot` side-channel identifies a mob attacker.
+- Aggro on hurt skips same-species causes; arrows resolve to their OWNER,
+  so a stray skeleton arrow turns the victim against the skeleton.
+- `Mob_DoAttack` chases/faces/attacks the resolved target: mob-vs-mob melee
+  goes through Mob_Hurt (knockback, no score credit); LOS clip and blast
+  anchor use the target's own heightOffset. Proximity acquisition remains
+  player-only, exactly as doAttack's null-target branch. Creeper self-hurt
+  cause is its actual victim (score credited only for the player).
+
+### Sound quirks
+- Breaking SAND plays the GRAVEL sound; glass breaks with its METAL step
+  sound (no shatter in c0.30). Overridden in the survival init only.
+
+---
+
+## SESSION LOG — Polish batch: sounds, HUD flash, combat feedback, death camera
 
 Implemented the prioritized gaps from the three fidelity surveys (sounds /
 models+HUD / environment). Environment survey found NO gaps - the engine's
