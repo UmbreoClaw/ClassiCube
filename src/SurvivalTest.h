@@ -165,6 +165,8 @@ void SurvivalTest_DebugSpawnMob(int type);
 /*  matching a debug/console kill rather than a real player kill). No-op when survival */
 /*  mode is disabled. */
 void SurvivalTest_DebugKillAllMobs(void);
+/* Prints live mob count / world-size-scaled cap / per-tick spawn roll to chat. */
+void SurvivalTest_DebugMobCensus(void);
 /* Sets the player's arrow count directly (clamped 0-99). No-op when survival mode is disabled. */
 void SurvivalTest_DebugSetArrows(int count);
 

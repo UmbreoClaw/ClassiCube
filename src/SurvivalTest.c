@@ -4011,6 +4011,22 @@ void SurvivalTest_DebugToggleGodMode(void)    { st_godMode          = !st_godMod
 void SurvivalTest_DebugToggleNoAI(void)       { st_debugNoAI        = !st_debugNoAI; }
 void SurvivalTest_DebugToggleForceArmor(void) { st_debugForceArmor  = !st_debugForceArmor; }
 
+/* Prints the live mob population against the world-size-scaled caps, so the */
+/*  spawn scaling (SurvivalGameMode.spawnMobs' area formulas) can be watched */
+/*  in-game: gate = rand(100) < area each tick, live cap = area*20. */
+void SurvivalTest_DebugMobCensus(void) {
+	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
+	int area  = (int)(volume / 64 / 64 / 64);
+	int alive = SurvivalTest_CountMobs();
+	int cap   = min(area * 20, MOB_MAX);
+	cc_string msg; char msgBuffer[STRING_SIZE];
+
+	String_InitArray(msg, msgBuffer);
+	String_Format3(&msg, "&eMobs: &f%i&e alive / cap &f%i&e (spawn roll &f%i%%&e/tick)",
+	               &alive, &cap, &area);
+	Chat_Add(&msg);
+}
+
 void SurvivalTest_DebugKillAllMobs(void) {
 	struct Mob* m;
 	int i;
