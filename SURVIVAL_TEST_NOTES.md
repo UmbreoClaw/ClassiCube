@@ -9,7 +9,40 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Entity pool overflow fixes (drops vanishing on littered maps) (latest)
+## SESSION LOG — Indev mode plumbing + modularity groundwork (latest)
+
+Next major goal: an **Indev (in-20100223) gamemode** layered on the survival
+core. Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (fetched to
+/tmp/indev_eagler; public repo, re-fetchable any time).
+
+### Plumbing added
+- `src/IndevTest.c/h` - new IGameComponent + `IndevTest_Enabled` flag from the
+  new `OPT_INDEV_MODE` ("indev-mode") option. Registered BEFORE SurvivalTest
+  in Game.c so `SurvivalTest_Enabled = survival option || IndevTest_Enabled`
+  can key the shared survival core. No launcher UI yet (option-file only).
+- Architecture: SurvivalTest.c = shared survival core (entities, combat,
+  drops, HUD); IndevTest.c grows the version layer (ItemStacks, tools,
+  crafting, day/night...). c0.30-s behaviour stays frozen behind its flag.
+
+### Modularity groundwork (multiplayer/MCGalaxy-proofing)
+- Hardness converted from a hardcoded switch to a runtime per-block table
+  (`st_hardness[BLOCK_COUNT]`, lazily seeded from the faithful c0.30
+  defaults) with `SurvivalTest_SetHardness(block, hardness)` exposed - so
+  CPE BlockDefs custom blocks or a future MCGalaxy plugin (over a CPE
+  PluginMessages channel) can override per-block hardness without code
+  changes. Same treatment planned for drop tables and the mob registry
+  (data-driven, runtime-extendable) as the Indev work touches them.
+- Multiplayer note: server-authoritative survival would live in an MCGalaxy
+  plugin; the client keeps HUD/rendering/break-progress hooks reusable.
+
+### Phase plan (agreed)
+mode plumbing (DONE) -> ItemStack refactor -> tools/durability/mob item
+drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces ->
+fire/farming/bow/armor -> polish.
+
+---
+
+## SESSION LOG — Entity pool overflow fixes (drops vanishing on littered maps)
 
 User report confirmed NOT faithful: with 64+ drops in the world, breaking a
 block yielded nothing - the fixed pools silently discarded the NEW entity

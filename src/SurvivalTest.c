@@ -24,6 +24,7 @@
 #include "Bitmap.h"
 #include "HeldBlockRenderer.h"
 #include "Camera.h"
+#include "IndevTest.h"
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
@@ -3387,7 +3388,18 @@ static void SurvivalTest_BlockChanged(void* obj,
 /*  than waiting for the continuous per-tick path below). Blocks with no explicit */
 /*  c0.30 hardness (i.e. CPE-era blocks that didn't exist yet) default to instant, */
 /*  matching this engine's pre-existing creative-style behaviour for them. */
-static int SurvivalTest_Hardness(BlockID block) {
+/* Runtime per-block hardness table. Defaults are the faithful c0.30 values; */
+/*  kept as DATA rather than a switch so custom blocks (CPE BlockDefs) or a */
+/*  future server plugin (e.g. MCGalaxy over a CPE channel) can override */
+/*  hardness per block id without touching this code. 0 = instant break. */
+static cc_uint16 st_hardness[BLOCK_COUNT];
+static cc_bool   st_hardnessInited;
+
+void SurvivalTest_SetHardness(BlockID block, int hardness) {
+	st_hardness[block] = (cc_uint16)hardness;
+}
+
+static int SurvivalTest_DefaultHardness(BlockID block) {
 	switch (block) {
 		case BLOCK_STONE:       return 20;  /* 1.0s */
 		case BLOCK_GRASS:       return 12;  /* 0.6s */
@@ -3423,6 +3435,15 @@ static int SurvivalTest_Hardness(BlockID block) {
 		/*  mushrooms, SAPLING and TNT (all explicit hardness 0). */
 		default: return 0;
 	}
+}
+
+static int SurvivalTest_Hardness(BlockID block) {
+	int i;
+	if (!st_hardnessInited) {
+		for (i = 0; i < BLOCK_COUNT; i++) st_hardness[i] = (cc_uint16)SurvivalTest_DefaultHardness((BlockID)i);
+		st_hardnessInited = true;
+	}
+	return st_hardness[block];
 }
 
 /* SurvivalGameMode's 3-arg hitBlock(x,y,z) override (used for the discrete click */
@@ -3922,7 +3943,9 @@ static void SurvivalTest_Init(void) {
 	/*  any survival logic runs (it gates a UI choice, not a gameplay rule). */
 	SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
 
-	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false);
+	/* The survival core also runs under Indev mode - IndevTest_Component's
+	    Init ran first (see Game.c ordering), so its flag is already set. */
+	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false) || IndevTest_Enabled;
 	if (!SurvivalTest_Enabled) return;
 
 	Random_SeedFromCurrentTime(&st_dropRng);

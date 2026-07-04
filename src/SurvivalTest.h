@@ -124,6 +124,10 @@ int SurvivalTest_ArrowCount(void);
 /*  needing sustained mining (true for 0-hardness blocks, e.g. flowers, TNT). */
 /*  Always true when survival mode is disabled. */
 cc_bool SurvivalTest_CanInstaBreak(BlockID block);
+/* Overrides a block's mining hardness (in hits; 0 = instant break). Defaults */
+/*  are the faithful c0.30 values - this hook exists so custom blocks (CPE */
+/*  BlockDefs) or a server plugin can supply their own hardness later. */
+void SurvivalTest_SetHardness(BlockID block, int hardness);
 
 /* Current mining progress (0-1) towards breaking whatever block is being */
 /*  continuously mined, for the crack overlay. 0 if nothing is being mined. */

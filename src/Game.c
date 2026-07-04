@@ -42,6 +42,7 @@
 #include "Formats.h"
 #include "EntityRenderers.h"
 #include "SurvivalTest.h"
+#include "IndevTest.h"
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -441,6 +442,7 @@ static void Game_Load(void) {
 	Game_AddComponent(&AxisLinesRenderer_Component);
 	Game_AddComponent(&Formats_Component);
 	Game_AddComponent(&EntityRenderers_Component);
+	Game_AddComponent(&IndevTest_Component);
 	Game_AddComponent(&SurvivalTest_Component);
 
 	Plugins_LoadAll();
