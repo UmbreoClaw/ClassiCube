@@ -40,6 +40,21 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### ItemStack refactor - step 3b started: items.png plumbing
+- `items.png` registered as a TextureEntry in the Indev layer (texture packs
+  can supply it now); `IndevTest_ItemsTex()` exposes the texture id and all
+  sprite rendering must bail gracefully while it is 0.
+- **Auto-download answer**: YES, feasible - Resources.c already downloads
+  Mojang's classic 0.30 jar AND a 1.6.2 jar at first launch and extracts
+  assets into default.zip via patcher callbacks (that's where char.png,
+  arrows.png etc. come from). Plan: add a patcher step composing an Indev-
+  layout items.png atlas from the already-downloaded jar assets (1.6.2 has
+  per-item textures post-texture-split; most classic-era item pixels are
+  unchanged). Needs the iconIndex -> atlas cell mapping from Item.java's
+  init first. Until then: texture pack supplies items.png.
+- REMAINING for 3b: iconIndex mapping per item in the defs table, hotbar/
+  hand/drop sprite rendering keyed on ST_ID_IS_BLOCK.
+
 ### ItemStack refactor - step 3a landed + hotbar bug fix
 - **Hotbar-cycling bug (user report)**: pressing G switched to the engine's
   alternate hotbar row, desyncing it from the survival inventory (blocks

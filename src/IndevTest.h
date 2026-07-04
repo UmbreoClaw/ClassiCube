@@ -1,6 +1,7 @@
 #ifndef CC_INDEVTEST_H
 #define CC_INDEVTEST_H
 #include "Core.h"
+#include "Graphics.h"
 CC_BEGIN_HEADER
 
 /* Indev (in-20100223) gamemode - version layer on top of the survival core.
@@ -14,6 +15,10 @@ extern struct IGameComponent IndevTest_Component;
 /*  When false, every Indev hook is a no-op and both creative mode and the */
 /*  faithful c0.30-s survival mode are completely unaffected. */
 extern cc_bool IndevTest_Enabled;
+
+/* The items.png atlas texture (0 until a texture pack supplies it). Item */
+/*  sprite rendering (hotbar/hand/drops) bails gracefully while it's 0. */
+GfxResourceID IndevTest_ItemsTex(void);
 
 CC_END_HEADER
 #endif

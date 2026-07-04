@@ -4,6 +4,8 @@
 #include "Chat.h"
 #include "SurvivalTest.h"
 #include "Funcs.h"
+#include "Graphics.h"
+#include "TexturePack.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -14,6 +16,22 @@
    (e.g. an MCGalaxy plugin over a CPE channel) can override them later. */
 
 cc_bool IndevTest_Enabled;
+
+/* gui/items.png - the 16x16-sprite item atlas (Indev draws item icons from
+    iconIndex cells of this sheet, ItemRenderer-style). Loaded from texture
+    packs via the standard TextureEntry route; auto-provisioning it into
+    default.zip is planned via Resources.c's existing jar patchers (the
+    engine already downloads Mojang's classic + 1.6.2 jars at first launch -
+    an items atlas can be composed from those assets the same way the other
+    survival textures are extracted). Until then, packs supply it; rendering
+    code must bail gracefully while this is 0. */
+static GfxResourceID indev_itemsTexId;
+static void ItemsPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_itemsTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry items_entry = { "items.png", ItemsPngProcess };
+
+GfxResourceID IndevTest_ItemsTex(void) { return indev_itemsTexId; }
 
 /* Item definitions - the complete in-20100223 roster from Item.java's static
     init (local ids; shiftedIndex = id + 256). kind drives behaviour:
@@ -83,6 +101,7 @@ static void OnInit(void) {
 	if (!IndevTest_Enabled) return;
 
 	IndevItems_Seed();
+	TextureEntry_Register(&items_entry);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 
