@@ -40,6 +40,19 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### items.png auto-download LANDED (no texture pack needed anymore)
+- The in-20100223 jar keeps its atlas at /gui/items.png INSIDE the jar (user
+  correctly found no loose file). Neither already-downloaded jar has it
+  (classic predates items; 1.6.2 is post-1.5-texture-split), so Resources.c
+  now fetches Mojang's OFFICIAL b1.7.3 client jar (launcher.mojang.com,
+  sha1 43db9b49... verified against piston-meta's manifest; 1431 KB) and a
+  new BetaPatcher extracts gui/items.png into default.zip as items.png.
+  Early items.png cell layout is identical Indev->beta (icons appended only),
+  so every icon index in the defs table lines up.
+- items.png added to the required default.zip entries - EXISTING installs
+  detect it missing and re-download automatically on next launch.
+- Texture packs can still override it via the items_entry TextureEntry.
+
 ### FIRST TESTABLE INDEV FEATURE: pig -> porkchop, end-to-end item pipeline
 - **Pig death in Indev mode** drops 0-2 RAW PORKCHOPS (EntityLiving.onDeath:
   rand(3) of scoreValue-as-item-id; item 63) instead of c0.30 mushrooms.

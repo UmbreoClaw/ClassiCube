@@ -821,6 +821,7 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	/* other files */
 	{ "snow.png", RESOURCE_TYPE_DATA }, { "chicken.png",    RESOURCE_TYPE_DATA },
 	{ "gui.png",  RESOURCE_TYPE_DATA }, { "animations.png", RESOURCE_TYPE_PNG  },
+	{ "items.png", RESOURCE_TYPE_DATA }, /* gui/items.png from the beta jar (Indev mode item sprites) */
 	{ "animations.txt", RESOURCE_TYPE_CONST, sizeof(ANIMS_TXT) - 1, (cc_uint8*)ANIMS_TXT },
 #ifdef CC_BUILD_MOBILE
 	{ "touch.png", RESOURCE_TYPE_DATA }
@@ -844,6 +845,7 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req);
 static cc_result ModernPatcher_ExtractFiles(struct HttpRequest* req);
 static cc_result TerrainPatcher_Process(struct HttpRequest* req);
 static cc_result NewTextures_ExtractGui(struct HttpRequest* req);
+static cc_result BetaPatcher_ExtractItems(struct HttpRequest* req);
 
 static cc_result Classic0023Patcher_OldGoldBlock(struct HttpRequest* req);
 static cc_result Classic0023Patcher_OldGoldOre(  struct HttpRequest* req);
@@ -860,12 +862,17 @@ struct ZipfileSource {
 	int reqID;
 };
 
-#define DEFAULTZIP_0030_ENTRIES_COUNT 4
+#define DEFAULTZIP_0030_ENTRIES_COUNT 5
 static struct ZipfileSource defaultZipSources_0030_0023[] = {
 	{ "classic jar", "http://launcher.mojang.com/mc/game/c0.30_01c/client/54622801f5ef1bcc1549a842c5b04cb5d5583005/client.jar", ClassicPatcher_ExtractFiles, 291 },
 	{ "1.6.2 jar",   "http://launcher.mojang.com/mc/game/1.6.2/client/b6cb68afde1d9cf4a20cbf27fa90d0828bf440a4/client.jar",     ModernPatcher_ExtractFiles, 4621 },
 	{ "terrain.png patch", RESOURCE_SERVER "/terrain-patch2.png", TerrainPatcher_Process, 7 },
 	{ "gui.png patch",     RESOURCE_SERVER "/gui.png",            NewTextures_ExtractGui, 21 },
+	/* Official Mojang CDN b1.7.3 client (sha1 43db9b49..., from piston-meta's
+	    version manifest) - source of gui/items.png, the item sprite atlas the
+	    Indev gamemode draws from. Early items.png cell layout is identical
+	    from Indev through beta (icons were only ever appended). */
+	{ "beta jar", "https://launcher.mojang.com/v1/objects/43db9b498cb67058d2e12d394e6507722e71bb45/client.jar", BetaPatcher_ExtractItems, 1431 },
 	/* 0.0.23 textures */
 	{ "0.0.23 gold",  "https://classic.minecraft.net/assets/textures/gold.png",      Classic0023Patcher_OldGoldBlock, 1 },
 	{ "0.0.23 ore",   "https://classic.minecraft.net/assets/textures/rock_gold.png", Classic0023Patcher_OldGoldOre,   1 },
@@ -924,6 +931,27 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req) {
 	
 	return Zip_Extract(&src, 
 			ClassicPatcher_SelectEntry, ClassicPatcher_ProcessEntry,
+			entries, Array_Elems(entries));
+}
+
+/* Pulls gui/items.png out of the beta jar into default.zip as items.png */
+static cc_bool BetaPatcher_SelectEntry(const cc_string* path) {
+	return String_CaselessEqualsConst(path, "gui/items.png");
+}
+
+static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* data, struct ZipEntry* source) {
+	static const cc_string itemsPng = String_FromConst("items.png");
+	struct ResourceZipEntry* e = ZipEntries_Find(&itemsPng);
+	return ZipEntry_ExtractData(e, data, source);
+}
+
+static cc_result BetaPatcher_ExtractItems(struct HttpRequest* req) {
+	struct Stream src;
+	struct ZipEntry entries[64];
+	Stream_ReadonlyMemory(&src, req->data, req->size);
+
+	return Zip_Extract(&src,
+			BetaPatcher_SelectEntry, BetaPatcher_ProcessEntry,
 			entries, Array_Elems(entries));
 }
 
