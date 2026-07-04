@@ -40,6 +40,20 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### ItemStack refactor - step 2 landed
+- Every block-consuming site now routes through ST_ID_BLOCK (SlotBlock,
+  hotbar sync, TryEat, death drops - the last skips item-id stacks until
+  sprite drop entities exist in step 3), so a future item id can never
+  masquerade as a block.
+- Runtime per-id max-stack table (ST_MAX_IDS=1024 covering Item.itemsList)
+  with SurvivalTest_SetMaxStack; c0.30 default 99 everywhere (unchanged).
+  IndevItems_Seed sets the Indev values when the mode is on: 64 default for
+  item ids, 1 for the tool/sword/bow ids confirmed so far (roster to be
+  completed against Item.java's full static init with the defs table).
+- NEXT (step 3): item definitions table (name, tool tier, food value,
+  maxDamage - ItemTool sets maxStackSize=1 and per-tier maxDamage), then
+  items.png sprites in hotbar/hand/drops.
+
 ### ItemStack refactor - design (step 1 landed)
 Indev inventories hold ItemStack(id, count, damage) where id spans blocks
 (0..255) AND items (256+, e.g. 256+16=porkchop style shifted ids). Step 1:

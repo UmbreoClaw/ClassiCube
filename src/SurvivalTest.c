@@ -94,7 +94,30 @@ static cc_bool st_debugForceArmor;
 #define ST_ITEM_ID_START     256
 #define ST_ID_IS_BLOCK(id)   ((id) < ST_ITEM_ID_START)
 #define ST_ID_BLOCK(id)      (ST_ID_IS_BLOCK(id) ? (BlockID)(id) : BLOCK_AIR)
+/* Full id space: 256 block ids + Item.itemsList[]'s shifted ids (id+256, */
+/*  sized so Indev's 1024-entry list fits). */
+#define ST_MAX_IDS           1024
 struct SurvivalSlot { cc_uint16 id; cc_int16 count; cc_int16 damage; };
+
+/* Runtime per-id max stack size. c0.30 stacks everything to 99; the Indev */
+/*  layer (or later a server) overrides per id (Item.maxStackSize: 64 for */
+/*  materials, 1 for tools/armor) via the setter. Data, not code. */
+static cc_int16 st_maxStack[ST_MAX_IDS];
+static cc_bool  st_maxStackInited;
+
+void SurvivalTest_SetMaxStack(int id, int maxStack) {
+	if (id < 0 || id >= ST_MAX_IDS) return;
+	st_maxStack[id] = (cc_int16)maxStack;
+}
+
+static int ST_MaxStack(cc_uint16 id) {
+	int i;
+	if (!st_maxStackInited) {
+		for (i = 0; i < ST_MAX_IDS; i++) st_maxStack[i] = SURVIVAL_STACK_MAX;
+		st_maxStackInited = true;
+	}
+	return id < ST_MAX_IDS ? st_maxStack[id] : 1;
+}
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
 static int st_invVersion;
@@ -781,7 +804,10 @@ static void SurvivalTest_DropInventory(void) {
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		if (st_inv[i].id == BLOCK_AIR || st_inv[i].count <= 0) continue;
-		SurvivalTest_SpawnDropAt(pos, st_inv[i].id, st_inv[i].count);
+		/* Item-id drops need sprite drop entities (ItemStack refactor step 3) - */
+		/*  until then only block stacks scatter on death. */
+		if (!ST_ID_IS_BLOCK(st_inv[i].id)) continue;
+		SurvivalTest_SpawnDropAt(pos, (BlockID)st_inv[i].id, st_inv[i].count);
 	}
 }
 
@@ -3273,7 +3299,9 @@ int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
 /*########################################################################################################################*
 *------------------------------------------------------Inventory----------------------------------------------------------*
 *#########################################################################################################################*/
-BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].id; }
+/* Returns the BLOCK in a slot - BLOCK_AIR when the slot holds a (future) */
+/*  item id, so block-only consumers can never misread an item as a block. */
+BlockID SurvivalTest_SlotBlock(int slot) { return ST_ID_BLOCK(st_inv[slot].id); }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
@@ -3289,7 +3317,7 @@ cc_bool SurvivalTest_CanPlace(BlockID block) {
 static void SurvivalTest_SyncHotbar(void) {
 	int i;
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
-		Inventory_Set(i, st_inv[i].id);
+		Inventory_Set(i, ST_ID_BLOCK(st_inv[i].id)); /* items render separately (later) */
 	}
 	st_invVersion++;
 }
@@ -3314,7 +3342,7 @@ static cc_bool SurvivalTest_AddBlock(BlockID block) {
 
 	/* Prefer topping up an existing, non-full stack of this block */
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		if (st_inv[i].id == block && st_inv[i].count < SURVIVAL_STACK_MAX) {
+		if (st_inv[i].id == block && st_inv[i].count < ST_MaxStack(st_inv[i].id)) {
 			st_inv[i].count++;
 			/* Inventory.addResource(): popTime[slot] = 5 triggers the pop animation */
 			if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
@@ -3351,7 +3379,7 @@ cc_bool SurvivalTest_TryEat(void) {
 
 	slot  = Inventory.SelectedIndex;
 	if (st_inv[slot].count <= 0) return false;
-	block = st_inv[slot].id;
+	block = ST_ID_BLOCK(st_inv[slot].id); /* item foods (soup/bread) arrive later */
 
 	/* SurvivalGameMode.useItem: mushrooms are food, eaten with right-click. */
 	/*  Red is player.hurt(null, 3) - an ordinary hurt that respects (and */

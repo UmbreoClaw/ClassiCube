@@ -128,6 +128,10 @@ cc_bool SurvivalTest_CanInstaBreak(BlockID block);
 /*  are the faithful c0.30 values - this hook exists so custom blocks (CPE */
 /*  BlockDefs) or a server plugin can supply their own hardness later. */
 void SurvivalTest_SetHardness(BlockID block, int hardness);
+/* Overrides an id's max stack size (c0.30 default: 99 for everything). The */
+/*  Indev layer seeds Item.maxStackSize values (64 materials, 1 tools/armor); */
+/*  a server plugin can override per id the same way. */
+void SurvivalTest_SetMaxStack(int id, int maxStack);
 
 /* Current mining progress (0-1) towards breaking whatever block is being */
 /*  continuously mined, for the crack overlay. 0 if nothing is being mined. */
