@@ -86,7 +86,15 @@ static cc_bool st_debugNoAI;
 static cc_bool st_debugForceArmor;
 
 /* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
-struct SurvivalSlot { BlockID block; cc_int16 count; };
+/* ItemStack groundwork for the Indev layer: `id` spans BLOCKS (0..255) and, */
+/*  later, ITEMS (ST_ITEM_ID_START+). In c0.30 survival ids are always block */
+/*  ids and damage is unused - behaviour is unchanged; the wider type exists */
+/*  so tools/food (Indev ItemStack(id, count, damage)) can slot in without a */
+/*  second inventory rewrite. Use the helpers below, never assume id==block. */
+#define ST_ITEM_ID_START     256
+#define ST_ID_IS_BLOCK(id)   ((id) < ST_ITEM_ID_START)
+#define ST_ID_BLOCK(id)      (ST_ID_IS_BLOCK(id) ? (BlockID)(id) : BLOCK_AIR)
+struct SurvivalSlot { cc_uint16 id; cc_int16 count; cc_int16 damage; };
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
 static int st_invVersion;
@@ -772,8 +780,8 @@ static void SurvivalTest_DropInventory(void) {
 	pos.y += 1.0f; /* pop from around chest height rather than the feet */
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		if (st_inv[i].block == BLOCK_AIR || st_inv[i].count <= 0) continue;
-		SurvivalTest_SpawnDropAt(pos, st_inv[i].block, st_inv[i].count);
+		if (st_inv[i].id == BLOCK_AIR || st_inv[i].count <= 0) continue;
+		SurvivalTest_SpawnDropAt(pos, st_inv[i].id, st_inv[i].count);
 	}
 }
 
@@ -3265,7 +3273,7 @@ int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
 /*########################################################################################################################*
 *------------------------------------------------------Inventory----------------------------------------------------------*
 *#########################################################################################################################*/
-BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].block; }
+BlockID SurvivalTest_SlotBlock(int slot) { return st_inv[slot].id; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
@@ -3281,7 +3289,7 @@ cc_bool SurvivalTest_CanPlace(BlockID block) {
 static void SurvivalTest_SyncHotbar(void) {
 	int i;
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
-		Inventory_Set(i, st_inv[i].block);
+		Inventory_Set(i, st_inv[i].id);
 	}
 	st_invVersion++;
 }
@@ -3306,7 +3314,7 @@ static cc_bool SurvivalTest_AddBlock(BlockID block) {
 
 	/* Prefer topping up an existing, non-full stack of this block */
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		if (st_inv[i].block == block && st_inv[i].count < SURVIVAL_STACK_MAX) {
+		if (st_inv[i].id == block && st_inv[i].count < SURVIVAL_STACK_MAX) {
 			st_inv[i].count++;
 			/* Inventory.addResource(): popTime[slot] = 5 triggers the pop animation */
 			if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
@@ -3316,8 +3324,8 @@ static cc_bool SurvivalTest_AddBlock(BlockID block) {
 	}
 	/* Otherwise place it into the first empty slot */
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		if (st_inv[i].block != BLOCK_AIR) continue;
-		st_inv[i].block = block;
+		if (st_inv[i].id != BLOCK_AIR) continue;
+		st_inv[i].id = block;
 		st_inv[i].count = 1;
 		if (i < SURVIVAL_HOTBAR_SLOTS) HUDScreen_SetSlotPop(i, 5.0f);
 		SurvivalTest_SyncHotbar();
@@ -3332,7 +3340,7 @@ static void SurvivalTest_ConsumeSelected(void) {
 	if (st_inv[slot].count <= 0) return;
 
 	st_inv[slot].count--;
-	if (st_inv[slot].count == 0) st_inv[slot].block = BLOCK_AIR;
+	if (st_inv[slot].count == 0) st_inv[slot].id = BLOCK_AIR;
 	SurvivalTest_SyncHotbar();
 }
 
@@ -3343,7 +3351,7 @@ cc_bool SurvivalTest_TryEat(void) {
 
 	slot  = Inventory.SelectedIndex;
 	if (st_inv[slot].count <= 0) return false;
-	block = st_inv[slot].block;
+	block = st_inv[slot].id;
 
 	/* SurvivalGameMode.useItem: mushrooms are food, eaten with right-click. */
 	/*  Red is player.hurt(null, 3) - an ordinary hurt that respects (and */
@@ -3853,7 +3861,7 @@ void SurvivalTest_Respawn(void) {
 	if (!SurvivalTest_Enabled || !p) return;
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		st_inv[i].block = BLOCK_AIR;
+		st_inv[i].id = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
 	SurvivalTest_SyncHotbar();
@@ -3895,12 +3903,12 @@ static void SurvivalTest_ResetState(void) {
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
-		st_inv[i].block = BLOCK_AIR;
+		st_inv[i].id = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
 	/* SurvivalGameMode.apply(Player): the player always starts with 10 TNT */
 	/*  in the last hotbar slot - this was missing entirely before. */
-	st_inv[8].block = BLOCK_TNT;
+	st_inv[8].id = BLOCK_TNT;
 	st_inv[8].count = 10;
 
 	for (i = 0; i < DROP_MAX; i++) {
