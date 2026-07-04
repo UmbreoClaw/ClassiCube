@@ -40,6 +40,21 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### ItemStack refactor - step 3a landed + hotbar bug fix
+- **Hotbar-cycling bug (user report)**: pressing G switched to the engine's
+  alternate hotbar row, desyncing it from the survival inventory (blocks
+  seemed to vanish until a pickup resynced). Inventory_SetHotbarIndex now
+  no-ops while SurvivalTest_Enabled - survival owns its single 9-slot hotbar.
+- **Complete item definitions table** (IndevTest.c): all 62 in-20100223
+  items from Item.java's static init - tools/swords/hoes in 5 tiers (param =
+  tier; maxDamage = 32 << tier per ItemTool.java:14), flint&steel, bow/arrow,
+  materials, foods (apple heals 4, bread 5, soup 10 - NO porkchop in this
+  version), seeds/wheat, 5 armor sets (param = piece). Single-stack kinds
+  seed max stack 1, everything else 64. Data-driven for later steps
+  (durability, eating, sprites) and eventual server overrides.
+- NEXT (step 3b): items.png sprite rendering in hotbar/hand/drops, then
+  drops carrying item ids.
+
 ### ItemStack refactor - step 2 landed
 - Every block-consuming site now routes through ST_ID_BLOCK (SlotBlock,
   hotbar sync, TryEat, death drops - the last skips item-id stacks until

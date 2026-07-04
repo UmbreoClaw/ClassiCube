@@ -1,4 +1,5 @@
 #include "Inventory.h"
+#include "SurvivalTest.h"
 #include "Funcs.h"
 #include "Game.h"
 #include "Block.h"
@@ -23,7 +24,11 @@ void Inventory_SetSelectedIndex(int index) {
 }
 
 void Inventory_SetHotbarIndex(int index) {
+	/* Survival's 9-slot hotbar mirrors its own inventory - switching to the
+	    engine's alternate hotbar rows would desync the two (blocks appear to
+	    vanish until picked up again), so hotbar cycling is disabled there. */
 	if (!Inventory_CheckChangeSelected() || Game_ClassicMode) return;
+	if (SurvivalTest_Enabled) return;
 	Inventory.Offset = index * INVENTORY_BLOCKS_PER_HOTBAR;
 	Event_RaiseVoid(&UserEvents.HeldBlockChanged);
 }
