@@ -84,6 +84,17 @@ Specific systems ported so far:
 | Mob footsteps | Every mob plays step sounds while walking, within the genuine 32-block radius |
 | Inventory | Nine-slot hotbar with stack counts (36 slots with the optional Enhanced screen), no crafting |
 
+### In progress: Indev mode
+
+Work has begun on a second gamemode: **Minecraft Indev (in-20100223)** — the
+last Indev version — layered on top of the survival core above. The plumbing
+(mode flag, component, per-block hardness as overridable runtime data) is in;
+next up are ItemStacks, tools & durability, crafting, and the day/night
+cycle, each cross-referenced against deobfuscated Indev source the same way
+the c0.30-s work was. The design keeps per-block/per-mob data in runtime
+tables so custom blocks and mobs (e.g. from an MCGalaxy server over CPE, once
+multiplayer support lands) can plug in without code changes.
+
 ### Screenshots
 
 > **[ Screenshot placeholder — launcher main screen with Survival mode ON ]**

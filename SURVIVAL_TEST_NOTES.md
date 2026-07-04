@@ -36,9 +36,18 @@ core. Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (fetched to
   plugin; the client keeps HUD/rendering/break-progress hooks reusable.
 
 ### Phase plan (agreed)
-mode plumbing (DONE) -> ItemStack refactor -> tools/durability/mob item
-drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces ->
-fire/farming/bow/armor -> polish.
+mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
+mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
+-> fire/farming/bow/armor -> polish.
+
+### ItemStack refactor - design (step 1 landed)
+Indev inventories hold ItemStack(id, count, damage) where id spans blocks
+(0..255) AND items (256+, e.g. 256+16=porkchop style shifted ids). Step 1:
+`struct SurvivalSlot` becomes `{ cc_uint16 id; cc_int16 count, damage }` with
+ST_ID_IS_BLOCK/ST_ID_BLOCK helpers; behaviour unchanged (ids are always
+blocks in c0.30 mode). Later steps: item definitions table (max stack,
+tool tier, food value...), items.png sprite rendering in hotbar/hand/drops,
+drops carrying full stacks, tool damage on use.
 
 ---
 
