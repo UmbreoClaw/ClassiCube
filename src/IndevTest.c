@@ -44,42 +44,62 @@ enum IndevItemKind {
 	ITEM_KIND_AXE, ITEM_KIND_HOE, ITEM_KIND_FLINTSTEEL, ITEM_KIND_BOW,
 	ITEM_KIND_FOOD, ITEM_KIND_SOUP, ITEM_KIND_ARMOR, ITEM_KIND_SEEDS
 };
-struct IndevItemDef { cc_uint8 id, kind, param; const char* name; };
+struct IndevItemDef { cc_uint8 id, kind, param; cc_uint8 icon; const char* name; };
 /* param = tool tier / food heal amount / armor type; 0 otherwise */
 static const struct IndevItemDef indevItems[] = {
-	{  0, ITEM_KIND_SHOVEL,    2, "Iron Shovel"  }, {  1, ITEM_KIND_PICKAXE, 2, "Iron Pickaxe" },
-	{  2, ITEM_KIND_AXE,       2, "Iron Axe"     }, {  3, ITEM_KIND_FLINTSTEEL, 0, "Flint and Steel" },
-	{  4, ITEM_KIND_FOOD,      4, "Apple"        }, {  5, ITEM_KIND_BOW,     0, "Bow"       },
-	{  6, ITEM_KIND_MATERIAL,  0, "Arrow"        }, {  7, ITEM_KIND_MATERIAL, 0, "Coal"     },
-	{  8, ITEM_KIND_MATERIAL,  0, "Diamond"      }, {  9, ITEM_KIND_MATERIAL, 0, "Iron Ingot" },
-	{ 10, ITEM_KIND_MATERIAL,  0, "Gold Ingot"   }, { 11, ITEM_KIND_SWORD,   2, "Iron Sword" },
-	{ 12, ITEM_KIND_SWORD,     0, "Wooden Sword" }, { 13, ITEM_KIND_SHOVEL,  0, "Wooden Shovel" },
-	{ 14, ITEM_KIND_PICKAXE,   0, "Wooden Pickaxe" }, { 15, ITEM_KIND_AXE,   0, "Wooden Axe" },
-	{ 16, ITEM_KIND_SWORD,     1, "Stone Sword"  }, { 17, ITEM_KIND_SHOVEL,  1, "Stone Shovel" },
-	{ 18, ITEM_KIND_PICKAXE,   1, "Stone Pickaxe" }, { 19, ITEM_KIND_AXE,    1, "Stone Axe" },
-	{ 20, ITEM_KIND_SWORD,     3, "Diamond Sword" }, { 21, ITEM_KIND_SHOVEL, 3, "Diamond Shovel" },
-	{ 22, ITEM_KIND_PICKAXE,   3, "Diamond Pickaxe" }, { 23, ITEM_KIND_AXE,  3, "Diamond Axe" },
-	{ 24, ITEM_KIND_MATERIAL,  0, "Stick"        }, { 25, ITEM_KIND_MATERIAL, 0, "Bowl"     },
-	{ 26, ITEM_KIND_SOUP,     10, "Mushroom Soup" }, { 27, ITEM_KIND_SWORD,  0, "Golden Sword" },
-	{ 28, ITEM_KIND_SHOVEL,    0, "Golden Shovel" }, { 29, ITEM_KIND_PICKAXE, 0, "Golden Pickaxe" },
-	{ 30, ITEM_KIND_AXE,       0, "Golden Axe"   }, { 31, ITEM_KIND_MATERIAL, 0, "String"   },
-	{ 32, ITEM_KIND_MATERIAL,  0, "Feather"      }, { 33, ITEM_KIND_MATERIAL, 0, "Gunpowder" },
-	{ 34, ITEM_KIND_HOE,       0, "Wooden Hoe"   }, { 35, ITEM_KIND_HOE,     1, "Stone Hoe" },
-	{ 36, ITEM_KIND_HOE,       2, "Iron Hoe"     }, { 37, ITEM_KIND_HOE,     3, "Diamond Hoe" },
-	{ 38, ITEM_KIND_HOE,       4, "Golden Hoe"   }, { 39, ITEM_KIND_SEEDS,   0, "Seeds"     },
-	{ 40, ITEM_KIND_MATERIAL,  0, "Wheat"        }, { 41, ITEM_KIND_FOOD,    5, "Bread"     },
+	{  0, ITEM_KIND_SHOVEL, 2,  82, "Iron Shovel" }, {  1, ITEM_KIND_PICKAXE, 2,  98, "Iron Pickaxe" },
+	{  2, ITEM_KIND_AXE, 2, 114, "Iron Axe" }, {  3, ITEM_KIND_FLINTSTEEL, 0,   5, "Flint and Steel" },
+	{  4, ITEM_KIND_FOOD, 4,   4, "Apple" }, {  5, ITEM_KIND_BOW, 0,  21, "Bow" },
+	{  6, ITEM_KIND_MATERIAL, 0,  37, "Arrow" }, {  7, ITEM_KIND_MATERIAL, 0,   7, "Coal" },
+	{  8, ITEM_KIND_MATERIAL, 0,  55, "Diamond" }, {  9, ITEM_KIND_MATERIAL, 0,  23, "Iron Ingot" },
+	{ 10, ITEM_KIND_MATERIAL, 0,  39, "Gold Ingot" }, { 11, ITEM_KIND_SWORD, 2,  66, "Iron Sword" },
+	{ 12, ITEM_KIND_SWORD, 0,  64, "Wooden Sword" }, { 13, ITEM_KIND_SHOVEL, 0,  80, "Wooden Shovel" },
+	{ 14, ITEM_KIND_PICKAXE, 0,  96, "Wooden Pickaxe" }, { 15, ITEM_KIND_AXE, 0, 112, "Wooden Axe" },
+	{ 16, ITEM_KIND_SWORD, 1,  65, "Stone Sword" }, { 17, ITEM_KIND_SHOVEL, 1,  81, "Stone Shovel" },
+	{ 18, ITEM_KIND_PICKAXE, 1,  97, "Stone Pickaxe" }, { 19, ITEM_KIND_AXE, 1, 113, "Stone Axe" },
+	{ 20, ITEM_KIND_SWORD, 3,  67, "Diamond Sword" }, { 21, ITEM_KIND_SHOVEL, 3,  83, "Diamond Shovel" },
+	{ 22, ITEM_KIND_PICKAXE, 3,  99, "Diamond Pickaxe" }, { 23, ITEM_KIND_AXE, 3, 115, "Diamond Axe" },
+	{ 24, ITEM_KIND_MATERIAL, 0,  53, "Stick" }, { 25, ITEM_KIND_MATERIAL, 0,  71, "Bowl" },
+	{ 26, ITEM_KIND_SOUP, 10,  72, "Mushroom Soup" }, { 27, ITEM_KIND_SWORD, 0,  68, "Golden Sword" },
+	{ 28, ITEM_KIND_SHOVEL, 0,  84, "Golden Shovel" }, { 29, ITEM_KIND_PICKAXE, 0, 100, "Golden Pickaxe" },
+	{ 30, ITEM_KIND_AXE, 0, 116, "Golden Axe" }, { 31, ITEM_KIND_MATERIAL, 0,   8, "String" },
+	{ 32, ITEM_KIND_MATERIAL, 0,  24, "Feather" }, { 33, ITEM_KIND_MATERIAL, 0,  40, "Gunpowder" },
+	{ 34, ITEM_KIND_HOE, 0, 128, "Wooden Hoe" }, { 35, ITEM_KIND_HOE, 1, 129, "Stone Hoe" },
+	{ 36, ITEM_KIND_HOE, 2, 130, "Iron Hoe" }, { 37, ITEM_KIND_HOE, 3, 131, "Diamond Hoe" },
+	{ 38, ITEM_KIND_HOE, 4, 132, "Golden Hoe" }, { 39, ITEM_KIND_SEEDS, 0,   9, "Seeds" },
+	{ 40, ITEM_KIND_MATERIAL, 0,  25, "Wheat" }, { 41, ITEM_KIND_FOOD, 5,  41, "Bread" },
 	/* 42-61: armor - ItemArmor(id, tier, texRow, piece 0=helmet..3=boots) */
-	{ 42, ITEM_KIND_ARMOR, 0, "Leather Cap" },    { 43, ITEM_KIND_ARMOR, 1, "Leather Tunic" },
-	{ 44, ITEM_KIND_ARMOR, 2, "Leather Pants" },  { 45, ITEM_KIND_ARMOR, 3, "Leather Boots" },
-	{ 46, ITEM_KIND_ARMOR, 0, "Chain Helmet" },   { 47, ITEM_KIND_ARMOR, 1, "Chain Chestplate" },
-	{ 48, ITEM_KIND_ARMOR, 2, "Chain Leggings" }, { 49, ITEM_KIND_ARMOR, 3, "Chain Boots" },
-	{ 50, ITEM_KIND_ARMOR, 0, "Iron Helmet" },    { 51, ITEM_KIND_ARMOR, 1, "Iron Chestplate" },
-	{ 52, ITEM_KIND_ARMOR, 2, "Iron Leggings" },  { 53, ITEM_KIND_ARMOR, 3, "Iron Boots" },
-	{ 54, ITEM_KIND_ARMOR, 0, "Diamond Helmet" }, { 55, ITEM_KIND_ARMOR, 1, "Diamond Chestplate" },
-	{ 56, ITEM_KIND_ARMOR, 2, "Diamond Leggings" },{ 57, ITEM_KIND_ARMOR, 3, "Diamond Boots" },
-	{ 58, ITEM_KIND_ARMOR, 0, "Golden Helmet" },  { 59, ITEM_KIND_ARMOR, 1, "Golden Chestplate" },
-	{ 60, ITEM_KIND_ARMOR, 2, "Golden Leggings" },{ 61, ITEM_KIND_ARMOR, 3, "Golden Boots" },
+	{ 42, ITEM_KIND_ARMOR, 0,   0, "Leather Cap" },    { 43, ITEM_KIND_ARMOR, 1,  16, "Leather Tunic" },
+	{ 44, ITEM_KIND_ARMOR, 2,  32, "Leather Pants" },  { 45, ITEM_KIND_ARMOR, 3,  48, "Leather Boots" },
+	{ 46, ITEM_KIND_ARMOR, 0,   1, "Chain Helmet" },   { 47, ITEM_KIND_ARMOR, 1,  17, "Chain Chestplate" },
+	{ 48, ITEM_KIND_ARMOR, 2,  33, "Chain Leggings" }, { 49, ITEM_KIND_ARMOR, 3,  49, "Chain Boots" },
+	{ 50, ITEM_KIND_ARMOR, 0,   2, "Iron Helmet" },    { 51, ITEM_KIND_ARMOR, 1,  18, "Iron Chestplate" },
+	{ 52, ITEM_KIND_ARMOR, 2,  34, "Iron Leggings" },  { 53, ITEM_KIND_ARMOR, 3,  50, "Iron Boots" },
+	{ 54, ITEM_KIND_ARMOR, 0,   3, "Diamond Helmet" }, { 55, ITEM_KIND_ARMOR, 1,  19, "Diamond Chestplate" },
+	{ 56, ITEM_KIND_ARMOR, 2,  35, "Diamond Leggings" },{ 57, ITEM_KIND_ARMOR, 3,  51, "Diamond Boots" },
+	{ 58, ITEM_KIND_ARMOR, 0,   4, "Golden Helmet" },  { 59, ITEM_KIND_ARMOR, 1,  20, "Golden Chestplate" },
+	{ 60, ITEM_KIND_ARMOR, 2,  36, "Golden Leggings" },{ 61, ITEM_KIND_ARMOR, 3,  52, "Golden Boots" },
+	/* The tail entries the first pass missed - porkchops DO exist in Indev */
+	{ 62, ITEM_KIND_MATERIAL, 0,   6, "Flint" },
+	{ 63, ITEM_KIND_FOOD,     3,  87, "Raw Porkchop" },
+	{ 64, ITEM_KIND_FOOD,     8,  88, "Cooked Porkchop" },
+	{ 65, ITEM_KIND_MATERIAL, 0,  26, "Painting" },
 };
+
+/* items.png is a 16x16 grid of 16px sprites (icons 128+ live on row 8+). */
+/* Returns false when the id isn't a known item (or is a block id). */
+cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2) {
+	int i, icon = -1, local = id - 256;
+	if (local < 0) return false;
+	for (i = 0; i < (int)Array_Elems(indevItems); i++) {
+		if (indevItems[i].id == local) { icon = indevItems[i].icon; break; }
+	}
+	if (icon < 0) return false;
+
+	*u1 = (icon % 16)       / 16.0f; *v1 = (icon / 16)       / 16.0f;
+	*u2 = (icon % 16 + 1)   / 16.0f; *v2 = (icon / 16 + 1)   / 16.0f;
+	return true;
+}
 
 static cc_bool IndevItem_StacksToOne(cc_uint8 kind) {
 	return kind == ITEM_KIND_SWORD || kind == ITEM_KIND_SHOVEL || kind == ITEM_KIND_PICKAXE ||

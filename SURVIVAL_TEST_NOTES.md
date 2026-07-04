@@ -40,6 +40,21 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### ItemStack refactor - step 3b COMPLETE (rendering foundation)
+- **Full iconIndex mapping recovered** from Item.java's init, including the
+  tail the first pass missed: flint (62, icon 6), RAW/COOKED PORKCHOP (63/64,
+  icons 87/88, heal 3/8 - the earlier "no porkchop in this version" note was
+  WRONG), painting (65, icon 26). Hoes assign icons via a separate variable
+  (128-132, row 8 of the atlas) which is why the first extraction missed
+  them. Roster now 66 items, each with kind/param/icon.
+- `IndevTest_ItemSpriteUV(id, &u1,&v1,&u2,&v2)`: atlas UVs on the 16x16-cell
+  items.png grid; false for unknown/block ids. `SurvivalTest_SlotId(slot)`
+  exposes the raw id so HUD/drop renderers can branch item-vs-block.
+- Visible wiring (hotbar quads, drop sprite entities, held item) lands
+  together with the first mechanic that actually PUTS an item id in a slot
+  (mob porkchop drops / tool crafting) so it can be tested for real rather
+  than dead code. items.png auto-provision patcher still planned per below.
+
 ### ItemStack refactor - step 3b started: items.png plumbing
 - `items.png` registered as a TextureEntry in the Indev layer (texture packs
   can supply it now); `IndevTest_ItemsTex()` exposes the texture id and all

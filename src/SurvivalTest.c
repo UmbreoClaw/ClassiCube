@@ -3302,6 +3302,8 @@ int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
 /* Returns the BLOCK in a slot - BLOCK_AIR when the slot holds a (future) */
 /*  item id, so block-only consumers can never misread an item as a block. */
 BlockID SurvivalTest_SlotBlock(int slot) { return ST_ID_BLOCK(st_inv[slot].id); }
+/* Raw id (block OR item) - item-sprite renderers key off this + ST_ID range */
+int SurvivalTest_SlotId(int slot) { return st_inv[slot].id; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
