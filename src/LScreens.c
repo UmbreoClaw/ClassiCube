@@ -223,12 +223,13 @@ static void SurvivalMode_Click(void* w_) {
 	LButton_SetConst(w, enabled ? "Survival: ON" : "Survival: OFF");
 }
 
-static void UseModeIndev(void* w);
-
-CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) {
+CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks, cc_bool indev) {
 	Options_PauseSaving();
 		Options_SetBool(OPT_CLASSIC_MODE, classic);
-		Options_SetBool(OPT_INDEV_MODE, false); /* Indev is only entered via its own button */
+		/* The four buttons are exclusive MODES: picking any of them decides */
+		/*  both survival flags (Indev implies the survival core at runtime). */
+		Options_SetBool(OPT_INDEV_MODE, indev);
+		if (indev) Options_SetBool(OPT_SURVIVAL_MODE, false);
 		if (classic) Options_SetBool(OPT_CLASSIC_HACKS, classicHacks);
 
 		Options_SetBool(OPT_CUSTOM_BLOCKS,   !classic);
@@ -244,19 +245,10 @@ CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) 
 	MainScreen_SetActive();
 }
 
-static void UseModeEnhanced(void* w)   { ChooseMode_Click(false, false); }
-static void UseModeClassicHax(void* w) { ChooseMode_Click(true,  true);  }
-static void UseModeClassic(void* w)    { ChooseMode_Click(true,  false); }
-
-/* Indev is a full MODE (not a toggle): non-classic engine settings + the
-    indev-mode flag on (which implies the survival core), survival-mode off. */
-static void UseModeIndev(void* w) {
-	Options_PauseSaving();
-		Options_SetBool(OPT_SURVIVAL_MODE, false);
-		Options_SetBool(OPT_INDEV_MODE,    true);
-	Options_ResumeSaving();
-	ChooseMode_Click(false, false);
-}
+static void UseModeEnhanced(void* w)   { ChooseMode_Click(false, false, false); }
+static void UseModeClassicHax(void* w) { ChooseMode_Click(true,  true,  false); }
+static void UseModeClassic(void* w)    { ChooseMode_Click(true,  false, false); }
+static void UseModeIndev(void* w)      { ChooseMode_Click(false, false, true);  }
 
 static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	struct ChooseModeScreen* s = (struct ChooseModeScreen*)s_;

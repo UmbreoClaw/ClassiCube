@@ -40,6 +40,18 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### BUG FIX: Indev launcher button never actually enabled the mode
+UseModeIndev set indev-mode=true and then routed through ChooseMode_Click,
+which unconditionally cleared it - so the button was a no-op and no feature
+ever saw the flag. ChooseMode_Click now takes an `indev` parameter and all
+four mode buttons are exclusive through the ONE code path (Indev also forces
+survival-mode off; the Survival toggle still clears indev-mode).
+Verified flag chain: launcher writes indev-mode -> IndevTest_Component
+(registered before SurvivalTest) reads it -> SurvivalTest core activates on
+survival||indev -> gated features: item defs seeding + items.png entry
+(IndevTest.c), pig porkchop drops + item eating (SurvivalTest.c), hotbar
+icons + "Minecraft Indev" corner label (Screens.c).
+
 ### items.png auto-download LANDED (no texture pack needed anymore)
 - The in-20100223 jar keeps its atlas at /gui/items.png INSIDE the jar (user
   correctly found no loose file). Neither already-downloaded jar has it
