@@ -40,6 +40,31 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### FIRST TESTABLE INDEV FEATURE: pig -> porkchop, end-to-end item pipeline
+- **Pig death in Indev mode** drops 0-2 RAW PORKCHOPS (EntityLiving.onDeath:
+  rand(3) of scoreValue-as-item-id; item 63) instead of c0.30 mushrooms.
+- **Item-id drop entities**: DropItem.block widened to the full id space;
+  item drops render as billboard SPRITES from items.png (Indev EntityItem
+  style, bobbing like the cubes) via a new pass modeled on the smoke
+  renderer. Block drops unchanged. Sprites bail without an items.png
+  (supply one via texture pack until the Resources patcher lands).
+- **Pickup** generalised (AddItem over the id space; AddBlock is a macro
+  wrapper); death scatter now includes item stacks.
+- **Eating**: TryEat checks IndevTest_ItemFoodHeal first - raw porkchop
+  heals 3, cooked 8 (soup bowl-return TODO).
+- **Hotbar item icons**: immediate Texture_Render quads over slots holding
+  item ids (slots are engine-AIR there, so no cube behind).
+- **"Minecraft Indev" corner label** top-left whenever the F3/FPS line is
+  hidden (body font, x/y = 2).
+- **Launcher**: Indev is a separate MODE button ("Indev (WIP)", next to the
+  Survival toggle on the Choose Mode screen; sets indev-mode on + survival
+  off + non-classic engine mode). Survival toggle clears indev-mode;
+  Enhanced/Classic modes clear it too. The survival-row description now
+  covers both.
+- TEST PATH: launcher -> Choose Mode -> Indev (WIP); needs a texture pack
+  with items.png for sprites; kill a pig, walk over the porkchop, watch the
+  hotbar icon, right-click to eat (heal 3).
+
 ### ItemStack refactor - step 3b COMPLETE (rendering foundation)
 - **Full iconIndex mapping recovered** from Item.java's init, including the
   tail the first pass missed: flint (62, icon 6), RAW/COOKED PORKCHOP (63/64,

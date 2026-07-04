@@ -25,6 +25,7 @@
 #include "InputHandler.h"
 #include "Protocol.h"
 #include "SurvivalTest.h"
+#include "IndevTest.h"
 #include "IsometricDrawer.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
@@ -86,7 +87,7 @@ static struct HUDScreen {
 	struct HotbarWidget hotbar;
 	/* Survival HUD text labels, rasterised on change like line1/line2: */
 	/*  "Score: &eN" top-right and "Arrows: N" beside the heart row. */
-	struct TextWidget score, arrows;
+	struct TextWidget score, arrows, indevTitle;
 	int heartCount;     /* number of heart vertices built last frame */
 	int countVertices;  /* number of stack-count vertices built last frame */
 	int bubbleCount;    /* number of air-bubble vertices built last frame */
@@ -269,6 +270,13 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	/* Survival Score / Arrows label textures (rebuilt here since ContextLost */
 	/*  freed them); their text is refreshed on change in HUDScreen_Update. */
 	HUDScreen_RemakeScore(s);
+	if (IndevTest_Enabled) {
+		struct FontDesc font;
+		Gui_MakeBodyFont(&font);
+		TextWidget_SetConst(&s->indevTitle, "Minecraft Indev", &font);
+		s->indevTitle.tex.x = 2; s->indevTitle.tex.y = 2;
+		Font_Free(&font);
+	}
 	HUDScreen_RemakeArrows(s);
 }
 
@@ -369,6 +377,7 @@ static void HUDScreen_Init(void* screen) {
 	TextWidget_Init(&s->line1);
 	TextWidget_Init(&s->line2);
 	TextWidget_Init(&s->score);
+	TextWidget_Init(&s->indevTitle);
 	TextWidget_Init(&s->arrows);
 
 	s->line1.flags  |= WIDGET_FLAG_MAINSCREEN;
@@ -802,6 +811,35 @@ static void HUDScreen_Render(void* screen, float delta) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+		}
+
+		/* Indev: item sprites over hotbar slots holding item ids (256+). */
+		/*  Drawn as immediate textures - slots are engine BLOCK_AIR there, so */
+		/*  nothing else occupies the cell. Bails without an items.png. */
+		if (IndevTest_Enabled && IndevTest_ItemsTex()) {
+			struct Texture itex;
+			float slotW = s->hotbar.width / (float)INVENTORY_BLOCKS_PER_HOTBAR;
+			int size = (int)(slotW * 0.72f), k;
+
+			for (k = 0; k < SURVIVAL_HOTBAR_SLOTS; k++) {
+				int id = SurvivalTest_SlotId(k);
+				if (id < 256) continue;
+				if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
+
+				itex.ID     = IndevTest_ItemsTex();
+				itex.x      = (short)(s->hotbar.x + k * slotW + (slotW - size) / 2);
+				itex.y      = (short)(s->hotbar.y + (s->hotbar.height - size) / 2);
+				itex.width  = (cc_uint16)size;
+				itex.height = (cc_uint16)size;
+				Texture_Render(&itex);
+			}
+			Gfx_BindDynamicVb(s->vb);
+		}
+
+		/* "Minecraft Indev" top-left, only while the F3/FPS line is hidden */
+		if (IndevTest_Enabled && !Gui.ShowFPS && s->indevTitle.tex.ID) {
+			Texture_Render(&s->indevTitle.tex);
+			Gfx_BindDynamicVb(s->vb);
 		}
 
 		/* Draw survival health hearts above the hotbar */

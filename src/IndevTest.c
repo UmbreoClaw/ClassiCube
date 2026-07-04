@@ -101,6 +101,20 @@ cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v
 	return true;
 }
 
+/* Heal amount when the id is an edible item (ItemFood/ItemSoup param), 0 */
+/*  otherwise. Soup also returns the empty bowl in genuine - TODO with bowls. */
+int IndevTest_ItemFoodHeal(int id) {
+	int i, local = id - 256;
+	if (!IndevTest_Enabled || local < 0) return 0;
+	for (i = 0; i < (int)Array_Elems(indevItems); i++) {
+		if (indevItems[i].id != local) continue;
+		if (indevItems[i].kind == ITEM_KIND_FOOD || indevItems[i].kind == ITEM_KIND_SOUP)
+			return indevItems[i].param;
+		return 0;
+	}
+	return 0;
+}
+
 static cc_bool IndevItem_StacksToOne(cc_uint8 kind) {
 	return kind == ITEM_KIND_SWORD || kind == ITEM_KIND_SHOVEL || kind == ITEM_KIND_PICKAXE ||
 	       kind == ITEM_KIND_AXE   || kind == ITEM_KIND_HOE    || kind == ITEM_KIND_FLINTSTEEL ||

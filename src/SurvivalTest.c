@@ -127,7 +127,8 @@ static RNGState st_dropRng;
 static RNGState st_mobRng;
 /* Defined later, in the Inventory section - forward declared so the */
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
-static cc_bool SurvivalTest_AddBlock(BlockID block);
+static cc_bool SurvivalTest_AddItem(cc_uint16 id);
+#define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
 /* Defined later, in the Ticking section - forward declared so the Mobs */
 /*  section below (which ticks before Ticking is reached) can reuse it. */
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
@@ -141,6 +142,9 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 /*  arm a shorter, randomized fuse instead of the full PrimedTnt default. */
 static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks);
 #define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
+/* Defined later (TNT section, where its billboard-render siblings live) - */
+/*  forward declared so RenderDrops above it can draw item-id drop sprites. */
+static void SurvivalTest_RenderItemDropSprites(float t);
 
 /* Entity.isInWater()/isInLava(): the liquid test box is bb.grow(0, -0.4, 0) - */
 /*  shrunk 0.4 blocks at both top and bottom - so sliver contact at the feet */
@@ -195,7 +199,9 @@ struct DropItem {
 	                 /*  pickup fly-in, which only steps ~3 ticks) move smoothly every frame */
 	                 /*  instead of at the 20 Hz tick rate. */
 	Vec3 velocity;
-	BlockID block;
+	cc_uint16 block;  /* full id space: a BLOCK id (rendered as the spinning */
+	                  /*  cube) or an ITEM id 256+ (rendered as a billboard */
+	                  /*  sprite from items.png, Indev EntityItem style) */
 	int  count;      /* Item.count - how many blocks this one drop entity carries */
 	                 /*  (death scatters one drop per slot with its full stack) */
 	float age;       /* seconds alive - drives spin/bob/glow */
@@ -384,7 +390,7 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 /*  velocity: xd/zd = rand*0.2-0.1 and yd = 0.2 blocks/tick, i.e. each */
 /*  horizontal axis independently uniform in +/-2 blocks/sec and a fixed 4 */
 /*  blocks/sec vertical hop. */
-static void SurvivalTest_SpawnDropAt(Vec3 pos, BlockID block, int count) {
+static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	struct DropItem* d;
 	int slot = SurvivalTest_FindFreeDropSlot(); /* always succeeds - evicts the oldest when full */
 
@@ -649,7 +655,8 @@ static void SurvivalTest_UpdateItem1DCounts(void) {
 
 	for (i = 0; i < DROP_MAX; i++) {
 		if (!st_drops[i].active) continue;
-		index = Atlas1D_Index(Block_Tex(st_drops[i].block, FACE_XMIN));
+		if (!ST_ID_IS_BLOCK(st_drops[i].block)) continue; /* sprite pass instead */
+		index = Atlas1D_Index(Block_Tex((BlockID)st_drops[i].block, FACE_XMIN));
 		item_1DCount[index] += ITEM_VERTICES_PER_DROP;
 	}
 	for (i = 1; i < Atlas1D.Count; i++) {
@@ -769,7 +776,7 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 
 void SurvivalTest_RenderDrops(float delta, float t) {
 	if (!SurvivalTest_Enabled) return;
-	SurvivalTest_RenderDropBlocks(t);
+	SurvivalTest_RenderDropBlocks(t);	SurvivalTest_RenderItemDropSprites(t);
 }
 
 
@@ -804,10 +811,7 @@ static void SurvivalTest_DropInventory(void) {
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		if (st_inv[i].id == BLOCK_AIR || st_inv[i].count <= 0) continue;
-		/* Item-id drops need sprite drop entities (ItemStack refactor step 3) - */
-		/*  until then only block stacks scatter on death. */
-		if (!ST_ID_IS_BLOCK(st_inv[i].id)) continue;
-		SurvivalTest_SpawnDropAt(pos, (BlockID)st_inv[i].id, st_inv[i].count);
+		SurvivalTest_SpawnDropAt(pos, st_inv[i].id, st_inv[i].count);
 	}
 }
 
@@ -1384,6 +1388,62 @@ static void SurvivalTest_RenderTntGlow(float t) {
 
 /* The rising smoke puffs - drawn as alpha-tested billboards off particles.png, */
 /*  exactly like the original SmokeParticle (greyed by the world's lighting). */
+/* Indev EntityItem-style billboard sprites for drops carrying ITEM ids - */
+/*  drawn from items.png with the same interpolated position/bob the block */
+/*  cubes use. Bails while no items.png is loaded (texture packs supply it). */
+#define ITEMDROP_MAX_VERTICES (DROP_MAX * 4)
+static GfxResourceID st_itemDropVB;
+
+static void SurvivalTest_RenderItemDropSprites(float t) {
+	struct VertexTextured* data;
+	struct VertexTextured* ptr;
+	struct DropItem* d;
+	GfxResourceID tex = IndevTest_ItemsTex();
+	TextureRec rec;
+	Vec3 pos;
+	Vec2 size;
+	float renderAge, bob;
+	int i, count = 0;
+	cc_bool any = false;
+
+	if (!tex) return;
+	for (i = 0; i < DROP_MAX; i++) {
+		if (st_drops[i].active && !ST_ID_IS_BLOCK(st_drops[i].block)) { any = true; break; }
+	}
+	if (!any) return;
+
+	if (!st_itemDropVB) {
+		st_itemDropVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, ITEMDROP_MAX_VERTICES);
+	}
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemDropVB, VERTEX_FORMAT_TEXTURED, ITEMDROP_MAX_VERTICES);
+	ptr  = data;
+
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active || ST_ID_IS_BLOCK(d->block)) continue;
+		if (!IndevTest_ItemSpriteUV(d->block, &rec.u1, &rec.v1, &rec.u2, &rec.v2)) continue;
+
+		Vec3_Lerp(&pos, &d->prevPos, &d->position, t);
+		renderAge = Math_Lerp(d->prevAge, d->age, t);
+		/* same bob the block cubes use (sin(phase/10) * 0.1 + 0.1) */
+		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
+		pos.y += bob + 0.125f;
+
+		size.x = 0.25f; size.y = 0.25f;
+		Particle_DoRender(&size, &pos, &rec, DropItem_WorldColor(&pos), ptr);
+		ptr   += 4;
+		count += 4;
+	}
+	Gfx_BindTexture(tex);
+	Gfx_UnlockDynamicVb(st_itemDropVB);
+	if (!count) return;
+
+	Gfx_SetAlphaTest(true);
+	Gfx_DrawVb_IndexedTris(count);
+	Gfx_SetAlphaTest(false);
+}
+
 static void SurvivalTest_RenderTntSmoke(float t) {
 	struct VertexTextured* data;
 	struct VertexTextured* ptr;
@@ -1703,7 +1763,26 @@ static void Mob_SpawnDeathDrops(struct Mob* m, BlockID block) {
 /*  Sheep.die drops 1-2 white wool (NOT mushrooms - the two differ). */
 static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
 	if (playerCredit) st_score += mobTypeInfo[m->type].deathScore;
-	if (m->type == MOB_TYPE_PIG)   Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
+	if (m->type == MOB_TYPE_PIG) {
+		if (IndevTest_Enabled) {
+			/* Indev EntityLiving.onDeath: rand(3) = 0-2 of the drop item - */
+			/*  pigs drop RAW PORKCHOP (item id 63). First item in the game! */
+			IVec3 c;
+			int n = Random_Next(&st_mobRng, 3), k;
+			c.x = Math_Floor(m->Base.Position.x);
+			c.y = Math_Floor(m->Base.Position.y);
+			c.z = Math_Floor(m->Base.Position.z);
+			for (k = 0; k < n; k++) {
+				Vec3 pos;
+				pos.x = c.x + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				pos.y = c.y + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				pos.z = c.z + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				SurvivalTest_SpawnDropAt(pos, 256 + 63, 1);
+			}
+		} else {
+			Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
+		}
+	}
 	if (m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_WHITE);
 }
 
@@ -3338,7 +3417,7 @@ void SurvivalTest_SwapSlots(int a, int b) {
 /*  possible, otherwise fills the first empty slot (hotbar slots first). */
 /* Returns whether it was accepted - Inventory.addResource() returns false on */
 /*  a full inventory, and Item.playerTouch then leaves the drop on the ground. */
-static cc_bool SurvivalTest_AddBlock(BlockID block) {
+static cc_bool SurvivalTest_AddItem(cc_uint16 block) {
 	int i;
 	if (block == BLOCK_AIR) return true;
 
@@ -3387,6 +3466,17 @@ cc_bool SurvivalTest_TryEat(void) {
 	/*  Red is player.hurt(null, 3) - an ordinary hurt that respects (and */
 	/*  re-arms) the invulnerability window, so it can't be spam-eaten faster */
 	/*  than any other damage source. */
+	/* Indev item foods first: porkchops/bread/apple heal their defs value */
+	if (IndevTest_Enabled) {
+		int heal = IndevTest_ItemFoodHeal(st_inv[slot].id);
+		if (heal > 0) {
+			SurvivalTest_Heal(heal);
+			SurvivalTest_ConsumeSelected();
+			HeldBlockRenderer_ClickAnim(false);
+			return true;
+		}
+	}
+
 	if (block == BLOCK_BROWN_SHROOM) {
 		SurvivalTest_Heal(5);            /* brown mushroom restores 5 HP */
 	} else if (block == BLOCK_RED_SHROOM) {
@@ -3964,6 +4054,7 @@ static void SurvivalTest_ResetState(void) {
 /*  whenever the graphics context is lost (it is rebuilt lazily on render). */
 static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_itemVB);
+	Gfx_DeleteDynamicVb(&st_itemDropVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
 	Gfx_DeleteDynamicVb(&st_tntGlowVB);

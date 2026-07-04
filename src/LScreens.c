@@ -184,12 +184,12 @@ static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
 static struct ChooseModeScreen {
 	LScreen_Layout
 	struct LLine seps[2];
-	struct LButton btnEnhanced, btnClassicHax, btnClassic, btnSurvival, btnBack;
+	struct LButton btnEnhanced, btnClassicHax, btnClassic, btnSurvival, btnIndev, btnBack;
 	struct LLabel  lblHelp, lblEnhanced[2], lblClassicHax[2], lblClassic[2], lblSurvival[2];
 	cc_bool firstTime;
 } ChooseModeScreen CC_BIG_VAR;
 
-#define CHOOSEMODE_SCREEN_MAX_WIDGETS 15
+#define CHOOSEMODE_SCREEN_MAX_WIDGETS 16
 static struct LWidget* chooseMode_widgets[CHOOSEMODE_SCREEN_MAX_WIDGETS];
 
 LAYOUTS mode_seps0[] = { { ANCHOR_CENTRE, -5 }, { ANCHOR_CENTRE, -85 } };
@@ -206,8 +206,9 @@ LAYOUTS mode_lblClassic0[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE, 
 LAYOUTS mode_lblClassic1[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,   20 + 12 } };
 
 LAYOUTS mode_btnSurvival[]  = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE,  90      } };
-LAYOUTS mode_lblSurvival0[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 - 12 } };
-LAYOUTS mode_lblSurvival1[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 + 12 } };
+LAYOUTS mode_btnIndev[]     = { { ANCHOR_CENTRE_MIN,  -95 }, { ANCHOR_CENTRE,  90      } };
+LAYOUTS mode_lblSurvival0[] = { { ANCHOR_CENTRE_MIN,   65 }, { ANCHOR_CENTRE,  90 - 12 } };
+LAYOUTS mode_lblSurvival1[] = { { ANCHOR_CENTRE_MIN,   65 }, { ANCHOR_CENTRE,  90 + 12 } };
 
 LAYOUTS mode_lblHelp[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 160 } };
 LAYOUTS mode_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 170 } };
@@ -218,12 +219,16 @@ static void SurvivalMode_Click(void* w_) {
 	cc_bool enabled = !Options_GetBool(OPT_SURVIVAL_MODE, false);
 
 	Options_SetBool(OPT_SURVIVAL_MODE, enabled);
+	if (enabled) Options_SetBool(OPT_INDEV_MODE, false); /* modes are exclusive */
 	LButton_SetConst(w, enabled ? "Survival: ON" : "Survival: OFF");
 }
+
+static void UseModeIndev(void* w);
 
 CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) {
 	Options_PauseSaving();
 		Options_SetBool(OPT_CLASSIC_MODE, classic);
+		Options_SetBool(OPT_INDEV_MODE, false); /* Indev is only entered via its own button */
 		if (classic) Options_SetBool(OPT_CLASSIC_HACKS, classicHacks);
 
 		Options_SetBool(OPT_CUSTOM_BLOCKS,   !classic);
@@ -242,6 +247,16 @@ CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks) 
 static void UseModeEnhanced(void* w)   { ChooseMode_Click(false, false); }
 static void UseModeClassicHax(void* w) { ChooseMode_Click(true,  true);  }
 static void UseModeClassic(void* w)    { ChooseMode_Click(true,  false); }
+
+/* Indev is a full MODE (not a toggle): non-classic engine settings + the
+    indev-mode flag on (which implies the survival core), survival-mode off. */
+static void UseModeIndev(void* w) {
+	Options_PauseSaving();
+		Options_SetBool(OPT_SURVIVAL_MODE, false);
+		Options_SetBool(OPT_INDEV_MODE,    true);
+	Options_ResumeSaving();
+	ChooseMode_Click(false, false);
+}
 
 static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	struct ChooseModeScreen* s = (struct ChooseModeScreen*)s_;
@@ -266,8 +281,10 @@ static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	LButton_Add(s, &s->btnSurvival, 145, 35,
 				Options_GetBool(OPT_SURVIVAL_MODE, false) ? "Survival: ON" : "Survival: OFF",
 				SurvivalMode_Click, mode_btnSurvival);
-	LLabel_Add(s,  &s->lblSurvival[0], "&eBased on Classic Survival Test - adds", mode_lblSurvival0);
-	LLabel_Add(s,  &s->lblSurvival[1], "&ehearts, hunger, mobs, and mining",      mode_lblSurvival1);
+	LButton_Add(s, &s->btnIndev, 145, 35, "Indev (WIP)",
+				UseModeIndev, mode_btnIndev);
+	LLabel_Add(s,  &s->lblSurvival[0], "&eSurvival Test gamemode, or the", mode_lblSurvival0);
+	LLabel_Add(s,  &s->lblSurvival[1], "&ein-development Indev gamemode",  mode_lblSurvival1);
 
 	if (s->firstTime) {
 		LLabel_Add(s,  &s->lblHelp, "&eClick &fEnhanced &eif you're not sure which mode to choose.", mode_lblHelp);
