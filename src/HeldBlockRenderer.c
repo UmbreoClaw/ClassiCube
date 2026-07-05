@@ -67,6 +67,10 @@ static void HeldBlockRenderer_RenderModel(void) {
 				size.x = 0.45f; size.y = 0.45f;
 				Particle_DoRender(&size, &pos, &rec, HeldBlockRenderer_GetCol(&held_entity), v);
 
+				/* Model_Render loads the view matrix itself for the block/arm */
+				/*  paths - this raw quad must load it too, or it draws with */
+				/*  whatever transform the previous entity left (offscreen). */
+				Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 				Gfx_BindTexture(IndevTest_ItemsTex());
 				Gfx_UnlockDynamicVb(itemHandVB);
 				Gfx_SetAlphaTest(true);

@@ -854,12 +854,17 @@ static void HUDScreen_Render(void* screen, float delta) {
 						PackedCol_Make((cc_uint8)(255 - v), (cc_uint8)v, 0, 255));
 				}
 			}
+			/* Texture_Render/Gfx_Draw2DFlat switch vertex format + VB - the */
+			/*  rest of the HUD (hearts/counts/bubbles) draws from s->vb in */
+			/*  TEXTURED format, so restore BOTH or those meshes corrupt. */
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 			Gfx_BindDynamicVb(s->vb);
 		}
 
 		/* "Minecraft Indev" top-left, only while the F3/FPS line is hidden */
 		if (IndevTest_Enabled && !Gui.ShowFPS && s->indevTitle.tex.ID) {
 			Texture_Render(&s->indevTitle.tex);
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 			Gfx_BindDynamicVb(s->vb);
 		}
 

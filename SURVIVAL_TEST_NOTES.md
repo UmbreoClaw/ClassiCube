@@ -40,6 +40,18 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Two regressions from the visuals batch fixed (user reports)
+- **Stack counts vanished**: Gfx_Draw2DFlat (durability bar) and
+  Texture_Render switch the pipeline to COLOURED format / another VB, and
+  the icon block only re-bound the VB - every later HUD mesh draw (counts,
+  bubbles) read TEXTURED-format vertices with the wrong stride. Both the
+  icon/bar block and the corner-label block now restore
+  Gfx_SetVertexFormat(TEXTURED) + rebind s->vb.
+- **Held pickaxe sprite invisible** (dirt block fine): Model_Render loads
+  the view matrix itself for the block/arm paths, but the raw item quad
+  never did - it rendered with whatever transform the last entity left.
+  Now loads MATRIX_VIEW from Gfx.View before drawing.
+
 ### Indev visual feedback: mini-block drops, durability bar, held item
 - **Block drops in Indev render as miniature FULL blocks** (whole tile per
   face, RenderItem's renderBlockOnInventory at 0.25 scale) instead of
