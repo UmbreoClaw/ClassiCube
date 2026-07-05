@@ -40,6 +40,19 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Sprite fidelity pass (RenderItem.doRender exact)
+- Drop sprites now 0.5 world units (were 0.25 - user spotted the difference)
+  and stacks draw the genuine jumbled copies: 1 / 2 (count>1) / 3 (count>5) /
+  4 (count>20), offset (rand*2-1)*0.3 per axis from RenderItem's FIXED seed
+  187 - reproduced as a precomputed offset table (same deterministic jumble
+  every frame, matching genuine behaviour without per-frame RNG).
+- Still simplified vs genuine: our billboard faces the camera fully (genuine
+  yaw-billboards only), no drop shadow (shadowSize 0.15 - engine has no
+  entity shadow hook for hand-simulated drops). Documented, low priority.
+- NEXT PHASE (agreed roadmap): tools & durability + more Indev mob drops
+  (zombies drop feathers, skeletons arrows, sheep wool blocks) -> crafting
+  + GUIs -> day/night + lighting -> chests/furnaces.
+
 ### BUG FIX: Indev launcher button never actually enabled the mode
 UseModeIndev set indev-mode=true and then routed through ChooseMode_Click,
 which unconditionally cleared it - so the button was a no-op and no feature

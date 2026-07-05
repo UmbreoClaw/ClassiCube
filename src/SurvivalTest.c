@@ -1391,7 +1391,7 @@ static void SurvivalTest_RenderTntGlow(float t) {
 /* Indev EntityItem-style billboard sprites for drops carrying ITEM ids - */
 /*  drawn from items.png with the same interpolated position/bob the block */
 /*  cubes use. Bails while no items.png is loaded (texture packs supply it). */
-#define ITEMDROP_MAX_VERTICES (DROP_MAX * 4)
+#define ITEMDROP_MAX_VERTICES (DROP_MAX * 4 * 4) /* up to 4 jumbled copies per stack */
 static GfxResourceID st_itemDropVB;
 
 static void SurvivalTest_RenderItemDropSprites(float t) {
@@ -1430,10 +1430,29 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
 		pos.y += bob + 0.125f;
 
-		size.x = 0.25f; size.y = 0.25f;
-		Particle_DoRender(&size, &pos, &rec, DropItem_WorldColor(&pos), ptr);
-		ptr   += 4;
-		count += 4;
+		/* RenderItem.doRender: sprites are 0.5 world units, and a stack draws */
+		/*  jumbled copies - 1, 2 (count>1), 3 (count>5), 4 (count>20) - offset */
+		/*  by (rand*2-1)*0.3 per axis from a FIXED seed (187), i.e. the same */
+		/*  deterministic jumble every frame. Precomputed equivalents below. */
+		{
+			static const Vec3 jumble[4] = {
+				{  0.00f,  0.00f,  0.00f }, {  0.16f, -0.10f,  0.22f },
+				{ -0.20f,  0.12f, -0.14f }, {  0.08f, -0.18f, -0.24f }
+			};
+			int copies = 1, c;
+			if (d->count > 1)  copies = 2;
+			if (d->count > 5)  copies = 3;
+			if (d->count > 20) copies = 4;
+
+			size.x = 0.5f; size.y = 0.5f;
+			for (c = 0; c < copies; c++) {
+				Vec3 cpos = pos;
+				Vec3_AddBy(&cpos, &jumble[c]);
+				Particle_DoRender(&size, &cpos, &rec, DropItem_WorldColor(&cpos), ptr);
+				ptr   += 4;
+				count += 4;
+			}
+		}
 	}
 	Gfx_BindTexture(tex);
 	Gfx_UnlockDynamicVb(st_itemDropVB);
