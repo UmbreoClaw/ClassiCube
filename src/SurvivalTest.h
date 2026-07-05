@@ -68,6 +68,8 @@ BlockID SurvivalTest_SlotBlock(int slot);
 /* Raw slot id spanning blocks (0..255) and items (256+) - pair with */
 /*  IndevTest_ItemSpriteUV to draw item sprites where SlotBlock returns AIR. */
 int SurvivalTest_SlotId(int slot);
+/* Accumulated tool wear in the slot (ItemStack.itemDamage; 0 = pristine). */
+int SurvivalTest_SlotDamage(int slot);
 /* Gets how many blocks are stacked in the given inventory slot. */
 int SurvivalTest_SlotCount(int slot);
 /* Gets the stack count in the given hotbar slot (0 to SURVIVAL_HOTBAR_SLOTS-1). */

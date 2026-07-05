@@ -9,6 +9,9 @@
 #include "Entity.h"
 #include "Model.h"
 #include "Options.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
+#include "Particle.h"
 
 cc_bool HeldBlockRenderer_Show;
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_REDUCED
@@ -16,12 +19,15 @@ static BlockID held_block;
 static struct Entity held_entity;
 static struct Matrix held_blockProj;
 
+static GfxResourceID itemHandVB; /* 4-vert quad for the Indev held-item sprite */
 static cc_bool held_animating, held_breaking, held_swinging;
 static float held_swingY;
 static float held_time, held_period = 0.25f;
 static BlockID held_lastBlock;
 
 /* Since not using Entity_SetModel, which normally automatically does this */
+static PackedCol HeldBlockRenderer_GetCol(struct Entity* entity);
+
 static void SetHeldModel(struct Model* model) {
 #ifdef CC_BUILD_CONSOLE
 	static int maxVertices;
@@ -41,12 +47,46 @@ static void HeldBlockRenderer_RenderModel(void) {
 	/* TODO: Need to properly reallocate per model VB here */
 
 	if (Blocks.Draw[held_block] == DRAW_GAS) {
-		model = Entities.CurPlayer->Base.Model;
-		SetHeldModel(model);
-		Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
+		/* Indev: holding an ITEM id (hotbar block is AIR then) shows the item */
+		/*  sprite in the hand position instead of the bare arm - a flat quad */
+		/*  from items.png (approximates ItemRenderer's extruded sprite). */
+		int heldId = SurvivalTest_SlotId(Inventory.SelectedIndex);
+		if (IndevTest_Enabled && heldId >= 256 && IndevTest_ItemsTex()) {
+			struct VertexTextured* v;
+			TextureRec rec;
+			Vec2 size;
+			Vec3 pos;
 
-		Model_RenderArm(model, &held_entity);
-		Gfx_SetAlphaTest(false);
+			if (IndevTest_ItemSpriteUV(heldId, &rec.u1, &rec.v1, &rec.u2, &rec.v2)) {
+				if (!itemHandVB) itemHandVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 4);
+				Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+				v = (struct VertexTextured*)Gfx_LockDynamicVb(itemHandVB, VERTEX_FORMAT_TEXTURED, 4);
+
+				pos = held_entity.Position;
+				pos.y -= 0.25f; /* centre the quad about the hand, not above it */
+				size.x = 0.45f; size.y = 0.45f;
+				Particle_DoRender(&size, &pos, &rec, HeldBlockRenderer_GetCol(&held_entity), v);
+
+				Gfx_BindTexture(IndevTest_ItemsTex());
+				Gfx_UnlockDynamicVb(itemHandVB);
+				Gfx_SetAlphaTest(true);
+				Gfx_DrawVb_IndexedTris(4);
+				Gfx_SetAlphaTest(false);
+		} else {
+				model = Entities.CurPlayer->Base.Model;
+				SetHeldModel(model);
+				Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
+				Model_RenderArm(model, &held_entity);
+				Gfx_SetAlphaTest(false);
+			}
+		} else {
+			model = Entities.CurPlayer->Base.Model;
+			SetHeldModel(model);
+			Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
+
+			Model_RenderArm(model, &held_entity);
+			Gfx_SetAlphaTest(false);
+		}
 	}
 	else {
 		model = Models.Block;
@@ -247,6 +287,7 @@ void HeldBlockRenderer_Render(float delta) {
 
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&held_entity.ModelVB);
+	Gfx_DeleteDynamicVb(&itemHandVB);
 }
 
 static const struct EntityVTABLE heldEntity_VTABLE = {

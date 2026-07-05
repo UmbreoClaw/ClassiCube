@@ -40,6 +40,21 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Indev visual feedback: mini-block drops, durability bar, held item
+- **Block drops in Indev render as miniature FULL blocks** (whole tile per
+  face, RenderItem's renderBlockOnInventory at 0.25 scale) instead of
+  classic's middle-50%-cropped ItemModel cube - c0.30 mode keeps the crop.
+  (Per-face top/bottom textures still TODO; all faces use the side tile.)
+- **Durability bar** under hotbar tool icons - RenderItem.renderItemOverlay-
+  IntoGUI exact: 13x2 black backing at (x+2, y+13) of the 16px icon space, a
+  12x1 dark track, and (13 - dmg*13/max) of the red->green gradient
+  ((255-v)<<16 | v<<8, v = 255 - dmg*255/max), all scaled to the icon size.
+  New SurvivalTest_SlotDamage accessor.
+- **Held item shows in hand**: holding an item id draws its sprite quad at
+  the held-block position (approximates ItemRenderer's extruded sprite -
+  full 3D extrusion + swing animation still TODO). Falls back to the bare
+  arm as before when no items.png/UV. VB freed on context loss.
+
 ### Tools/durability phase started + drop rendering regression fixed
 - **REGRESSION FIX (user report: block drops rendered as full blocks)**: the
   cube/glow BUILD loops didn't skip item-id drops even though the 1D batch

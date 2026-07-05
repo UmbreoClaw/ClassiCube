@@ -725,12 +725,20 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 		index = Atlas1D_Index(loc);
 		ptr   = data + item_1DIndices[index];
 
-		/* Crop to the middle 50% (texels 4..12 of 16) of the tile, on every face */
 		base = Atlas1D_TexRec(loc, 1, &texIndex);
-		du = (base.u2 - base.u1) * 0.25f;
-		dv = (base.v2 - base.v1) * 0.25f;
-		rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
-		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
+		if (IndevTest_Enabled) {
+			/* Indev RenderItem: block drops are miniature FULL blocks */
+			/*  (renderBlockOnInventory at 0.25 scale) - whole tile per face, */
+			/*  not classic's cropped ItemModel. */
+			rec = base;
+		} else {
+			/* Crop to the middle 50% (texels 4..12 of 16) of the tile, on */
+			/*  every face - classic ItemModel's look. */
+			du = (base.u2 - base.u1) * 0.25f;
+			dv = (base.v2 - base.v1) * 0.25f;
+			rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
+			rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
+		}
 
 		/* Blend prevPos->position and prevAge->age by the partial-tick t - see */
 		/*  DropItem.prevPos/prevAge - so both motion and spin/bob are smooth. */
@@ -3416,6 +3424,8 @@ int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
 BlockID SurvivalTest_SlotBlock(int slot) { return ST_ID_BLOCK(st_inv[slot].id); }
 /* Raw id (block OR item) - item-sprite renderers key off this + ST_ID range */
 int SurvivalTest_SlotId(int slot) { return st_inv[slot].id; }
+/* Accumulated ItemStack.itemDamage - drives the HUD durability bar */
+int SurvivalTest_SlotDamage(int slot) { return st_inv[slot].damage; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }

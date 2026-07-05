@@ -826,12 +826,33 @@ static void HUDScreen_Render(void* screen, float delta) {
 				if (id < 256) continue;
 				if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
 
+				int maxDmg, dmg;
 				itex.ID     = IndevTest_ItemsTex();
 				itex.x      = (short)(s->hotbar.x + k * slotW + (slotW - size) / 2);
 				itex.y      = (short)(s->hotbar.y + (s->hotbar.height - size) / 2);
 				itex.width  = (cc_uint16)size;
 				itex.height = (cc_uint16)size;
 				Texture_Render(&itex);
+
+				/* RenderItem.renderItemOverlayIntoGUI's durability bar: at */
+				/*  (x+2, y+13) in 16px icon space, a 13x2 black backing, a */
+				/*  12x1 dark track, then (13 - dmg*13/max) x1 of the red-> */
+				/*  green gradient colour (255-v)<<16 | v<<8, v=255-dmg*255/max. */
+				maxDmg = IndevTest_ToolMaxDamage(SurvivalTest_SlotId(k));
+				dmg    = SurvivalTest_SlotDamage(k);
+				if (maxDmg > 0 && dmg > 0) {
+					float u  = size / 16.0f;
+					int   bx = itex.x + (int)(2 * u), by = itex.y + (int)(13 * u);
+					int   v  = 255 - dmg * 255 / maxDmg;
+					int   w  = 13 - dmg * 13 / maxDmg;
+					int   h  = (int)u; if (h < 1) h = 1;
+
+					Gfx_Draw2DFlat(bx, by, (int)(13 * u), h * 2, PackedCol_Make(0, 0, 0, 255));
+					Gfx_Draw2DFlat(bx, by, (int)(12 * u), h,
+						PackedCol_Make((cc_uint8)((255 - v) / 4), 63, 0, 255));
+					Gfx_Draw2DFlat(bx, by, (int)(w * u), h,
+						PackedCol_Make((cc_uint8)(255 - v), (cc_uint8)v, 0, 255));
+				}
 			}
 			Gfx_BindDynamicVb(s->vb);
 		}
