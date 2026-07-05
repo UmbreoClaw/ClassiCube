@@ -40,6 +40,29 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Tools/durability phase started + drop rendering regression fixed
+- **REGRESSION FIX (user report: block drops rendered as full blocks)**: the
+  cube/glow BUILD loops didn't skip item-id drops even though the 1D batch
+  COUNTS did - item drops spilled into other drops' vertex ranges and
+  corrupted the cube geometry. Both loops now skip !ST_ID_IS_BLOCK drops.
+- **All-mob Indev death drops** (EntityLiving.onDeath rand(3) of scoreValue):
+  zombie feather(32), skeleton arrow(6), spider string(31), creeper
+  gunpowder(33), pig raw porkchop(63); sheep drop nothing on death in Indev
+  (no scoreValue override) - c0.30 mode keeps mushrooms/wool.
+- **Mining speed**: st_breakHits advances by IndevTest_MiningSpeed(held id,
+  block) = (tier+1)*2 when the tool class matches the block's dig-sound
+  material (pickaxe:stone/metal, shovel:grass/gravel/sand/snow, axe:wood),
+  else 1. NOTE: gold tools are tier 0 in Indev = wood speed, genuine quirk.
+- **Durability** (ItemTool.maxDamage = 32 << tier): held tool wears 1 per
+  block broken, 2 per landed melee hit (ItemStack.hitEntity), shatters and
+  clears the slot at max. Sword damage bonus vs mobs still TODO.
+- **Q drops the held item** (EntityPlayer.dropPlayerItem): one of the stack,
+  spawned at eye-0.3 with look-direction*0.3 velocity (+0.1 up bias, slight
+  jitter) and the genuine 40-tick self-pickup delay (pickupDelay field
+  reintroduced, Indev-toss only; c0.30 drops keep instant pickup).
+- **F9 "Give Iron Pick"** button (SurvivalTest_DebugGiveItem) so tools are
+  testable before crafting exists.
+
 ### Sprite fidelity pass (RenderItem.doRender exact)
 - Drop sprites now 0.5 world units (were 0.25 - user spotted the difference)
   and stacks draw the genuine jumbled copies: 1 / 2 (count>1) / 3 (count>5) /

@@ -888,6 +888,10 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 	if (!was && !Gui.InputGrab && InputBind_Claims(BIND_TABLIST, key, device)) {
 		SurvivalTest_TryShootArrow();
 	}
+	/* Q drops one of the held stack (Indev mode only - see TryDropHeld) */
+	if (!was && !Gui.InputGrab && key == 'Q') {
+		SurvivalTest_TryDropHeld();
+	}
 
 	for (i = 0; i < Gui.ScreensCount; i++)
 	{

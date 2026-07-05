@@ -3002,7 +3002,7 @@ void NostalgiaMenuScreen_Show(void) {
 /*  opened with F9 - see InputHandler.c. Not part of genuine c0.30-s parity; this entire */
 /*  section, its SurvivalTest_Debug* counterparts in SurvivalTest.c/h, and the F9 hook can */
 /*  all be deleted later without affecting parity. */
-#define DEBUG_MAX_BTNS 17
+#define DEBUG_MAX_BTNS 18
 /* Indices into btns[]/survivalDebug_descs of the three stateful toggles, whose */
 /*  labels are rebuilt from current state (ON/OFF) rather than being constant. */
 #define DEBUG_BTN_INVINC 12
@@ -3050,6 +3050,7 @@ static void SurvivalDebugScreen_HealFull(void* a, void* b)     { SurvivalTest_He
 static void SurvivalDebugScreen_Hurt(void* a, void* b)         { SurvivalTest_Hurt(5); }
 static void SurvivalDebugScreen_KillAllMobs(void* a, void* b)  { SurvivalTest_DebugKillAllMobs(); }
 static void SurvivalDebugScreen_MobCensus(void* a, void* b)    { SurvivalTest_DebugMobCensus(); }
+static void SurvivalDebugScreen_GivePickaxe(void* a, void* b)  { SurvivalTest_DebugGiveItem(256 + 1); }
 static void SurvivalDebugScreen_RefillArrows(void* a, void* b) { SurvivalTest_DebugSetArrows(99); }
 
 static void SurvivalDebugScreen_ToggleInvinc(void* a, void* b) { SurvivalTest_DebugToggleGodMode();    SurvivalDebugScreen_RefreshToggles(a); }
@@ -3076,6 +3077,7 @@ static const struct SimpleButtonDesc survivalDebug_descs[DEBUG_MAX_BTNS] = {
 	{  160,   30, "Armor: OFF",      SurvivalDebugScreen_ToggleArmor },
 	{    0,   80, "Kill all mobs",   SurvivalDebugScreen_KillAllMobs },
 	{ -160,   80, "Mob census",      SurvivalDebugScreen_MobCensus },
+	{  160,   80, "Give Iron Pick",  SurvivalDebugScreen_GivePickaxe },
 };
 
 static void SurvivalDebugScreen_ContextRecreated(void* screen) {

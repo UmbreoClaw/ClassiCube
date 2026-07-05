@@ -6,6 +6,8 @@
 #include "Funcs.h"
 #include "Graphics.h"
 #include "TexturePack.h"
+#include "Block.h"
+#include "Audio.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -113,6 +115,46 @@ int IndevTest_ItemFoodHeal(int id) {
 		return 0;
 	}
 	return 0;
+}
+
+static const struct IndevItemDef* IndevItems_Find(int id) {
+	int i, local = id - 256;
+	if (local < 0) return NULL;
+	for (i = 0; i < (int)Array_Elems(indevItems); i++) {
+		if (indevItems[i].id == local) return &indevItems[i];
+	}
+	return NULL;
+}
+
+/* ItemTool: maxDamage = 32 << tier. 0 when the id isn't a damageable tool. */
+int IndevTest_ToolMaxDamage(int id) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	if (!d) return 0;
+	switch (d->kind) {
+	case ITEM_KIND_SWORD: case ITEM_KIND_SHOVEL: case ITEM_KIND_PICKAXE:
+	case ITEM_KIND_AXE:   case ITEM_KIND_HOE:
+		return 32 << d->param;
+	}
+	return 0;
+}
+
+/* ItemTool.getStrVsBlock: (tier+1)*2 against the tool's effective materials */
+/*  (approximated by dig-sound class), otherwise 1 - note gold tools are tier */
+/*  0 in Indev, i.e. WOOD speed. Returns 1 for non-tools/ineffective pairs. */
+int IndevTest_MiningSpeed(int id, BlockID block) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	cc_uint8 snd;
+	cc_bool effective = false;
+	if (!IndevTest_Enabled || !d) return 1;
+
+	snd = Blocks.DigSounds[block];
+	switch (d->kind) {
+	case ITEM_KIND_PICKAXE: effective = snd == SOUND_STONE  || snd == SOUND_METAL; break;
+	case ITEM_KIND_SHOVEL:  effective = snd == SOUND_GRASS  || snd == SOUND_GRAVEL ||
+	                                    snd == SOUND_SAND   || snd == SOUND_SNOW;  break;
+	case ITEM_KIND_AXE:     effective = snd == SOUND_WOOD;  break;
+	}
+	return effective ? (d->param + 1) * 2 : 1;
 }
 
 static cc_bool IndevItem_StacksToOne(cc_uint8 kind) {

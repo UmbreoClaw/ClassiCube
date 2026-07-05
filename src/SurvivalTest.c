@@ -129,6 +129,8 @@ static RNGState st_mobRng;
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static cc_bool SurvivalTest_AddItem(cc_uint16 id);
 #define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
+/* Defined in the Mining section - forward declared for the melee attack path */
+static void SurvivalTest_DamageHeldTool(int amount);
 /* Defined later, in the Ticking section - forward declared so the Mobs */
 /*  section below (which ticks before Ticking is reached) can reuse it. */
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
@@ -204,6 +206,9 @@ struct DropItem {
 	                  /*  sprite from items.png, Indev EntityItem style) */
 	int  count;      /* Item.count - how many blocks this one drop entity carries */
 	                 /*  (death scatters one drop per slot with its full stack) */
+	float pickupDelay; /* EntityItem.delayBeforeCanPickup - only ever non-zero for */
+	                   /*  items the player tossed (40 ticks), so a Q-drop isn't */
+	                   /*  instantly vacuumed back up. c0.30 drops keep 0. */
 	float age;       /* seconds alive - drives spin/bob/glow */
 	float prevAge;   /* age as of the end of the previous tick - RenderDropBlocks blends */
 	                 /*  prevAge->age by the partial-tick t so the spin/bob/glow animation */
@@ -643,7 +648,8 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 		d->age += delta;
 		if (d->age >= DROP_LIFETIME_SECS) { d->active = false; continue; }
 		SurvivalTest_DropPhysics(d, delta);
-		SurvivalTest_DropTryPickup(d, pe);
+		if (d->pickupDelay > 0.0f) { d->pickupDelay -= delta; }
+		else                       { SurvivalTest_DropTryPickup(d, pe); }
 	}
 }
 
@@ -710,8 +716,12 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
 		if (!d->active) continue;
+		/* Item-id drops render in the sprite pass - they are NOT in the 1D */
+		/*  batch counts, so building them here would spill into (and corrupt) */
+		/*  the other drops' vertex ranges. */
+		if (!ST_ID_IS_BLOCK(d->block)) continue;
 
-		loc   = Block_Tex(d->block, FACE_XMIN);
+		loc   = Block_Tex((BlockID)d->block, FACE_XMIN);
 		index = Atlas1D_Index(loc);
 		ptr   = data + item_1DIndices[index];
 
@@ -754,6 +764,7 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
 		if (!d->active) continue;
+		if (!ST_ID_IS_BLOCK(d->block)) continue; /* sprites have no glow shell */
 
 		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
 		renderAge = d->prevAge + (d->age - d->prevAge) * t;
@@ -1782,27 +1793,29 @@ static void Mob_SpawnDeathDrops(struct Mob* m, BlockID block) {
 /*  Sheep.die drops 1-2 white wool (NOT mushrooms - the two differ). */
 static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
 	if (playerCredit) st_score += mobTypeInfo[m->type].deathScore;
-	if (m->type == MOB_TYPE_PIG) {
-		if (IndevTest_Enabled) {
-			/* Indev EntityLiving.onDeath: rand(3) = 0-2 of the drop item - */
-			/*  pigs drop RAW PORKCHOP (item id 63). First item in the game! */
-			IVec3 c;
+	if (IndevTest_Enabled) {
+		/* Indev EntityLiving.onDeath: rand(3) = 0-2 of scoreValue() as an */
+		/*  item id - zombie feather(32), skeleton arrow(6), spider string(31), */
+		/*  creeper gunpowder(33), pig raw porkchop(63). Sheep don't override */
+		/*  scoreValue and drop nothing on death (wool comes from hitting them). */
+		static const cc_int16 indevDeathDrop[MOB_TYPE_COUNT] = {
+			/* ZOMBIE */ 256 + 32, /* SKELETON */ 256 + 6, /* PIG */ 256 + 63,
+			/* CREEPER */ 256 + 33, /* SPIDER */ 256 + 31, /* SHEEP */ 0
+		};
+		if (indevDeathDrop[m->type]) {
 			int n = Random_Next(&st_mobRng, 3), k;
-			c.x = Math_Floor(m->Base.Position.x);
-			c.y = Math_Floor(m->Base.Position.y);
-			c.z = Math_Floor(m->Base.Position.z);
 			for (k = 0; k < n; k++) {
 				Vec3 pos;
-				pos.x = c.x + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-				pos.y = c.y + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-				pos.z = c.z + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-				SurvivalTest_SpawnDropAt(pos, 256 + 63, 1);
+				pos.x = Math_Floor(m->Base.Position.x) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				pos.y = Math_Floor(m->Base.Position.y) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				pos.z = Math_Floor(m->Base.Position.z) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				SurvivalTest_SpawnDropAt(pos, (cc_uint16)indevDeathDrop[m->type], 1);
 			}
-		} else {
-			Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
 		}
+	} else if (m->type == MOB_TYPE_PIG) {
+		Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
 	}
-	if (m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_WHITE);
+	if (!IndevTest_Enabled && m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_WHITE);
 }
 
 /* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
@@ -2876,6 +2889,7 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 
 	/* Player fist: flat 4 HP/hit, matching SurvivalTest_Hurt's own player-damage figure */
 	Mob_Hurt(best, e, 4, true);
+	SurvivalTest_DamageHeldTool(2); /* ItemStack.hitEntity: weapons wear 2/hit */
 	return true;
 }
 
@@ -3472,6 +3486,48 @@ static void SurvivalTest_ConsumeSelected(void) {
 	SurvivalTest_SyncHotbar();
 }
 
+/* Q key - EntityPlayer.dropPlayerItem: tosses ONE of the held stack out in */
+/*  front (velocity = look direction * 0.3/tick, +0.1 upward bias, slight */
+/*  jitter), spawned at eye height - 0.3, with a 40-tick self-pickup delay. */
+void SurvivalTest_TryDropHeld(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct DropItem* d;
+	Vec3 pos, dir;
+	int slot = Inventory.SelectedIndex;
+	cc_uint16 id;
+	int i;
+	if (!SurvivalTest_Enabled || !IndevTest_Enabled || !p) return;
+	if (st_inv[slot].count <= 0) return;
+
+	id = st_inv[slot].id;
+	SurvivalTest_ConsumeSelected();
+
+	pos    = p->Base.Position;
+	pos.y += Entity_GetEyeHeight(&p->Base) - 0.3f;
+	SurvivalTest_SpawnDropAt(pos, id, 1);
+
+	/* SpawnDropAt gave it the mining pop velocity - replace with the toss */
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active || d->age > 0.0f) continue;
+		if (d->position.x != pos.x || d->position.z != pos.z) continue;
+
+		dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
+		d->velocity.x = dir.x * 0.3f * 20.0f + (Random_Float(&st_dropRng) - 0.5f) * 0.04f * 20.0f;
+		d->velocity.y = dir.y * 0.3f * 20.0f + 0.1f * 20.0f
+		              + (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.1f * 20.0f;
+		d->velocity.z = dir.z * 0.3f * 20.0f + (Random_Float(&st_dropRng) - 0.5f) * 0.04f * 20.0f;
+		d->pickupDelay = 40.0f / 20.0f;
+		break;
+	}
+}
+
+/* Debug: adds one of the given (block or item) id to the inventory. */
+void SurvivalTest_DebugGiveItem(int id) {
+	if (!SurvivalTest_Enabled) return;
+	SurvivalTest_AddItem((cc_uint16)id);
+}
+
 cc_bool SurvivalTest_TryEat(void) {
 	int slot;
 	BlockID block;
@@ -3602,6 +3658,26 @@ cc_bool SurvivalTest_CanInstaBreak(BlockID block) {
 	return SurvivalTest_Hardness(block) == 0;
 }
 
+/* ItemStack.damageItem: the held tool takes wear (1 per block broken, 2 per */
+/*  landed melee hit) and shatters at ItemTool's maxDamage (32 << tier). */
+static void SurvivalTest_DamageHeldTool(int amount) {
+	int slot = Inventory.SelectedIndex;
+	int maxDamage;
+	if (!IndevTest_Enabled) return;
+
+	maxDamage = IndevTest_ToolMaxDamage(st_inv[slot].id);
+	if (!maxDamage) return;
+
+	st_inv[slot].damage += amount;
+	if (st_inv[slot].damage >= maxDamage) {
+		st_inv[slot].id     = BLOCK_AIR;
+		st_inv[slot].count  = 0;
+		st_inv[slot].damage = 0;
+	}
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
 static IVec3 st_breakPos;
 static cc_bool st_breaking;
 static int st_breakHits;
@@ -3656,8 +3732,11 @@ static void SurvivalTest_TickBreaking(void) {
 		}
 
 		hardness = SurvivalTest_Hardness(block);
-		st_breakHits++;
+		/* Indev tools: hits advance at getStrVsBlock speed ((tier+1)*2 when */
+		/*  the tool class is effective against the block, else 1). */
+		st_breakHits += IndevTest_MiningSpeed(st_inv[Inventory.SelectedIndex].id, block);
 		if (st_breakHits >= hardness + 1) {
+			SurvivalTest_DamageHeldTool(1);
 			old = block;
 			Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 			Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);

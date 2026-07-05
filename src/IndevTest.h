@@ -2,6 +2,7 @@
 #define CC_INDEVTEST_H
 #include "Core.h"
 #include "Graphics.h"
+#include "BlockID.h"
 CC_BEGIN_HEADER
 
 /* Indev (in-20100223) gamemode - version layer on top of the survival core.
@@ -25,6 +26,11 @@ cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v
 /* Heal amount when id is an edible Indev item (apple/soup/bread/porkchops), */
 /*  else 0. Always 0 while Indev mode is off. */
 int IndevTest_ItemFoodHeal(int id);
+/* ItemTool.maxDamage (32 << tier) for damageable tools, else 0. */
+int IndevTest_ToolMaxDamage(int id);
+/* Mining speed multiplier of the held id against a block ((tier+1)*2 when */
+/*  the tool class is effective vs the block's material, else 1). */
+int IndevTest_MiningSpeed(int id, BlockID block);
 
 CC_END_HEADER
 #endif

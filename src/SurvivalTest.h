@@ -120,6 +120,11 @@ void SurvivalTest_RenderTnt(float delta, float t);
 /*  is disabled. */
 cc_bool SurvivalTest_TryShootArrow(void);
 
+/* Q key (Indev): tosses one of the held stack out in front of the player. */
+void SurvivalTest_TryDropHeld(void);
+/* Debug: adds one of the given block-or-item id to the inventory. */
+void SurvivalTest_DebugGiveItem(int id);
+
 /* Gets how many arrows the player currently has (0 to 99). */
 int SurvivalTest_ArrowCount(void);
 
