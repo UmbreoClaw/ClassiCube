@@ -40,6 +40,12 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Held item sprite: second blocker found (still-invisible after view fix)
+RenderModel turns face culling ON for the model paths; the billboard quad's
+winding is back-facing in the held view, so it was culled even once the view
+matrix was loaded. Culling is now disabled around the quad draw (and restored
+after). Two stacked bugs total: missing MATRIX_VIEW load + culling.
+
 ### Item ids could be "placed" as garbage blocks (user report)
 Right-clicking with a non-block item (string etc) selected could leak the
 item id into the engine's block placement truncated to 8 bits (string 287 ->

@@ -73,9 +73,14 @@ static void HeldBlockRenderer_RenderModel(void) {
 				Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 				Gfx_BindTexture(IndevTest_ItemsTex());
 				Gfx_UnlockDynamicVb(itemHandVB);
+				/* RenderModel enables face culling for the model paths, but */
+				/*  this billboard quad's winding is back-facing in the held */
+				/*  view - culling must be off or the sprite never appears. */
+				Gfx_SetFaceCulling(false);
 				Gfx_SetAlphaTest(true);
 				Gfx_DrawVb_IndexedTris(4);
 				Gfx_SetAlphaTest(false);
+				Gfx_SetFaceCulling(true);
 		} else {
 				model = Entities.CurPlayer->Base.Model;
 				SetHeldModel(model);
