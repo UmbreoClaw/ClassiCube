@@ -40,6 +40,16 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Item ids could be "placed" as garbage blocks (user report)
+Right-clicking with a non-block item (string etc) selected could leak the
+item id into the engine's block placement truncated to 8 bits (string 287 ->
+wool 31), placing garbage blocks whose mining then produced the reported
+"invalid block drops". SurvivalTest_CanPlace now refuses outright when the
+selected slot holds an item id (genuine right-click with items does the
+item's own action or nothing), and the place-consume hook only consumes when
+the placed block actually matches the held slot's block - so no path can eat
+the wrong stack or place an item id again.
+
 ### Two regressions from the visuals batch fixed (user reports)
 - **Stack counts vanished**: Gfx_Draw2DFlat (durability bar) and
   Texture_Render switch the pipeline to COLOURED format / another VB, and

@@ -3431,9 +3431,16 @@ int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
 
 cc_bool SurvivalTest_CanPlace(BlockID block) {
+	int slot = Inventory.SelectedIndex;
 	if (!SurvivalTest_Enabled) return true;
+
+	/* ITEM ids (string, tools, food...) are never placeable - genuine Indev */
+	/*  right-click with them does the item's own action or nothing. Without */
+	/*  this, the id can leak into the engine's 8-bit block path truncated */
+	/*  (e.g. string 287 -> wool 31) and place garbage blocks. */
+	if (!ST_ID_IS_BLOCK(st_inv[slot].id)) return false;
 	/* Placement always uses the selected hotbar slot */
-	return st_inv[Inventory.SelectedIndex].count > 0;
+	return st_inv[slot].count > 0;
 }
 
 /* Mirrors the hotbar slots into the engine's inventory table so that the */
@@ -3585,8 +3592,11 @@ static void SurvivalTest_BlockChanged(void* obj,
 		/* Block was mined - spawn its physical drop(s) on the ground */
 		SurvivalTest_SpawnDropsForBlock(coords, oldBlock);
 	} else {
-		/* Block was placed - consume one from the selected hotbar slot */
-		SurvivalTest_ConsumeSelected();
+		/* Block was placed - consume one from the selected hotbar slot. */
+		/* Guarded so a placement that didn't come from the held slot (or a */
+		/*  slot holding an item id) can never eat the wrong stack. */
+		if (block == ST_ID_BLOCK(st_inv[Inventory.SelectedIndex].id))
+			SurvivalTest_ConsumeSelected();
 	}
 }
 
