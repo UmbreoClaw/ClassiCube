@@ -3490,13 +3490,78 @@ static void SurvivalTest_SyncHotbar(void) {
 	st_invVersion++;
 }
 
+/* 2x2 pocket crafting grid (GuiInventory's built-in crafting matrix). Slots */
+/*  36..39 in the extended addressing below; the result is a virtual slot the */
+/*  player takes from, which crafts and consumes one of each grid ingredient. */
+static struct SurvivalSlot st_craft[SURVIVAL_CRAFT_SLOTS];
+
+/* Resolves an extended slot index to its backing SurvivalSlot: 0..35 = the */
+/*  real inventory, 36..39 = the crafting grid. (The result slot is virtual */
+/*  and handled by SurvivalTest_CraftTake, not this.) */
+static struct SurvivalSlot* SurvivalTest_SlotPtr(int idx) {
+	if (idx >= SURVIVAL_CRAFT_BASE && idx < SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
+		return &st_craft[idx - SURVIVAL_CRAFT_BASE];
+	return &st_inv[idx];
+}
+
 void SurvivalTest_SwapSlots(int a, int b) {
-	struct SurvivalSlot tmp;
+	struct SurvivalSlot *pa, *pb, tmp;
 	if (!SurvivalTest_Enabled) return;
 	if (a == b) return;
-	tmp       = st_inv[a];
-	st_inv[a] = st_inv[b];
-	st_inv[b] = tmp;
+	pa = SurvivalTest_SlotPtr(a);
+	pb = SurvivalTest_SlotPtr(b);
+	tmp = *pa; *pa = *pb; *pb = tmp;
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
+int SurvivalTest_CraftSlotId(int i)    { return st_craft[i].id; }
+int SurvivalTest_CraftSlotCount(int i) { return st_craft[i].count; }
+
+/* Builds the 2x2 grid of full-space ids and asks the Indev recipe engine what */
+/*  it makes. Returns the result id (0 if nothing), and its count via outCount. */
+int SurvivalTest_CraftResult(int* outCount) {
+	cc_uint16 grid[4];
+	int id, count, i;
+	*outCount = 0;
+	if (!IndevTest_Enabled) return 0;
+
+	for (i = 0; i < 4; i++) grid[i] = st_craft[i].count > 0 ? st_craft[i].id : 0;
+	if (!IndevTest_MatchRecipe(grid, 2, 2, &id, &count)) return 0;
+	*outCount = count;
+	return id;
+}
+
+/* SlotCrafting.onPickupFromSlot: crafting the result consumes one of each */
+/*  non-empty grid ingredient, then yields the output into the inventory. */
+void SurvivalTest_CraftTake(void) {
+	int count, id = SurvivalTest_CraftResult(&count);
+	int i;
+	if (!id) return;
+
+	for (i = 0; i < count; i++) {
+		if (!SurvivalTest_AddItem((cc_uint16)id)) break; /* inventory full - stop */
+	}
+	for (i = 0; i < SURVIVAL_CRAFT_SLOTS; i++) {
+		if (st_craft[i].count <= 0) continue;
+		if (--st_craft[i].count == 0) { st_craft[i].id = BLOCK_AIR; st_craft[i].damage = 0; }
+	}
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
+/* Returns every grid ingredient to the inventory - called when the screen */
+/*  closes so crafting materials are never lost (GuiContainer.onGuiClosed). */
+void SurvivalTest_CraftReturnAll(void) {
+	int i;
+	for (i = 0; i < SURVIVAL_CRAFT_SLOTS; i++) {
+		while (st_craft[i].count > 0) {
+			if (!SurvivalTest_AddItem(st_craft[i].id)) break;
+			st_craft[i].count--;
+		}
+		if (st_craft[i].count <= 0) { st_craft[i].id = BLOCK_AIR; st_craft[i].damage = 0; }
+	}
+	st_invVersion++;
 	SurvivalTest_SyncHotbar();
 }
 

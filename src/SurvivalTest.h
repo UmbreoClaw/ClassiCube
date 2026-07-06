@@ -32,6 +32,10 @@ extern int SurvivalTest_Health;
 #define SURVIVAL_INV_SLOTS    36
 /* Number of inventory slots that make up the hotbar. */
 #define SURVIVAL_HOTBAR_SLOTS 9
+/* 2x2 pocket crafting grid, addressed as extended slots 36..39 (see */
+/*  SurvivalTest_SwapSlots, which moves items between inventory and grid). */
+#define SURVIVAL_CRAFT_SLOTS  4
+#define SURVIVAL_CRAFT_BASE   SURVIVAL_INV_SLOTS
 
 /* Applies damage to the player (respects invincibility frames). */
 /* hurtDir (for the hurt camera tilt) is randomised, matching the original's */
@@ -78,8 +82,21 @@ int SurvivalTest_HotbarCount(int slot);
 /* Lets the HUD cheaply detect when it needs to redraw stack counts. */
 int SurvivalTest_InvVersion(void);
 
-/* Swaps the contents of two inventory slots (no-op when survival is disabled). */
+/* Swaps two slots. Indices 0..SURVIVAL_INV_SLOTS-1 are the inventory, */
+/*  SURVIVAL_CRAFT_BASE..+3 are the 2x2 crafting grid (no-op when disabled). */
 void SurvivalTest_SwapSlots(int a, int b);
+
+/* 2x2 crafting grid cell contents (i = 0..SURVIVAL_CRAFT_SLOTS-1). */
+int SurvivalTest_CraftSlotId(int i);
+int SurvivalTest_CraftSlotCount(int i);
+/* Current crafted output for the grid: result id (0 = nothing craftable) and */
+/*  its yield via outCount. Recomputed from the grid via the Indev recipe engine. */
+int SurvivalTest_CraftResult(int* outCount);
+/* Crafts once: yields the output into the inventory and consumes one of each */
+/*  grid ingredient (SlotCrafting.onPickupFromSlot). No-op if nothing craftable. */
+void SurvivalTest_CraftTake(void);
+/* Returns all grid ingredients to the inventory (call on inventory close). */
+void SurvivalTest_CraftReturnAll(void);
 
 /* Whether the player is allowed to place their currently selected block. */
 /* Returns true (always allowed) when survival mode is disabled. */
