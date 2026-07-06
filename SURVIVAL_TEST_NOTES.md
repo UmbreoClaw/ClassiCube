@@ -40,6 +40,14 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Held item CONFIRMED WORKING via the drop pass (user screenshot)
+The camera-anchored sprite renders. Bare arm is now suppressed while the
+sprite shows (it previously rendered beside it). BACK-BURNERED by agreement:
+the genuine ItemRenderer look - an EXTRUDED 3D mesh built from the sprite's
+pixels, held angled in the swing transform chain - needs a proper renderer
+port (mesh extrusion + swing animation) and replaces this approximation
+wholesale when done.
+
 ### Held item sprite REWRITTEN onto the proven drop-sprite pipeline
 Two fixes to the bespoke HeldBlockRenderer quad (view matrix load, face
 culling) still left it invisible on the user's machine - rather than a third

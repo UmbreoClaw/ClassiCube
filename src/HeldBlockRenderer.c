@@ -9,6 +9,8 @@
 #include "Entity.h"
 #include "Model.h"
 #include "Options.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
 
 cc_bool HeldBlockRenderer_Show;
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_REDUCED
@@ -41,10 +43,16 @@ static void HeldBlockRenderer_RenderModel(void) {
 	/* TODO: Need to properly reallocate per model VB here */
 
 	if (Blocks.Draw[held_block] == DRAW_GAS) {
-		/* Bare arm. (When survival holds an ITEM id, its sprite is drawn by */
-		/*  SurvivalTest's drop-sprite pass anchored in front of the camera - */
-		/*  rendering it here with raw quads proved unreliable across the */
-		/*  held renderer's matrix/culling state, see SURVIVAL_TEST_NOTES.md.) */
+		/* When survival holds an ITEM id, its sprite is drawn by SurvivalTest's */
+		/*  drop-sprite pass anchored in front of the camera (rendering it here */
+		/*  with raw quads proved unreliable across the held renderer's matrix/ */
+		/*  culling state) - skip the bare arm then, so the sprite reads as the */
+		/*  held item rather than floating beside an empty hand. The genuine */
+		/*  extruded ItemRenderer mesh + swing is a future port (back-burnered). */
+		if (IndevTest_Enabled && SurvivalTest_SlotId(Inventory.SelectedIndex) >= 256
+			&& IndevTest_ItemsTex()) return;
+
+		/* Bare arm */
 		model = Entities.CurPlayer->Base.Model;
 		SetHeldModel(model);
 		Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
