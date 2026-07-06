@@ -40,6 +40,22 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### CRAFTING PHASE OPENED: melee damage + full recipe engine (no GUI yet)
+- **Melee damage** (Minecraft.java:352): damage = held Item.getDamageVsEntity;
+  bare fist 1 (Indev nerf vs c0.30's flat 4 - c0.30 mode keeps 4), shovel/
+  pick/axe = 1/2/3 + tier, swords = 4 + tier*2 (ItemSword.java:12), hoes 1.
+- **Recipe engine** (CraftingManager + Recipes* in-20100223): shaped w*h
+  patterns in full-space ids matched at any offset in a gw*gh grid
+  (IndevTest_MatchRecipe). Explicit table: planks x4, sticks x4, slabs x3,
+  bread, gray cloth from 9 string, TNT checkerboard, bowls x4, mushroom soup
+  (both orders), flint&steel. Generated: 25 tool/weapon recipes (5 materials
+  x pickaxe/shovel/axe/hoe/sword) exactly as RecipesTools/Weapons compose
+  them. DEFERRED (need blocks the classic set lacks): torches, workbench,
+  crate/chest, furnace, painting, armor plates.
+- NEXT: the 2x2 pocket crafting GUI (then 3x3 via workbench once the block
+  exists), consuming grid items on take, exactly per GuiCrafting/
+  SlotCrafting semantics.
+
 ### Held item CONFIRMED WORKING via the drop pass (user screenshot)
 The camera-anchored sprite renders. Bare arm is now suppressed while the
 sprite shows (it previously rendered beside it). BACK-BURNERED by agreement:

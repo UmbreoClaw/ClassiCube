@@ -31,6 +31,12 @@ int IndevTest_ToolMaxDamage(int id);
 /* Mining speed multiplier of the held id against a block ((tier+1)*2 when */
 /*  the tool class is effective vs the block's material, else 1). */
 int IndevTest_MiningSpeed(int id, BlockID block);
+/* Melee damage of the held id (bare fist / non-weapons = 1; tools base+tier; */
+/*  swords 4 + tier*2), per Minecraft.java's attack path. */
+int IndevTest_MeleeDamage(int id);
+/* Matches a gw*gh crafting grid of full-space ids (0 = empty) against the */
+/*  in-20100223 recipe list. True + result id/count when a recipe fits. */
+cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId, int* outCount);
 
 CC_END_HEADER
 #endif

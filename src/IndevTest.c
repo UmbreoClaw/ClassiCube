@@ -8,6 +8,7 @@
 #include "TexturePack.h"
 #include "Block.h"
 #include "Audio.h"
+#include "Platform.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -155,6 +156,133 @@ int IndevTest_MiningSpeed(int id, BlockID block) {
 	case ITEM_KIND_AXE:     effective = snd == SOUND_WOOD;  break;
 	}
 	return effective ? (d->param + 1) * 2 : 1;
+}
+
+/* Minecraft.java:352 melee: damage = held Item.getDamageVsEntity(), bare */
+/*  fist (or any non-weapon item) = 1. ItemTool: base+tier with base 1/2/3 */
+/*  for shovel/pickaxe/axe; ItemSword: 4 + tier*2; everything else 1. */
+int IndevTest_MeleeDamage(int id) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	if (!IndevTest_Enabled) return 1;
+	if (!d) return 1;
+	switch (d->kind) {
+	case ITEM_KIND_SWORD:   return 4 + d->param * 2;
+	case ITEM_KIND_SHOVEL:  return 1 + d->param;
+	case ITEM_KIND_PICKAXE: return 2 + d->param;
+	case ITEM_KIND_AXE:     return 3 + d->param;
+	}
+	return 1;
+}
+
+/*########################################################################################################################*
+*-------------------------------------------------CraftingManager recipes-------------------------------------------------*
+*#########################################################################################################################*/
+/* Shaped recipes from CraftingManager + Recipes{Tools,Weapons,Food,...}, */
+/*  in-20100223. Cells are full-space ids (blocks<256, items 256+; 0=empty), */
+/*  patterns are w*h anchored top-left, matched at ANY offset inside the */
+/*  crafting grid (genuine slides the pattern the same way). Recipes needing */
+/*  blocks the classic block set lacks (torches, workbench, crate, furnace) */
+/*  are deferred until those blocks are added to the Indev layer. */
+#define R_ITEM(n) (256 + (n))
+struct IndevRecipe {
+	cc_uint16 result; cc_uint8 count, w, h;
+	cc_uint16 cells[9];
+};
+static const struct IndevRecipe indevRecipes[] = {
+	/* planks x4 <- log; sticks x4 <- 2 planks; slabs x3; bread; gray cloth */
+	{ BLOCK_WOOD,    4, 1,1, { BLOCK_LOG } },
+	{ R_ITEM(24),    4, 1,2, { BLOCK_WOOD, BLOCK_WOOD } },
+	{ BLOCK_SLAB,    3, 3,1, { BLOCK_COBBLE, BLOCK_COBBLE, BLOCK_COBBLE } },
+	{ R_ITEM(41),    1, 3,1, { R_ITEM(40), R_ITEM(40), R_ITEM(40) } },
+	{ BLOCK_GRAY,    1, 3,3, { R_ITEM(31),R_ITEM(31),R_ITEM(31), R_ITEM(31),R_ITEM(31),R_ITEM(31), R_ITEM(31),R_ITEM(31),R_ITEM(31) } },
+	/* TNT: gunpowder/sand checkerboard */
+	{ BLOCK_TNT,     1, 3,3, { R_ITEM(33),BLOCK_SAND,R_ITEM(33), BLOCK_SAND,R_ITEM(33),BLOCK_SAND, R_ITEM(33),BLOCK_SAND,R_ITEM(33) } },
+	/* bowls x4; mushroom soup (both mushroom orders); flint&steel */
+	{ R_ITEM(25),    4, 3,2, { BLOCK_WOOD,0,BLOCK_WOOD, 0,BLOCK_WOOD,0 } },
+	{ R_ITEM(26),    1, 1,3, { BLOCK_RED_SHROOM, BLOCK_BROWN_SHROOM, R_ITEM(25) } },
+	{ R_ITEM(26),    1, 1,3, { BLOCK_BROWN_SHROOM, BLOCK_RED_SHROOM, R_ITEM(25) } },
+	{ R_ITEM(3),     1, 2,2, { R_ITEM(9),0, 0,R_ITEM(62) } },
+};
+
+/* Tool recipes are generated like RecipesTools/RecipesWeapons: 5 materials */
+/*  (planks, cobble, iron ingot, diamond, gold ingot) x 5 tool shapes. */
+static const cc_uint16 toolMaterial[5] = { BLOCK_WOOD, BLOCK_COBBLE, R_ITEM(9), R_ITEM(8), R_ITEM(10) };
+/* item local ids per material, in tool order: pickaxe, shovel, axe, hoe, sword */
+static const cc_uint8 toolResult[5][5] = {
+	{ 14, 13, 15, 34, 12 }, /* wood    */
+	{ 18, 17, 19, 35, 16 }, /* stone   */
+	{  1,  0,  2, 36, 11 }, /* iron    */
+	{ 22, 21, 23, 37, 20 }, /* diamond */
+	{ 29, 28, 30, 38, 27 }, /* gold    */
+};
+
+static cc_bool Recipe_MatchesAt(const struct IndevRecipe* r, const cc_uint16* grid,
+								int gw, int gh, int ox, int oy) {
+	int x, y;
+	for (y = 0; y < gh; y++) {
+		for (x = 0; x < gw; x++) {
+			int rx = x - ox, ry = y - oy;
+			cc_uint16 want = 0;
+			if (rx >= 0 && rx < r->w && ry >= 0 && ry < r->h) want = r->cells[ry * r->w + rx];
+			if (grid[y * gw + x] != want) return false;
+		}
+	}
+	return true;
+}
+
+static cc_bool Recipe_Matches(const struct IndevRecipe* r, const cc_uint16* grid, int gw, int gh) {
+	int ox, oy;
+	if (r->w > gw || r->h > gh) return false;
+	for (oy = 0; oy + r->h <= gh; oy++) {
+		for (ox = 0; ox + r->w <= gw; ox++) {
+			if (Recipe_MatchesAt(r, grid, gw, gh, ox, oy)) return true;
+		}
+	}
+	return false;
+}
+
+/* Matches the grid (gw*gh of full-space ids, 0 = empty) against every */
+/*  recipe. Returns the crafted result id/count, or false when nothing fits. */
+cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId, int* outCount) {
+	static const cc_uint8 toolPatW[5] = { 3, 1, 2, 2, 1 };
+	static const cc_uint8 toolPatH[5] = { 3, 3, 3, 3, 3 };
+	struct IndevRecipe r;
+	int i, m, t;
+	if (!IndevTest_Enabled) return false;
+
+	for (i = 0; i < (int)Array_Elems(indevRecipes); i++) {
+		if (!Recipe_Matches(&indevRecipes[i], grid, gw, gh)) continue;
+		*outId = indevRecipes[i].result; *outCount = indevRecipes[i].count;
+		return true;
+	}
+
+	/* Generated tool shapes (X = material, # = stick), RecipesTools' patterns:
+	    pickaxe "XXX/ # / # ", shovel "X/#/#", axe "XX/X#/ #", hoe "XX/ #/ #",
+	    sword "X/X/#" */
+	for (m = 0; m < 5; m++) {
+		cc_uint16 X = toolMaterial[m], S = (cc_uint16)R_ITEM(24);
+		const cc_uint16 pats[5][9] = {
+			{ X,X,X, 0,S,0, 0,S,0 },
+			{ X,S,S, 0,0,0, 0,0,0 }, /* 1x3 stored row-major below via w/h */
+			{ X,X,0, X,S,0, 0,S,0 },
+			{ X,X,0, 0,S,0, 0,S,0 },
+			{ X,X,S, 0,0,0, 0,0,0 }, /* 1x3 sword */
+		};
+		for (t = 0; t < 5; t++) {
+			Mem_Copy(r.cells, pats[t], sizeof(r.cells));
+			r.w = toolPatW[t]; r.h = toolPatH[t];
+			if (t == 1 || t == 4) { /* 1-wide column patterns packed tightly */
+				r.cells[0] = pats[t][0]; r.cells[1] = (t == 4) ? X : S; r.cells[2] = S;
+				r.w = 1; r.h = 3;
+			}
+			r.result = (cc_uint16)R_ITEM(toolResult[m][t]); r.count = 1;
+			if (Recipe_Matches(&r, grid, gw, gh)) {
+				*outId = r.result; *outCount = 1;
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 static cc_bool IndevItem_StacksToOne(cc_uint8 kind) {

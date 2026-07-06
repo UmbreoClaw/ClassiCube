@@ -2929,8 +2929,11 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/*  attack a mob, so trigger the same swing here to match. */
 	HeldBlockRenderer_ClickAnim(true);
 
-	/* Player fist: flat 4 HP/hit, matching SurvivalTest_Hurt's own player-damage figure */
-	Mob_Hurt(best, e, 4, true);
+	/* c0.30 fist: flat 4 HP/hit. Indev (Minecraft.java:352): the held item's */
+	/*  getDamageVsEntity - bare fist 1, tools base+tier, swords 4 + tier*2. */
+	Mob_Hurt(best, e,
+		IndevTest_Enabled ? IndevTest_MeleeDamage(st_inv[Inventory.SelectedIndex].id) : 4,
+		true);
 	SurvivalTest_DamageHeldTool(2); /* ItemStack.hitEntity: weapons wear 2/hit */
 	return true;
 }
