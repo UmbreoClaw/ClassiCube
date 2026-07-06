@@ -40,6 +40,18 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Held item sprite REWRITTEN onto the proven drop-sprite pipeline
+Two fixes to the bespoke HeldBlockRenderer quad (view matrix load, face
+culling) still left it invisible on the user's machine - rather than a third
+round of blind matrix archaeology, the held sprite now renders through the
+drop-sprite pass, which is proven working there (porkchop drops visible).
+SurvivalTest_HeldSpriteState anchors the quad at camera + look*0.55 +
+right*0.28 - 0.40 up (first-person hand position); drawn only in first
+person with an item id selected. The HeldBlockRenderer branch is reverted
+to the plain bare-arm path. Trade-offs: world-pass depth testing (sprite can
+clip into point-blank walls) and no swing animation yet - both acceptable
+until the proper extruded ItemRenderer port.
+
 ### Held item sprite: second blocker found (still-invisible after view fix)
 RenderModel turns face culling ON for the model paths; the billboard quad's
 winding is back-facing in the held view, so it was culled even once the view
