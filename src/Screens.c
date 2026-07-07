@@ -2470,11 +2470,14 @@ void InventoryScreen_Hide(void) {
 /* Pixel padding (base, before scaling) around the panel's inner content. */
 #define SURVINV_PAD_BASE      8
 
-/* Vertex budget: all storage slots + 1 extra slot for the held-item cursor overlay. */
-#define SURVINV_MAX_ISO_VERTS  ((SURVINV_STORAGE_SLOTS + 1) * ISOMETRICDRAWER_MAXVERTICES)
+/* Displayed block-picture slots: storage + the 2x2 craft grid + result slot. */
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
+#define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
-#define SURVINV_MAX_COUNT_VERTS (SURVINV_STORAGE_SLOTS * 2 * 4)
+#define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
 #define SURVINV_TOTAL_VERTS     (SURVINV_MAX_ISO_VERTS + SURVINV_MAX_COUNT_VERTS)
+/* Click sentinel: the crafting result "slot" (taking from it crafts). */
+#define SURVINV_RESULT_HIT     1000
 
 /* Field of view and camera distance used for the paperdoll preview's own */
 /*  perspective projection (a tighter, portrait-style FOV than the gameplay */
@@ -2493,6 +2496,8 @@ static struct SurvivalInvScreen {
 	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
 	int  lastInvVersion;
 	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
+	int  craftX, craftY;   /* pixel origin of the top-left 2x2 crafting cell */
+	int  resultX, resultY; /* pixel origin of the crafting result slot */
 	int  slotSize;         /* current pixel size per slot */
 	int  panelX, panelY, panelW, panelH;
 	int  dollBoxX, dollBoxY, dollBoxSize;
@@ -2513,15 +2518,64 @@ static void SurvivalInv_SlotXY(struct SurvivalInvScreen* s, int slot, int* ox, i
 	*oy = s->gridY + row * s->slotSize;
 }
 
-/* Returns the slot index under screen coordinates (mx, my), or -1. */
+/* Pixel origin of crafting grid cell i (0..3), laid out 2 wide x 2 tall. */
+static void SurvivalInv_CraftXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	*ox = s->craftX + (i % 2) * s->slotSize;
+	*oy = s->craftY + (i / 2) * s->slotSize;
+}
+
+static cc_bool SurvivalInv_InSlot(int mx, int my, int x, int y, int size) {
+	return mx >= x && mx < x + size && my >= y && my < y + size;
+}
+
+/* Slot under (mx,my): storage 9..35, craft 36..39, the result sentinel, or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 	int i, x, y;
 	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &x, &y);
-		if (mx >= x && mx < x + s->slotSize &&
-		    my >= y && my < y + s->slotSize) return i;
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return i;
 	}
+	if (!IndevTest_Enabled) return -1; /* no crafting slots in plain c0.30-s */
+	for (i = 0; i < SURVIVAL_CRAFT_SLOTS; i++) {
+		SurvivalInv_CraftXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CRAFT_BASE + i;
+	}
+	if (SurvivalInv_InSlot(mx, my, s->resultX, s->resultY, s->slotSize)) return SURVINV_RESULT_HIT;
 	return -1;
+}
+
+/* Raw id + count for any displayed slot index (storage/craft/result sentinel). */
+static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
+	if (slot == SURVINV_RESULT_HIT) {
+		*id = SurvivalTest_CraftResult(count);
+	} else if (slot >= SURVIVAL_CRAFT_BASE) {
+		*id    = SurvivalTest_CraftSlotId(slot - SURVIVAL_CRAFT_BASE);
+		*count = SurvivalTest_CraftSlotCount(slot - SURVIVAL_CRAFT_BASE);
+	} else {
+		*id    = SurvivalTest_SlotId(slot);
+		*count = SurvivalTest_SlotCount(slot);
+	}
+}
+
+/* Pixel origin of any displayed slot index (storage/craft/result). */
+static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x, int* y) {
+	if (slot == SURVINV_RESULT_HIT)          { *x = s->resultX; *y = s->resultY; }
+	else if (slot >= SURVIVAL_CRAFT_BASE)    SurvivalInv_CraftXY(s, slot - SURVIVAL_CRAFT_BASE, x, y);
+	else                                     SurvivalInv_SlotXY(s, slot, x, y);
+}
+
+/* Total displayed picture slots and a mapping from 0..N-1 to slot indices */
+/*  (storage, then the 4 craft cells, then the result sentinel). */
+#define SURVINV_DISPLAY_SLOTS (SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
+/* Crafting slots only exist in Indev mode; plain c0.30-s shows storage only */
+/*  (it never had crafting), so its screen is byte-for-byte the old layout. */
+static int SurvivalInv_DisplayCount(void) {
+	return IndevTest_Enabled ? SURVINV_DISPLAY_SLOTS : SURVINV_STORAGE_SLOTS;
+}
+static int SurvivalInv_DisplaySlot(int n) {
+	if (n < SURVINV_STORAGE_SLOTS)                        return SURVIVAL_HOTBAR_SLOTS + n;
+	if (n < SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS) return SURVIVAL_CRAFT_BASE + (n - SURVINV_STORAGE_SLOTS);
+	return SURVINV_RESULT_HIT;
 }
 
 /* The paperdoll is a static, unlit preview - just needs a constant base color. */
@@ -2626,13 +2680,15 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	data     = Screen_LockVb(s);
 	halfSize = s->slotSize * 0.5f;
 
-	/* ISO block pictures for all occupied storage slots */
+	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
+	/*  (item ids draw as flat sprites in the render pass instead). */
 	IsometricDrawer_BeginBatch(data, s->isoState);
-	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
-		block = SurvivalTest_SlotBlock(i);
-		if (block == BLOCK_AIR) continue;
-		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
-		IsometricDrawer_AddBatch(block, halfSize,
+	for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+		int slot = SurvivalInv_DisplaySlot(i), id;
+		SurvivalInv_SlotContent(slot, &id, &count);
+		if (id == BLOCK_AIR || count <= 0 || id >= 256) continue; /* items draw as sprites */
+		SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+		IsometricDrawer_AddBatch((BlockID)id, halfSize,
 			slotX + s->slotSize / 2, slotY + s->slotSize / 2);
 	}
 	s->isoVertCount = IsometricDrawer_EndBatch();
@@ -2642,10 +2698,11 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	cur = countDst;
 	if (s->countAtlas.tex.ID) {
 		int savedY = s->countAtlas.tex.y;
-		for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
-			count = SurvivalTest_SlotCount(i);
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i), id;
+			SurvivalInv_SlotContent(slot, &id, &count);
 			if (count <= 1) continue;
-			SurvivalInv_SlotXY(s, i, &slotX, &slotY);
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
 			s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
 			s->countAtlas.curX  = slotX + 2;
 			TextAtlas_AddInt(&s->countAtlas, count, &cur);
@@ -2654,6 +2711,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	}
 	s->countVertCount = (int)(cur - countDst);
 	s->lastInvVersion = SurvivalTest_InvVersion();
+	(void)block;
 
 	Gfx_UnlockDynamicVb(s->vb);
 }
@@ -2679,16 +2737,29 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
 	Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
 
-	/* Slot backgrounds: recessed bevel (dark border + bottom/right highlight) */
-	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
-		SurvivalInv_SlotXY(s, i, &slotX, &slotY);
+	/* Slot backgrounds (storage + craft grid + result): recessed bevel */
+	for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+		int slot = SurvivalInv_DisplaySlot(i);
+		SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
 		Gfx_Draw2DFlat(slotX,     slotY,     s->slotSize,     s->slotSize,
-		               i == s->heldSlot ? heldFill : panelBorder);
-		if (i == s->heldSlot) continue;
+		               slot == s->heldSlot ? heldFill : panelBorder);
+		if (slot == s->heldSlot) continue;
 
 		Gfx_Draw2DFlat(slotX + 1, slotY + 1, s->slotSize - 2, s->slotSize - 2, slotFill);
 		Gfx_Draw2DFlat(slotX + 1, slotY + s->slotSize - 2, s->slotSize - 2, 1, highlight);
 		Gfx_Draw2DFlat(slotX + s->slotSize - 2, slotY + 1, 1, s->slotSize - 2, highlight);
+	}
+
+	/* Crafting arrow: a small dark bar pointing grid -> result (Indev only). */
+	if (IndevTest_Enabled) {
+		int ay = s->resultY + s->slotSize / 2;
+		int ax = s->craftX + 2 * s->slotSize + 2;
+		int aw = s->resultX - ax - 2;
+		if (aw > 2) {
+			Gfx_Draw2DFlat(ax, ay - 1, aw, 3, panelBorder);
+			Gfx_Draw2DFlat(s->resultX - 5, ay - 4, 2, 9, panelBorder);
+			Gfx_Draw2DFlat(s->resultX - 7, ay - 2, 2, 5, panelBorder);
+		}
 	}
 
 	/* "Inventory" title above the panel */
@@ -2709,7 +2780,27 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		IsometricDrawer_Render(s->isoVertCount, 0, s->isoState);
 	}
 
-	/* Stack-count text overlay */
+	/* Item-id sprites (Indev items - tools, food, materials) drawn as flat */
+	/*  icons from items.png; blocks already drew via the ISO pass above. */
+	if (IndevTest_Enabled && IndevTest_ItemsTex()) {
+		struct Texture itex;
+		int isize = (int)(s->slotSize * 0.75f);
+		itex.ID = IndevTest_ItemsTex();
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i), id, count;
+			SurvivalInv_SlotContent(slot, &id, &count);
+			if (count <= 0 || id < 256) continue;
+			if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
+
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			itex.x = (short)(slotX + (s->slotSize - isize) / 2);
+			itex.y = (short)(slotY + (s->slotSize - isize) / 2);
+			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
+			Texture_Render(&itex);
+		}
+	}
+
+	/* Stack-count text overlay (drawn last so digits sit over both pictures) */
 	if (s->countVertCount > 0 && s->countAtlas.tex.ID) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 		Gfx_BindTexture(s->countAtlas.tex.ID);
@@ -2739,6 +2830,8 @@ static void SurvivalInvScreen_Init(void* screen) {
 static void SurvivalInvScreen_Free(void* screen) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	s->heldSlot = -1;
+	/* Safety net: any close path that bypassed the handlers still refunds. */
+	SurvivalTest_CraftReturnAll();
 }
 
 static void SurvivalInvScreen_ContextLost(void* screen) {
@@ -2781,17 +2874,31 @@ static void SurvivalInvScreen_Layout(void* screen) {
 	s->dollBoxSize = SURVINV_DOLL_UNITS * s->slotSize;
 	topAreaH = s->dollBoxSize;
 
-	s->panelW = storageW + pad * 2;
-	s->panelH = pad + topAreaH + gap + storageH + pad;
+	/* Top row holds the paperdoll, then the 2x2 craft grid, an arrow gap, and */
+	/*  the result slot. Panel widens to whichever of that row / the storage */
+	/*  grid is wider, and the storage grid recentres under it. */
+	{
+		int craftW = 2 * s->slotSize + gap + s->slotSize; /* grid + arrow gap + result */
+		int topW   = s->dollBoxSize + gap + craftW;
+		/* Only reserve room for the crafting row in Indev mode. */
+		int contentW = !IndevTest_Enabled ? storageW : (storageW > topW ? storageW : topW);
 
-	s->panelX = (Window_Main.Width  - s->panelW) / 2;
-	s->panelY = (Window_Main.Height - s->panelH) / 2;
+		s->panelW = contentW + pad * 2;
+		s->panelH = pad + topAreaH + gap + storageH + pad;
+		s->panelX = (Window_Main.Width  - s->panelW) / 2;
+		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
-	s->dollBoxX = s->panelX + pad;
-	s->dollBoxY = s->panelY + pad;
+		s->dollBoxX = s->panelX + pad;
+		s->dollBoxY = s->panelY + pad;
 
-	s->gridX = s->panelX + pad;
-	s->gridY = s->panelY + pad + topAreaH + gap;
+		s->craftX = s->dollBoxX + s->dollBoxSize + gap;
+		s->craftY = s->dollBoxY + (topAreaH - 2 * s->slotSize) / 2;
+		s->resultX = s->craftX + 2 * s->slotSize + gap;
+		s->resultY = s->dollBoxY + (topAreaH - s->slotSize) / 2;
+
+		s->gridX = s->panelX + (s->panelW - storageW) / 2;
+		s->gridY = s->panelY + pad + topAreaH + gap;
+	}
 
 	s->dirty = true;
 }
@@ -2800,6 +2907,7 @@ static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* 
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
+		SurvivalTest_CraftReturnAll();
 		Gui_Remove((struct Screen*)s);
 	}
 	return true;
@@ -2810,21 +2918,28 @@ static int SurvivalInvScreen_PointerDown(void* screen, int id, int x, int y) {
 	int hit = SurvivalInv_HitSlot(s, x, y);
 
 	if (hit < 0) {
-		/* Clicked outside the grid - deselect and close */
+		/* Clicked outside - refund the grid, deselect and close */
 		s->heldSlot = -1;
+		SurvivalTest_CraftReturnAll();
 		Gui_Remove((struct Screen*)s);
 		return TOUCH_TYPE_GUI;
 	}
 
-	if (s->heldSlot < 0) {
-		/* Nothing held: pick up the slot if it has something */
-		if (SurvivalTest_SlotBlock(hit) != BLOCK_AIR)
-			s->heldSlot = hit;
+	if (hit == SURVINV_RESULT_HIT) {
+		/* Taking from the result slot crafts (can't pick it up / place into it) */
+		SurvivalTest_CraftTake();
+		s->heldSlot = -1;
+		s->dirty    = true;
+	} else if (s->heldSlot < 0) {
+		/* Nothing held: pick up the slot if it has anything (block OR item) */
+		int cid, ccount;
+		SurvivalInv_SlotContent(hit, &cid, &ccount);
+		if (ccount > 0) s->heldSlot = hit;
 	} else if (s->heldSlot == hit) {
 		/* Clicked the same slot again: deselect */
 		s->heldSlot = -1;
 	} else {
-		/* Different slot: swap the two stacks */
+		/* Different slot: swap the two stacks (works across inventory/grid) */
 		SurvivalTest_SwapSlots(s->heldSlot, hit);
 		s->heldSlot = -1;
 		s->dirty    = true;

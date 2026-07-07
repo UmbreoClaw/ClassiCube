@@ -9,7 +9,45 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
-## SESSION LOG — Indev mode plumbing + modularity groundwork (latest)
+## SESSION LOG — 2x2 crafting GUI (latest)
+
+The crafting loop is now playable end to end in Indev mode.
+
+### Model (SurvivalTest.c)
+- 2x2 grid `st_craft[4]`, addressed as extended slots 36..39. `SwapSlots`
+  gained `SlotPtr` so it moves stacks between inventory and grid uniformly.
+- `SurvivalTest_CraftResult(&count)` builds the 2x2 full-id grid and queries
+  `IndevTest_MatchRecipe`. `CraftTake` yields the output + consumes one of
+  each ingredient (SlotCrafting.onPickupFromSlot). `CraftReturnAll` refunds
+  the grid to the inventory on close (never lose materials).
+
+### GUI (Screens.c, SurvivalInvScreen - the survival inventory screen)
+- Extended the existing paperdoll inventory: the top row now shows the 2x2
+  grid + an arrow + the result slot beside the doll; panel widens and the
+  storage grid recentres. **All of this is gated on IndevTest_Enabled** -
+  plain c0.30-s renders the byte-identical old screen (DisplayCount returns
+  storage-only, HitSlot ignores the craft area, no arrow, panel not widened).
+- **Item sprites in slots**: this screen only ever drew ISO block pictures;
+  item ids (tools/food/materials) were invisible in the inventory. Added an
+  immediate `Texture_Render` pass from items.png for item-id slots (storage,
+  grid, and result), so items finally show in the inventory too - not just
+  crafting. Blocks still use the ISO batch; counts overlay both.
+- Click model reuses the swap-based `heldSlot`: click to pick up (block OR
+  item now - the pickup gate was block-only before), click again to place/
+  swap; clicking the result slot crafts (CraftTake). Refund on E/Esc/outside/
+  Free.
+
+### Known simplifications (documented, not blocking)
+- No item-follows-cursor drag; the held slot just highlights yellow (existing
+  screen behaviour). 2x2 only - the 3x3 workbench needs the workbench block,
+  which needs the block-additions phase. Result recomputes per render (cheap).
+
+### NEXT: block additions (workbench, crate/chest, furnace, torch, painting)
+unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
+
+---
+
+## SESSION LOG — Indev mode plumbing + modularity groundwork
 
 Next major goal: an **Indev (in-20100223) gamemode** layered on the survival
 core. Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (fetched to
