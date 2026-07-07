@@ -2670,9 +2670,13 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_SetDepthTest(true);
 	Gfx_SetDepthWrite(true);
 	Gfx_SetAlphaTest(true);
+	/* Model_Render relies on backface culling; the panel/sprite draws before */
+	/*  this leave it off, which culled the whole model (black window). */
+	Gfx_SetFaceCulling(true);
 
 	Model_Render(s->doll.Model, &s->doll);
 
+	Gfx_SetFaceCulling(false);
 	Gfx_SetAlphaTest(false);
 	Gfx_SetDepthWrite(false);
 	Gfx_SetDepthTest(false);

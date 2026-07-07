@@ -1,6 +1,12 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
 ## SESSION LOG - Indev inventory GUI now uses the genuine texture (latest)
+### Paperdoll black-box fix
+The doll rendered as just the texture's black window - Model_Render relies on
+backface culling but the panel/item-sprite draws before it left culling OFF,
+so every model face was culled. Now sets Gfx_SetFaceCulling(true) around the
+doll's Model_Render (restored after). Block-in-GUI sizing/centering pending
+user recheck on this build.
 
 The flat grey survival panel is replaced, in Indev mode, by the real
 gui/inventory.png from the b1.7.3 jar - so the screen matches Indev's look.
