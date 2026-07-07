@@ -2667,12 +2667,19 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
 	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
 
+	/* Screens render in the 2D pass (depth off, alpha BLENDING on, culling */
+	/*  off). A model needs the full 3D baseline the world pass provides: */
+	/*  depth test+write, alpha TEST (not blend), and backface culling. */
 	Gfx_SetDepthTest(true);
 	Gfx_SetDepthWrite(true);
 	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetFaceCulling(true);
 
 	Model_Render(s->doll.Model, &s->doll);
 
+	Gfx_SetFaceCulling(false);
+	Gfx_SetAlphaBlending(true);
 	Gfx_SetAlphaTest(false);
 	Gfx_SetDepthWrite(false);
 	Gfx_SetDepthTest(false);
