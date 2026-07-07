@@ -46,6 +46,15 @@ static struct TextureEntry invgui_entry = { "inventory.png", InvGuiPngProcess };
 
 GfxResourceID IndevTest_InvGuiTex(void) { return indev_invGuiTexId; }
 
+/* gui/crafting.png - the workbench 3x3 crafting GUI texture */
+static GfxResourceID indev_craftGuiTexId;
+static void CraftGuiPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_craftGuiTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry craftgui_entry = { "crafting.png", CraftGuiPngProcess };
+
+GfxResourceID IndevTest_CraftGuiTex(void) { return indev_craftGuiTexId; }
+
 /* Item definitions - the complete in-20100223 roster from Item.java's static
     init (local ids; shiftedIndex = id + 256). kind drives behaviour:
     tools/swords/hoes carry a tier (maxDamage = 32 << tier, ItemTool.java:14)
@@ -344,6 +353,7 @@ static void IndevItems_Seed(void) {
 /*  reserved atlas tiles (96+, patched in from the b1.7.3 jar's terrain.png */
 /*  by Resources.c's BetaPatcher - see the notes' reservation table). */
 #define INDEV_BLOCK_WORKBENCH   66
+cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDEV_BLOCK_WORKBENCH; }
 #define INDEV_BLOCK_CHEST       67
 #define INDEV_BLOCK_FURNACE     68
 #define INDEV_BLOCK_FURNACE_LIT 69
@@ -394,13 +404,19 @@ static void IndevBlocks_Define(void) {
 }
 
 static void OnInit(void) {
-	IndevTest_Enabled = Options_GetBool(OPT_INDEV_MODE, false);
+	/* Indev and Survival Test are exclusive gamemodes. If both options are */
+	/*  somehow set at once, Survival Test wins - so its c0.30 behaviour never */
+	/*  gets Indev drops/blocks/recipes leaking in (the launcher keeps them */
+	/*  exclusive, this is the runtime backstop). */
+	IndevTest_Enabled = Options_GetBool(OPT_INDEV_MODE, false)
+	                 && !Options_GetBool(OPT_SURVIVAL_MODE, false);
 	if (!IndevTest_Enabled) return;
 
 	IndevItems_Seed();
 	IndevBlocks_Define();
 	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&invgui_entry);
+	TextureEntry_Register(&craftgui_entry);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 

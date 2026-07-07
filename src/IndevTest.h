@@ -23,6 +23,10 @@ GfxResourceID IndevTest_ItemsTex(void);
 /* The genuine gui/inventory.png (0 until loaded) - the Indev inventory */
 /*  screen draws its whole panel from this 176x166 region. */
 GfxResourceID IndevTest_InvGuiTex(void);
+/* The workbench gui/crafting.png (0 until loaded) - the 3x3 crafting screen. */
+GfxResourceID IndevTest_CraftGuiTex(void);
+/* Whether the block is the Indev workbench (right-click opens the 3x3 grid). */
+cc_bool IndevTest_IsWorkbench(BlockID b);
 /* Atlas UVs of an item id's sprite (items.png, 16x16 grid). False when the */
 /*  id isn't a known Indev item - callers skip drawing then. */
 cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2);

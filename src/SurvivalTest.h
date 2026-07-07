@@ -32,9 +32,10 @@ extern int SurvivalTest_Health;
 #define SURVIVAL_INV_SLOTS    36
 /* Number of inventory slots that make up the hotbar. */
 #define SURVIVAL_HOTBAR_SLOTS 9
-/* 2x2 pocket crafting grid, addressed as extended slots 36..39 (see */
-/*  SurvivalTest_SwapSlots, which moves items between inventory and grid). */
-#define SURVIVAL_CRAFT_SLOTS  4
+/* Crafting grid, addressed as extended slots 36..44. Up to 3x3 (workbench); */
+/*  the pocket inventory uses the top 2x2, a placed workbench all 9. Which is */
+/*  active is SurvivalTest_CraftDim (2 or 3). */
+#define SURVIVAL_CRAFT_SLOTS  9
 #define SURVIVAL_CRAFT_BASE   SURVIVAL_INV_SLOTS
 
 /* Applies damage to the player (respects invincibility frames). */
@@ -109,6 +110,12 @@ int SurvivalTest_CraftResult(int* outCount);
 void SurvivalTest_CraftTake(void);
 /* Returns all grid ingredients to the inventory (call on inventory close). */
 void SurvivalTest_CraftReturnAll(void);
+/* Current crafting grid dimension: 2 (pocket 2x2) or 3 (workbench 3x3). */
+int  SurvivalTest_CraftDim(void);
+/* Sets the crafting grid dimension for the next screen (returns any items */
+/*  already on the grid first, so switching pocket<->workbench never strands */
+/*  ingredients). */
+void SurvivalTest_SetCraftDim(int dim);
 
 /* Whether the player is allowed to place their currently selected block. */
 /* Returns true (always allowed) when survival mode is disabled. */
@@ -117,6 +124,9 @@ cc_bool SurvivalTest_CanPlace(BlockID block);
 /* Attempts to eat the currently selected hotbar item (mushrooms). */
 /* Returns true if something was eaten, so block placement should be skipped. */
 cc_bool SurvivalTest_TryEat(void);
+/* Right-click use of the aimed block (Indev workbench opens the 3x3 grid). */
+/*  Returns true if handled, so the caller skips placing a block. */
+cc_bool SurvivalTest_TryUseBlock(void);
 
 /* Renders all physical dropped-item entities in the 3D world. */
 /* No-op when survival mode is disabled. Call once per frame, alongside */

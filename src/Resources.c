@@ -823,6 +823,7 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "gui.png",  RESOURCE_TYPE_DATA }, { "animations.png", RESOURCE_TYPE_PNG  },
 	{ "items.png", RESOURCE_TYPE_DATA }, /* gui/items.png from the beta jar (Indev mode item sprites) */
 	{ "inventory.png", RESOURCE_TYPE_DATA }, /* gui/inventory.png from the beta jar (Indev inventory GUI) */
+	{ "crafting.png",  RESOURCE_TYPE_DATA }, /* gui/crafting.png from the beta jar (Indev workbench 3x3 GUI) */
 	{ "animations.txt", RESOURCE_TYPE_CONST, sizeof(ANIMS_TXT) - 1, (cc_uint8*)ANIMS_TXT },
 #ifdef CC_BUILD_MOBILE
 	{ "touch.png", RESOURCE_TYPE_DATA }
@@ -943,6 +944,7 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req) {
 static cc_bool BetaPatcher_SelectEntry(const cc_string* path) {
 	return String_CaselessEqualsConst(path, "gui/items.png")
 		|| String_CaselessEqualsConst(path, "gui/inventory.png")
+		|| String_CaselessEqualsConst(path, "gui/crafting.png")
 		|| String_CaselessEqualsConst(path, "terrain.png");
 }
 
@@ -987,6 +989,11 @@ static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* 
 	if (String_CaselessEqualsConst(path, "gui/inventory.png")) {
 		static const cc_string invPng = String_FromConst("inventory.png");
 		e = ZipEntries_Find(&invPng);
+		return ZipEntry_ExtractData(e, data, source);
+	}
+	if (String_CaselessEqualsConst(path, "gui/crafting.png")) {
+		static const cc_string craftPng = String_FromConst("crafting.png");
+		e = ZipEntries_Find(&craftPng);
 		return ZipEntry_ExtractData(e, data, source);
 	}
 

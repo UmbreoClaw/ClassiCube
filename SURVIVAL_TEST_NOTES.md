@@ -1,5 +1,34 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Workbench 3x3 crafting + mode-exclusivity fix (latest)
+
+### Mode leak fix (user: string/feathers in survival test)
+Indev mob/block drops are gated by IndevTest_Enabled, but if BOTH
+indev-mode AND survival-mode options were set at once, Indev won and its
+drops appeared in "survival test". IndevTest_Enabled is now
+`OPT_INDEV_MODE && !OPT_SURVIVAL_MODE` - Survival Test wins any both-set
+edge, so no Indev behaviour leaks into c0.30. (Launcher already keeps
+them exclusive; this is the runtime backstop.)
+
+### Workbench 3x3 crafting grid
+- Craft grid expanded to 9 slots with a runtime CraftDim (2 pocket / 3
+  workbench). CraftResult/Take/ReturnAll are dim-aware; the recipe matcher
+  already slides patterns in an arbitrary gw x gh grid, so 3-wide recipes
+  (tools, chest, furnace, bread, TNT) only match in the 3x3 - genuine.
+- gui/crafting.png extracted from the b1.7.3 jar (like inventory.png) via
+  BetaPatcher; IndevTest_CraftGuiTex() exposes it. The screen renders it
+  as the panel for the workbench (176x166, 3x3 grid at 30,17, result 124,35,
+  no paperdoll window) and inventory.png for the pocket - genuine
+  GuiCrafting/GuiInventory coords.
+- Screen made dim-aware throughout: CraftXY (i%dim), HitSlot, Display
+  count/slot iterate CraftCells() = dim*dim; layout picks coords by dim;
+  the doll is skipped for the workbench.
+- Right-clicking a placed workbench (SurvivalTest_TryUseBlock, wired into
+  InputHandler_PlaceBlock) sets dim 3 and opens the screen; closing resets
+  to pocket 2x2. E-inventory stays the 2x2 pocket.
+- Existing installs: delete default.zip once to fetch crafting.png.
+
+
 ## SESSION LOG - Indev inventory GUI now uses the genuine texture (latest)
 ### Paperdoll black-box fix RESOLVED on OpenGL by the default-skin fallback (the local player's
 TextureId is 0 in singleplayer with no ClassiCube skin; the doll now forces

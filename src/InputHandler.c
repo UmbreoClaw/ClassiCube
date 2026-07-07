@@ -431,6 +431,8 @@ static void InputHandler_PlaceBlock(void) {
 	/* In survival, right-clicking a mushroom eats it instead of placing a */
 	/*  block - works even when not aiming at a placeable surface */
 	if (SurvivalTest_TryEat()) return;
+	/* Right-clicking a workbench opens the 3x3 crafting grid (Indev) */
+	if (SurvivalTest_TryUseBlock()) return;
 
 	pos = Game_SelectedPos.translatedPos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;

@@ -3529,6 +3529,13 @@ static void SurvivalTest_SyncHotbar(void) {
 /*  36..39 in the extended addressing below; the result is a virtual slot the */
 /*  player takes from, which crafts and consumes one of each grid ingredient. */
 static struct SurvivalSlot st_craft[SURVIVAL_CRAFT_SLOTS];
+static int st_craftDim = 2; /* 2 = pocket 2x2, 3 = workbench 3x3 */
+
+int SurvivalTest_CraftDim(void) { return st_craftDim; }
+void SurvivalTest_SetCraftDim(int dim) {
+	SurvivalTest_CraftReturnAll(); /* clear the grid before resizing it */
+	st_craftDim = (dim == 3) ? 3 : 2;
+}
 
 /* Resolves an extended slot index to its backing SurvivalSlot: 0..35 = the */
 /*  real inventory, 36..39 = the crafting grid. (The result slot is virtual */
@@ -3632,13 +3639,13 @@ int SurvivalTest_CraftSlotCount(int i) { return st_craft[i].count; }
 /* Builds the 2x2 grid of full-space ids and asks the Indev recipe engine what */
 /*  it makes. Returns the result id (0 if nothing), and its count via outCount. */
 int SurvivalTest_CraftResult(int* outCount) {
-	cc_uint16 grid[4];
-	int id, count, i;
+	cc_uint16 grid[9];
+	int id, count, i, n = st_craftDim * st_craftDim;
 	*outCount = 0;
 	if (!IndevTest_Enabled) return 0;
 
-	for (i = 0; i < 4; i++) grid[i] = st_craft[i].count > 0 ? st_craft[i].id : 0;
-	if (!IndevTest_MatchRecipe(grid, 2, 2, &id, &count)) return 0;
+	for (i = 0; i < n; i++) grid[i] = st_craft[i].count > 0 ? st_craft[i].id : 0;
+	if (!IndevTest_MatchRecipe(grid, st_craftDim, st_craftDim, &id, &count)) return 0;
 	*outCount = count;
 	return id;
 }
@@ -3756,6 +3763,23 @@ void SurvivalTest_TryDropHeld(void) {
 void SurvivalTest_DebugGiveItem(int id) {
 	if (!SurvivalTest_Enabled) return;
 	SurvivalTest_AddItem((cc_uint16)id);
+}
+
+/* Right-clicking a placed workbench opens the 3x3 crafting screen. Returns */
+/*  true (click consumed) so no block is placed. The regular E-inventory */
+/*  opens the pocket 2x2; both share the same screen, differing by CraftDim. */
+cc_bool SurvivalTest_TryUseBlock(void) {
+	IVec3 pos;
+	if (!SurvivalTest_Enabled || !IndevTest_Enabled) return false;
+	if (!Game_SelectedPos.valid) return false;
+
+	pos = Game_SelectedPos.pos;
+	if (!World_Contains(pos.x, pos.y, pos.z)) return false;
+	if (!IndevTest_IsWorkbench(World_GetBlock(pos.x, pos.y, pos.z))) return false;
+
+	SurvivalTest_SetCraftDim(3);
+	SurvivalInvScreen_Show();
+	return true;
 }
 
 cc_bool SurvivalTest_TryEat(void) {
