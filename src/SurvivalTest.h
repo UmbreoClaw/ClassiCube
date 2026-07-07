@@ -86,6 +86,18 @@ int SurvivalTest_InvVersion(void);
 /*  SURVIVAL_CRAFT_BASE..+3 are the 2x2 crafting grid (no-op when disabled). */
 void SurvivalTest_SwapSlots(int a, int b);
 
+/* The cursor-held stack (what the mouse carries in the inventory screen). */
+int SurvivalTest_CursorId(void);
+int SurvivalTest_CursorCount(void);
+/* GuiContainer click semantics on a slot (0-35 inventory, 36-39 craft grid): */
+/*  empty cursor: left takes all / right takes half; same id: left merges / */
+/*  right places one; otherwise the stacks swap. */
+void SurvivalTest_SlotClick(int idx, cc_bool rightClick);
+/* Takes from the crafting result: crafts once onto the cursor. */
+void SurvivalTest_ResultClick(void);
+/* Empties the cursor back into the inventory (call when the screen closes). */
+void SurvivalTest_CursorReturn(void);
+
 /* 2x2 crafting grid cell contents (i = 0..SURVIVAL_CRAFT_SLOTS-1). */
 int SurvivalTest_CraftSlotId(int i);
 int SurvivalTest_CraftSlotCount(int i);

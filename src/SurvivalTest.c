@@ -3539,6 +3539,82 @@ static struct SurvivalSlot* SurvivalTest_SlotPtr(int idx) {
 	return &st_inv[idx];
 }
 
+/* The cursor-held stack (InventoryPlayer.itemStack) - what the mouse is */
+/*  carrying between slot clicks in the inventory/crafting screen. */
+static struct SurvivalSlot st_cursor;
+
+int SurvivalTest_CursorId(void)    { return st_cursor.id; }
+int SurvivalTest_CursorCount(void) { return st_cursor.count; }
+
+/* GuiContainer slot-click rules:                                            */
+/*  cursor empty:  left takes the whole stack, right takes the upper half.  */
+/*  same id:       left merges as many as fit, right places exactly one.    */
+/*  different id (or one side empty): the stacks swap.                      */
+void SurvivalTest_SlotClick(int idx, cc_bool rightClick) {
+	struct SurvivalSlot* p;
+	struct SurvivalSlot tmp;
+	int space, moved;
+	if (!SurvivalTest_Enabled) return;
+	p = SurvivalTest_SlotPtr(idx);
+
+	if (st_cursor.count <= 0) {
+		/* Pick up: all, or ceil(half) on right-click */
+		if (p->count <= 0) return;
+		moved = rightClick ? (p->count + 1) / 2 : p->count;
+		st_cursor        = *p;
+		st_cursor.count  = (cc_int16)moved;
+		p->count        -= (cc_int16)moved;
+		if (p->count == 0) { p->id = BLOCK_AIR; p->damage = 0; }
+	} else if (p->count > 0 && p->id == st_cursor.id) {
+		/* Merge into the slot (respecting the id's max stack size) */
+		space = ST_MaxStack(p->id) - p->count;
+		if (space <= 0) return;
+		moved = rightClick ? 1 : st_cursor.count;
+		if (moved > space) moved = space;
+		p->count        += (cc_int16)moved;
+		st_cursor.count -= (cc_int16)moved;
+		if (st_cursor.count == 0) { st_cursor.id = BLOCK_AIR; st_cursor.damage = 0; }
+	} else if (p->count <= 0 && rightClick) {
+		/* Right-click into an empty slot: place exactly one */
+		p->id     = st_cursor.id;
+		p->damage = st_cursor.damage;
+		p->count  = 1;
+		if (--st_cursor.count == 0) { st_cursor.id = BLOCK_AIR; st_cursor.damage = 0; }
+	} else {
+		/* Different contents (or left-click into empty): swap */
+		tmp = *p; *p = st_cursor; st_cursor = tmp;
+	}
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
+/* SlotCrafting pickup: crafting yields the result onto the CURSOR (stacking */
+/*  when it already holds the same id with room), consuming one of each grid */
+/*  ingredient. No-op when the cursor holds something else. */
+void SurvivalTest_ResultClick(void) {
+	int count, i, id = SurvivalTest_CraftResult(&count);
+	if (!id) return;
+	if (st_cursor.count > 0 &&
+		(st_cursor.id != id || st_cursor.count + count > ST_MaxStack((cc_uint16)id))) return;
+
+	st_cursor.id     = (cc_uint16)id;
+	st_cursor.count += (cc_int16)count;
+	for (i = 0; i < SURVIVAL_CRAFT_SLOTS; i++) {
+		if (st_craft[i].count <= 0) continue;
+		if (--st_craft[i].count == 0) { st_craft[i].id = BLOCK_AIR; st_craft[i].damage = 0; }
+	}
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
+/* Returns the cursor stack to the inventory - screen close must never eat it */
+void SurvivalTest_CursorReturn(void) {
+	while (st_cursor.count > 0 && SurvivalTest_AddItem(st_cursor.id)) st_cursor.count--;
+	if (st_cursor.count <= 0) { st_cursor.id = BLOCK_AIR; st_cursor.damage = 0; }
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
 void SurvivalTest_SwapSlots(int a, int b) {
 	struct SurvivalSlot *pa, *pb, tmp;
 	if (!SurvivalTest_Enabled) return;

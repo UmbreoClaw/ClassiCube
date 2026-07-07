@@ -2471,7 +2471,7 @@ void InventoryScreen_Hide(void) {
 #define SURVINV_PAD_BASE      8
 
 /* Displayed block-picture slots: storage + hotbar row + craft grid + result. */
-#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + 2) /* + result + cursor */
 #define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
 #define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
@@ -2703,6 +2703,12 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 		IsometricDrawer_AddBatch((BlockID)id, halfSize,
 			slotX + s->slotSize / 2, slotY + s->slotSize / 2);
 	}
+	/* Cursor-held BLOCK follows the mouse inside the same iso batch (held */
+	/*  ITEMS draw as sprites in the render pass instead). */
+	if (SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() < 256 && s->mouseX >= 0) {
+		IsometricDrawer_AddBatch((BlockID)SurvivalTest_CursorId(), halfSize,
+			s->mouseX, s->mouseY);
+	}
 	s->isoVertCount = IsometricDrawer_EndBatch();
 
 	/* Stack-count digit overlay for slots with count > 1 */
@@ -2821,6 +2827,24 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		                             SURVINV_MAX_ISO_VERTS, DRAW_HINT_RECT);
 	}
 
+	/* Cursor-held stack follows the mouse, drawn over everything (blocks are */
+	/*  in the iso mesh below - see BuildMesh's cursor entry - items here). */
+	if (IndevTest_Enabled && SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() >= 256
+		&& IndevTest_ItemsTex()) {
+		struct Texture ctex;
+		int isize = (int)(s->slotSize * 0.75f);
+		if (IndevTest_ItemSpriteUV(SurvivalTest_CursorId(),
+				&ctex.uv.u1, &ctex.uv.v1, &ctex.uv.u2, &ctex.uv.v2)) {
+			ctex.ID     = IndevTest_ItemsTex();
+			ctex.x      = (short)(s->mouseX - isize / 2);
+			ctex.y      = (short)(s->mouseY - isize / 2);
+			ctex.width  = (cc_uint16)isize;
+			ctex.height = (cc_uint16)isize;
+			Texture_Render(&ctex);
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		}
+	}
+
 	/* 3D paperdoll, confined to its preview box and rotated to face the mouse */
 	SurvivalInv_RenderDoll(s);
 }
@@ -2919,47 +2943,43 @@ static void SurvivalInvScreen_Layout(void* screen) {
 	s->dirty = true;
 }
 
+static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bool rightClick) {
+	int hit = SurvivalInv_HitSlot(s, mx, my);
+
+	if (hit < 0) {
+		/* Clicked outside - refund cursor + grid and close */
+		SurvivalTest_CursorReturn();
+		SurvivalTest_CraftReturnAll();
+		Gui_Remove((struct Screen*)s);
+		return;
+	}
+	if (hit == SURVINV_RESULT_HIT) {
+		SurvivalTest_ResultClick(); /* crafts once onto the cursor */
+	} else {
+		SurvivalTest_SlotClick(hit, rightClick);
+	}
+	s->dirty = true;
+}
+
 static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
+		SurvivalTest_CursorReturn();
 		SurvivalTest_CraftReturnAll();
 		Gui_Remove((struct Screen*)s);
+	}
+	/* Right mouse arrives as a key event, not a pointer event - route it */
+	/*  through the same click logic using the tracked mouse position. */
+	if (key == CCMOUSE_R && s->mouseX >= 0) {
+		SurvivalInv_Click(s, s->mouseX, s->mouseY, true);
 	}
 	return true;
 }
 
 static int SurvivalInvScreen_PointerDown(void* screen, int id, int x, int y) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	int hit = SurvivalInv_HitSlot(s, x, y);
-
-	if (hit < 0) {
-		/* Clicked outside - refund the grid, deselect and close */
-		s->heldSlot = -1;
-		SurvivalTest_CraftReturnAll();
-		Gui_Remove((struct Screen*)s);
-		return TOUCH_TYPE_GUI;
-	}
-
-	if (hit == SURVINV_RESULT_HIT) {
-		/* Taking from the result slot crafts (can't pick it up / place into it) */
-		SurvivalTest_CraftTake();
-		s->heldSlot = -1;
-		s->dirty    = true;
-	} else if (s->heldSlot < 0) {
-		/* Nothing held: pick up the slot if it has anything (block OR item) */
-		int cid, ccount;
-		SurvivalInv_SlotContent(hit, &cid, &ccount);
-		if (ccount > 0) s->heldSlot = hit;
-	} else if (s->heldSlot == hit) {
-		/* Clicked the same slot again: deselect */
-		s->heldSlot = -1;
-	} else {
-		/* Different slot: swap the two stacks (works across inventory/grid) */
-		SurvivalTest_SwapSlots(s->heldSlot, hit);
-		s->heldSlot = -1;
-		s->dirty    = true;
-	}
+	SurvivalInv_Click(s, x, y, false);
 	return TOUCH_TYPE_GUI;
 }
 
@@ -2968,6 +2988,7 @@ static int SurvivalInvScreen_PointerMove(void* screen, int id, int x, int y) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	s->mouseX = x;
 	s->mouseY = y;
+	if (SurvivalTest_CursorCount() > 0) s->dirty = true; /* held stack tracks the mouse */
 	return false;
 }
 

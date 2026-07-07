@@ -78,6 +78,32 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Drag-and-drop stack handling (GuiContainer semantics) - user request
+- Cursor-held stack backend (InventoryPlayer.itemStack): st_cursor +
+  SurvivalTest_SlotClick implementing the genuine rules - empty cursor: left
+  takes all / RIGHT TAKES THE UPPER HALF; same id: left merges up to max
+  stack / right places exactly ONE; different: swap. ResultClick crafts once
+  ONTO THE CURSOR (stacks when same id fits). CursorReturn empties the
+  cursor back to inventory on any close path (Esc, E, click-outside) so
+  stacks are never eaten.
+- Screen: PointerDown = left click; right mouse arrives as a KEY event
+  (CCMOUSE_R) and routes through the same click path with the tracked mouse
+  position. The held stack renders following the mouse: blocks join the iso
+  mesh (rebuilt while carrying), items draw as sprites; old heldSlot swap UI
+  retired (field kept, always -1).
+- So half-stack splitting / one-by-one placement for crafting works:
+  right-click a stack to halve, right-click cells to distribute singles.
+
+### NEXT SESSION: block additions plan (workbench first)
+Approach verified this session: extend BetaPatcher (Resources.c) to also
+extract terrain.png from the already-downloaded b1.7.3 jar and PatchTerrainTile
+the workbench top/side/front, furnace front/side, chest tiles into FREE cells
+of the terrain atlas (must first verify which cells are unused against the
+actual default terrain.png - not safely determinable blind, hence deferred).
+Then define blocks via the engine block-defs (id 66+), give them the Indev
+hardness/sounds, add the 2x2->workbench recipe (already encodable), and a
+3x3 variant of the crafting screen (grid size is the only difference).
+
 ### Inventory screen: in-screen hotbar row added (user report)
 Hotbar slots (0-8) weren't clickable inside the inventory screen - HitSlot
 started at slot 9, so stacks couldn't move between hotbar and storage/craft.
