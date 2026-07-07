@@ -1,7 +1,15 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
 ## SESSION LOG - Indev inventory GUI now uses the genuine texture (latest)
-### Paperdoll black-box fix
+### Paperdoll black-box fix RESOLVED on OpenGL by the default-skin fallback (the local player's
+TextureId is 0 in singleplayer with no ClassiCube skin; the doll now forces
+the model's char.png defaultTex). Remaining GL tweaks: pitch tracking was
+inverted (cursor down tilted the head up) - fixed the sign + use the tall
+box's vertical centre; and the model was ~96% of the box height (too big) -
+DOLL_DIST 3.4 -> 4.7 for margin. STILL BLANK ON DIRECT3D: rendering a 3D
+model mid-2D-UI-pass behaves differently on D3D (depth-stencil state objects,
+no depth buffer bound). Proper fix = render the doll during the 3D frame,
+not the 2D overlay - deferred as its own task.
 The doll rendered as just the texture's black window - Model_Render relies on
 backface culling but the panel/item-sprite draws before it left culling OFF,
 so every model face was culled. Now sets Gfx_SetFaceCulling(true) around the

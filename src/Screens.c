@@ -2483,7 +2483,7 @@ void InventoryScreen_Hide(void) {
 /*  perspective projection (a tighter, portrait-style FOV than the gameplay */
 /*  camera, since it's a close-up of just the player model). */
 #define SURVINV_DOLL_FOV  30.0f
-#define SURVINV_DOLL_DIST  3.4f
+#define SURVINV_DOLL_DIST  4.7f /* farther back so the full body fits the box with margin */
 /* Widens the doll's horizontal FOV relative to vertical, so the body sits */
 /*  with comfortable side margin instead of its shoulders touching the box */
 /*  edges (matching the reference Indev/Beta paperdoll's proportions). */
@@ -2649,9 +2649,10 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		headYaw = 0.0f; headPitch = 0.0f;
 	} else {
 		relX = (float)(s->mouseX - (boxX + boxSize / 2));
-		relY = (float)(s->mouseY - (boxY + boxSize / 3));
-		headYaw   =  Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
-		headPitch = -Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
+		relY = (float)(s->mouseY - (boxY + boxH / 2)); /* vertical centre of the tall box */
+		headYaw   = Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
+		/* +relY so cursor BELOW centre tilts the head down (was inverted) */
+		headPitch = Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
 	}
 
 	/* Body always faces forward towards the camera; only the head tracks the cursor. */
