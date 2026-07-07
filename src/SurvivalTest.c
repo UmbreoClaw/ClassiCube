@@ -420,7 +420,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 /* Spawns one physical item drop inside the given block. BlockUtils.dropItems */
 /*  rolls a fresh rand*0.7 + 0.15 offset (0.15..0.85) per axis per item, so */
 /*  multi-item drops (logs, ores) start scattered rather than stacked. */
-static void SurvivalTest_SpawnDrop(IVec3 coords, BlockID block) {
+static void SurvivalTest_SpawnDrop(IVec3 coords, cc_uint16 block) {
 	Vec3 pos;
 	pos.x = coords.x + Random_Float(&st_dropRng) * 0.7f + 0.15f;
 	pos.y = coords.y + Random_Float(&st_dropRng) * 0.7f + 0.15f;
@@ -503,9 +503,44 @@ static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, i
 
 /* Decides what physically drops when a block is mined (Survival Test rules). */
 /*  Mining always uses chance=1.0 (BlockUtils.dropItems's default overload). */
+/* Indev block drops (BlockStone/Log/Ore/... idDropped + quantityDropped), */
+/*  gated by canHarvestBlock. Differs from c0.30: log drops the LOG block */
+/*  (not planks), coal ore drops the coal ITEM, gravel has a 1/10 flint roll, */
+/*  and rock/iron blocks yield nothing without a suitable pickaxe. */
+static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
+	int heldId = st_inv[Inventory.SelectedIndex].id;
+	cc_uint16 dropId = oldBlock; /* most blocks drop themselves */
+	int count = 1, i;
+
+	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); return; }
+	/* canHarvestBlock: rock/iron needs a pickaxe (see IndevTest_CanHarvest) */
+	if (!IndevTest_CanHarvest(heldId, oldBlock)) return;
+
+	switch (oldBlock) {
+	case BLOCK_GRASS:   dropId = BLOCK_DIRT; break;
+	case BLOCK_STONE:   dropId = BLOCK_COBBLE; break;      /* BlockStone -> cobblestone */
+	case BLOCK_LOG:     dropId = BLOCK_LOG; break;         /* BlockLog -> the log itself */
+	case BLOCK_COAL_ORE: dropId = 256 + 7; break;          /* -> coal ITEM */
+	case BLOCK_LEAVES:  dropId = BLOCK_SAPLING;
+	                    count  = Random_Next(&st_dropRng, 10) == 0 ? 1 : 0; break;
+	case BLOCK_GRAVEL:  if (Random_Next(&st_dropRng, 10) == 0) dropId = 256 + 62; /* flint */
+	                    break;
+	case BLOCK_DOUBLE_SLAB: dropId = BLOCK_SLAB; break;
+	case BLOCK_GLASS: case BLOCK_BOOKSHELF:
+	case BLOCK_WATER: case BLOCK_STILL_WATER:
+	case BLOCK_LAVA:  case BLOCK_STILL_LAVA:
+		return; /* quantityDropped 0 / liquids */
+	default: break; /* dirt, sand, planks, ores(iron/gold->self), wool, etc */
+	}
+
+	for (i = 0; i < count; i++) { SurvivalTest_SpawnDrop(coords, dropId); }
+}
+
 static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 	BlockID dropBlock;
 	int count, i;
+
+	if (IndevTest_Enabled) { SurvivalTest_SpawnIndevDrops(coords, oldBlock); return; }
 
 	if (oldBlock == BLOCK_TNT) {
 		/* TNTPhysics.onBreak spawns a PrimedTnt with the full default fuse. */

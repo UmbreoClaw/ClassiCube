@@ -174,6 +174,28 @@ int IndevTest_MeleeDamage(int id) {
 	return 1;
 }
 
+/* EntityPlayer.canHarvestBlock + ItemPickaxe.canHarvestBlock: rock/iron */
+/*  material blocks (stone dig-sound proxy) only drop when the held item is a */
+/*  pickaxe of sufficient harvestLevel (== tier: wood 0, stone 1, iron 2, */
+/*  diamond 3, gold 0). Obsidian needs 3, gold ore/block >= 2, iron ore/block */
+/*  > 0, all other rock any pickaxe. Non-rock blocks always drop (return true). */
+cc_bool IndevTest_CanHarvest(int heldId, BlockID block) {
+	const struct IndevItemDef* d;
+	cc_uint8 snd = Blocks.DigSounds[block];
+	int level;
+	if (snd != SOUND_STONE && snd != SOUND_METAL) return true;
+
+	d = IndevItems_Find(heldId);
+	if (!d || d->kind != ITEM_KIND_PICKAXE) return false;
+	level = d->param;
+	switch (block) {
+	case BLOCK_OBSIDIAN:                return level == 3;
+	case BLOCK_GOLD_ORE: case BLOCK_GOLD: return level >= 2;
+	case BLOCK_IRON_ORE: case BLOCK_IRON: return level > 0;
+	default:                            return true;
+	}
+}
+
 /*########################################################################################################################*
 *-------------------------------------------------CraftingManager recipes-------------------------------------------------*
 *#########################################################################################################################*/

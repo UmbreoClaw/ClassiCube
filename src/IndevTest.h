@@ -34,6 +34,9 @@ int IndevTest_MiningSpeed(int id, BlockID block);
 /* Melee damage of the held id (bare fist / non-weapons = 1; tools base+tier; */
 /*  swords 4 + tier*2), per Minecraft.java's attack path. */
 int IndevTest_MeleeDamage(int id);
+/* Whether a block dropped when broken by hand/held item - false for rock/iron */
+/*  material (stone-sound) blocks unless a pickaxe of sufficient level is held. */
+cc_bool IndevTest_CanHarvest(int heldId, BlockID block);
 /* Matches a gw*gh crafting grid of full-space ids (0 = empty) against the */
 /*  in-20100223 recipe list. True + result id/count when a recipe fits. */
 cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId, int* outCount);

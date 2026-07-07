@@ -49,16 +49,19 @@ static void HeldBlockRenderer_RenderModel(void) {
 		/*  culling state) - skip the bare arm then, so the sprite reads as the */
 		/*  held item rather than floating beside an empty hand. The genuine */
 		/*  extruded ItemRenderer mesh + swing is a future port (back-burnered). */
-		if (IndevTest_Enabled && SurvivalTest_SlotId(Inventory.SelectedIndex) >= 256
-			&& IndevTest_ItemsTex()) return;
+		cc_bool holdingItem = IndevTest_Enabled && IndevTest_ItemsTex()
+			&& SurvivalTest_SlotId(Inventory.SelectedIndex) >= 256;
+		if (!holdingItem) {
+			/* Bare arm - skipped when holding an item id (its sprite renders */
+			/*  in SurvivalTest's drop pass); must still fall through to the */
+			/*  depth/cull teardown below or the 2D HUD/menus get corrupted. */
+			model = Entities.CurPlayer->Base.Model;
+			SetHeldModel(model);
+			Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
 
-		/* Bare arm */
-		model = Entities.CurPlayer->Base.Model;
-		SetHeldModel(model);
-		Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
-
-		Model_RenderArm(model, &held_entity);
-		Gfx_SetAlphaTest(false);
+			Model_RenderArm(model, &held_entity);
+			Gfx_SetAlphaTest(false);
+		}
 	}
 	else {
 		model = Models.Block;
