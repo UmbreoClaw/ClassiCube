@@ -2470,8 +2470,8 @@ void InventoryScreen_Hide(void) {
 /* Pixel padding (base, before scaling) around the panel's inner content. */
 #define SURVINV_PAD_BASE      8
 
-/* Displayed block-picture slots: storage + the 2x2 craft grid + result slot. */
-#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
+/* Displayed block-picture slots: storage + hotbar row + craft grid + result. */
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
 #define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
 #define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
@@ -2496,6 +2496,7 @@ static struct SurvivalInvScreen {
 	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
 	int  lastInvVersion;
 	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
+	int  hotY;             /* pixel y of the in-screen hotbar row (GuiInventory style) */
 	int  craftX, craftY;   /* pixel origin of the top-left 2x2 crafting cell */
 	int  resultX, resultY; /* pixel origin of the crafting result slot */
 	int  slotSize;         /* current pixel size per slot */
@@ -2509,11 +2510,19 @@ static struct SurvivalInvScreen {
 	struct Entity    doll;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
-/* Returns the pixel origin (top-left corner) of a storage slot (9-35). */
+/* Returns the pixel origin (top-left corner) of an inventory slot: hotbar */
+/*  slots (0-8) sit on their own row below the storage grid, GuiInventory */
+/*  style, so stacks can be moved between hotbar and storage/crafting. */
 static void SurvivalInv_SlotXY(struct SurvivalInvScreen* s, int slot, int* ox, int* oy) {
-	int st  = slot - SURVIVAL_HOTBAR_SLOTS;
-	int col = st % SURVINV_STORAGE_COLS;
-	int row = st / SURVINV_STORAGE_COLS;
+	int st, col, row;
+	if (slot < SURVIVAL_HOTBAR_SLOTS) {
+		*ox = s->gridX + slot * s->slotSize;
+		*oy = s->hotY;
+		return;
+	}
+	st  = slot - SURVIVAL_HOTBAR_SLOTS;
+	col = st % SURVINV_STORAGE_COLS;
+	row = st / SURVINV_STORAGE_COLS;
 	*ox = s->gridX + col * s->slotSize;
 	*oy = s->gridY + row * s->slotSize;
 }
@@ -2531,7 +2540,7 @@ static cc_bool SurvivalInv_InSlot(int mx, int my, int x, int y, int size) {
 /* Slot under (mx,my): storage 9..35, craft 36..39, the result sentinel, or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 	int i, x, y;
-	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &x, &y);
 		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return i;
 	}
@@ -2570,9 +2579,12 @@ static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x,
 /* Crafting slots only exist in Indev mode; plain c0.30-s shows storage only */
 /*  (it never had crafting), so its screen is byte-for-byte the old layout. */
 static int SurvivalInv_DisplayCount(void) {
-	return IndevTest_Enabled ? SURVINV_DISPLAY_SLOTS : SURVINV_STORAGE_SLOTS;
+	int n = IndevTest_Enabled ? SURVINV_DISPLAY_SLOTS : SURVINV_STORAGE_SLOTS;
+	return n + SURVIVAL_HOTBAR_SLOTS; /* + the in-screen hotbar row */
 }
 static int SurvivalInv_DisplaySlot(int n) {
+	if (n < SURVIVAL_HOTBAR_SLOTS) return n; /* hotbar row first */
+	n -= SURVIVAL_HOTBAR_SLOTS;
 	if (n < SURVINV_STORAGE_SLOTS)                        return SURVIVAL_HOTBAR_SLOTS + n;
 	if (n < SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS) return SURVIVAL_CRAFT_BASE + (n - SURVINV_STORAGE_SLOTS);
 	return SURVINV_RESULT_HIT;
@@ -2884,7 +2896,8 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		int contentW = !IndevTest_Enabled ? storageW : (storageW > topW ? storageW : topW);
 
 		s->panelW = contentW + pad * 2;
-		s->panelH = pad + topAreaH + gap + storageH + pad;
+		/* top area + storage grid + (double gap + hotbar row) + padding */
+		s->panelH = pad + topAreaH + gap + storageH + gap * 2 + s->slotSize + pad;
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
@@ -2898,6 +2911,9 @@ static void SurvivalInvScreen_Layout(void* screen) {
 
 		s->gridX = s->panelX + (s->panelW - storageW) / 2;
 		s->gridY = s->panelY + pad + topAreaH + gap;
+		/* Hotbar row sits below storage with a wider separating gap, exactly */
+		/*  how GuiInventory separates the two regions. */
+		s->hotY   = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap * 2;
 	}
 
 	s->dirty = true;

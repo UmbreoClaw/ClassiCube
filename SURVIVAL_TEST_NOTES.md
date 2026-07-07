@@ -78,6 +78,16 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
+### Inventory screen: in-screen hotbar row added (user report)
+Hotbar slots (0-8) weren't clickable inside the inventory screen - HitSlot
+started at slot 9, so stacks couldn't move between hotbar and storage/craft.
+GuiInventory-style fix: the hotbar now renders as its own row below the
+storage grid (double gap separating them, panel grown/centred accordingly),
+and every pass (slot boxes, iso blocks, item sprites, count digits, hit
+tests) picks it up through the shared DisplayCount/DisplaySlot iteration.
+SwapSlots already handled indices 0-8, so click-to-pick/click-to-swap works
+across all three regions with no backend change.
+
 ### CRAFTING NOW PLAYABLE + critical HUD regression + Indev drops
 - **HUD corruption fixed**: HeldBlockRenderer_RenderModel's arm-skip early
   return bypassed the depth/cull teardown, leaving depth test off + culling
