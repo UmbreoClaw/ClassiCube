@@ -2670,13 +2670,9 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_SetDepthTest(true);
 	Gfx_SetDepthWrite(true);
 	Gfx_SetAlphaTest(true);
-	/* Model_Render relies on backface culling; the panel/sprite draws before */
-	/*  this leave it off, which culled the whole model (black window). */
-	Gfx_SetFaceCulling(true);
 
 	Model_Render(s->doll.Model, &s->doll);
 
-	Gfx_SetFaceCulling(false);
 	Gfx_SetAlphaTest(false);
 	Gfx_SetDepthWrite(false);
 	Gfx_SetDepthTest(false);
@@ -2705,7 +2701,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	/*  iso pictures - genuine renderBlockOnInventory blocks are big too), */
 	/*  centred on the cell centre (item origin + 8 texture units). */
 	{
-	float itemHalf = halfSize;
+	float itemHalf = IndevTest_Enabled ? s->texF * 8.0f : halfSize;
 	int   ictr     = IndevTest_Enabled ? (int)(s->texF * 8.0f) : s->slotSize / 2;
 
 	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
@@ -2740,10 +2736,17 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
 			/* Indev: count sits at the 16px item's bottom (slotY+16*f), not */
 			/*  the 18px cell bottom; classic keeps its slotSize-relative spot. */
-			s->countAtlas.tex.y = IndevTest_Enabled
-				? slotY + (int)(s->texF * 16.0f) - s->countAtlas.tex.height
-				: slotY + s->slotSize - s->countAtlas.tex.height - 2;
-			s->countAtlas.curX  = slotX + 2;
+			if (IndevTest_Enabled) {
+				/* renderItemOverlayIntoGUI right-aligns the count at the item's */
+				/*  bottom-right: x = slotX + 16 - textWidth, y at the item bottom. */
+				int ndig  = count >= 100 ? 3 : (count >= 10 ? 2 : 1);
+				int textW = ndig * s->countAtlas.offset;
+				s->countAtlas.tex.y = slotY + (int)(s->texF * 16.0f) - s->countAtlas.tex.height;
+				s->countAtlas.curX  = slotX + (int)(s->texF * 16.0f) - textW;
+			} else {
+				s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
+				s->countAtlas.curX  = slotX + 2;
+			}
 			TextAtlas_AddInt(&s->countAtlas, count, &cur);
 		}
 		s->countAtlas.tex.y = savedY;
