@@ -78,7 +78,28 @@ mode plumbing (DONE) -> ItemStack refactor (IN PROGRESS) -> tools/durability/
 mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 -> fire/farming/bow/armor -> polish.
 
-### CRAFTING PHASE OPENED: melee damage + full recipe engine (no GUI yet)
+### CRAFTING NOW PLAYABLE + critical HUD regression + Indev drops
+- **HUD corruption fixed**: HeldBlockRenderer_RenderModel's arm-skip early
+  return bypassed the depth/cull teardown, leaving depth test off + culling
+  on -> corrupted all 2D UI after (vanishing hotbar, floating blocks, hidden
+  pause buttons). Now skips only the arm draw, keeps the teardown.
+- **Indev block drops** (canHarvestBlock gate + BlockX.idDropped): rock/iron
+  blocks (stone dig-sound) drop NOTHING without a pickaxe of sufficient
+  harvest level (obsidian 3, gold ore/block 2, iron ore/block 1, other rock
+  any); log drops the LOG block not planks; coal ore -> coal item; gravel
+  1/10 flint; glass/bookshelf nothing. c0.30 drops unchanged. SpawnDrop
+  widened to the full id space so item drops (coal/flint) work.
+- **Crafting is now PLAYABLE in Indev**: the GUI (SurvivalInvScreen: 2x2
+  grid + result slot + item-sprite slots + result-take) and backend
+  (st_craft, CraftResult/Take/ReturnAll) already existed; this session added
+  the recipe engine they matmch against (IndevTest_MatchRecipe) and opened
+  the screen for Indev mode (was Enhanced-only) - so E/B now opens the
+  crafting inventory. Plank->stick->wooden pickaxe is fully craftable.
+- KNOWN: the storage/paperdoll screen isn't visually Indev-faithful yet
+  (cosmetic, deferred); 3x3 workbench needs the workbench block (deferred
+  with the block additions).
+
+### CRAFTING PHASE OPENED: melee damage + full recipe engine
 - **Melee damage** (Minecraft.java:352): damage = held Item.getDamageVsEntity;
   bare fist 1 (Indev nerf vs c0.30's flat 4 - c0.30 mode keeps 4), shovel/
   pick/axe = 1/2/3 + tier, swords = 4 + tier*2 (ItemSword.java:12), hoes 1.

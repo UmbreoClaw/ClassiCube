@@ -2969,9 +2969,11 @@ void SurvivalInvScreen_Show(void) {
 	/* Non-survival modes use the normal creative block-grid inventory. */
 	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
 	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
-	/*  fixed hotbar - so opening the inventory does nothing at all. The paperdoll */
-	/*  storage screen below is an Enhanced-only extra, not authentic to c0.30-s. */
-	if (!SurvivalTest_Enhanced) return;
+	/*  fixed hotbar - so opening the inventory does nothing at all. The storage/ */
+	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */
+	/*  inventory (Indev's whole point is the 2x2 grid), so both open it; plain */
+	/*  c0.30-s keeps the authentic no-op. */
+	if (!SurvivalTest_Enhanced && !IndevTest_Enabled) return;
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &SurvivalInvScreen_VTABLE;
