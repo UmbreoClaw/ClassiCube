@@ -94,6 +94,23 @@ mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 - So half-stack splitting / one-by-one placement for crafting works:
   right-click a stack to halve, right-click cells to distribute singles.
 
+### BLOCK ADDITIONS: atlas + id reservations DERIVED (blocker cleared)
+Computed from core_blockDefs + both jar patchers + the fire animation cell:
+the engine uses only 74/256 terrain cells - ROWS 6-15 (tile indices 96-255)
+ARE ENTIRELY FREE, plus scattered cells in rows 1-5. Block ids 66+ are free
+(engine defs end at 65/stone brick).
+RESERVED LAYOUT (canonical from here on):
+- ids: 66 workbench, 67 chest, 68 furnace, 69 furnace-lit, 70 torch,
+  71+ farmland/crops when farming lands.
+- tiles (row 6, indices 96+): 96 workbench top, 97 wb side, 98 wb front,
+  99 furnace front, 100 furnace-lit front, 101 furnace side, 102 furnace
+  top, 103 chest front, 104 chest side, 105 chest top, 106 torch,
+  107-111 crops stages.
+Tiles extracted from the b1.7.3 jar's terrain.png by extending BetaPatcher
+(b1.7.3 source cells to be read off its atlas layout next session).
+CAVEAT: correct for the stock auto-downloaded terrain.png; custom texture
+packs show whatever their rows 6-15 contain unless they adopt this layout.
+
 ### NEXT SESSION: block additions plan (workbench first)
 Approach verified this session: extend BetaPatcher (Resources.c) to also
 extract terrain.png from the already-downloaded b1.7.3 jar and PatchTerrainTile
