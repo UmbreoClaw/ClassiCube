@@ -37,6 +37,15 @@ static struct TextureEntry items_entry = { "items.png", ItemsPngProcess };
 
 GfxResourceID IndevTest_ItemsTex(void) { return indev_itemsTexId; }
 
+/* gui/inventory.png - the genuine 176x166 inventory/crafting GUI texture */
+static GfxResourceID indev_invGuiTexId;
+static void InvGuiPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_invGuiTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry invgui_entry = { "inventory.png", InvGuiPngProcess };
+
+GfxResourceID IndevTest_InvGuiTex(void) { return indev_invGuiTexId; }
+
 /* Item definitions - the complete in-20100223 roster from Item.java's static
     init (local ids; shiftedIndex = id + 256). kind drives behaviour:
     tools/swords/hoes carry a tier (maxDamage = 32 << tier, ItemTool.java:14)
@@ -391,6 +400,7 @@ static void OnInit(void) {
 	IndevItems_Seed();
 	IndevBlocks_Define();
 	TextureEntry_Register(&items_entry);
+	TextureEntry_Register(&invgui_entry);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 

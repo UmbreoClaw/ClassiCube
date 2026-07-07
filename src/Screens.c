@@ -2497,6 +2497,8 @@ static struct SurvivalInvScreen {
 	int  lastInvVersion;
 	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
 	int  hotY;             /* pixel y of the in-screen hotbar row (GuiInventory style) */
+	float texF;            /* Indev: pixels per texture unit of the 176x166 gui panel */
+	int  dollBoxH;         /* doll viewport height (== dollBoxSize except Indev's tall window) */
 	int  craftX, craftY;   /* pixel origin of the top-left 2x2 crafting cell */
 	int  resultX, resultY; /* pixel origin of the crafting result slot */
 	int  slotSize;         /* current pixel size per slot */
@@ -2612,6 +2614,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	struct Matrix proj, savedView;
 	float aspect, relX, relY, headYaw, headPitch;
 	int boxX = s->dollBoxX, boxY = s->dollBoxY, boxSize = s->dollBoxSize;
+	int boxH  = s->dollBoxH > 0 ? s->dollBoxH : s->dollBoxSize;
 	if (boxSize <= 0) return;
 
 	s->doll.SkinType     = p->SkinType;
@@ -2648,7 +2651,9 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	s->doll.Position.y = -(s->doll.Size.y * 0.5f);
 	s->doll.Position.z = -SURVINV_DOLL_DIST;
 
-	aspect = SURVINV_DOLL_ASPECT;
+	/* Aspect must match the (now possibly non-square) viewport, else the doll */
+	/*  stretches - width/height of the actual render region. */
+	aspect = (float)(boxSize - 2) / (float)(boxH - 2);
 	Gfx_CalcPerspectiveMatrix(&proj, SURVINV_DOLL_FOV * MATH_DEG2RAD, aspect, 16.0f);
 
 	savedView   = Gfx.View;
@@ -2658,8 +2663,8 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 
 	/* Matches the 1px-inset black square drawn in SurvivalInvScreen_Render, */
 	/*  so the 3D render area never overflows into the box's border pixels. */
-	Gfx_SetViewport(boxX + 1, Game.Height - boxY - boxSize + 1, boxSize - 2, boxSize - 2);
-	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxSize - 2);
+	Gfx_SetViewport(boxX + 1, Game.Height - boxY - boxH + 1, boxSize - 2, boxH - 2);
+	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
 	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
 
 	Gfx_SetDepthTest(true);
@@ -2691,6 +2696,11 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 
 	data     = Screen_LockVb(s);
 	halfSize = s->slotSize * 0.5f;
+	/* Indev slots are the genuine texture's 18px cells with slotX at the item */
+	/*  origin - block pictures are the 16px item area, centred on it. */
+	{
+	float itemHalf = IndevTest_Enabled ? s->texF * 8.0f : halfSize;
+	int   ictr     = IndevTest_Enabled ? (int)(s->texF * 8.0f) : s->slotSize / 2;
 
 	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
 	/*  (item ids draw as flat sprites in the render pass instead). */
@@ -2700,16 +2710,17 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 		SurvivalInv_SlotContent(slot, &id, &count);
 		if (id == BLOCK_AIR || count <= 0 || id >= 256) continue; /* items draw as sprites */
 		SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
-		IsometricDrawer_AddBatch((BlockID)id, halfSize,
-			slotX + s->slotSize / 2, slotY + s->slotSize / 2);
+		IsometricDrawer_AddBatch((BlockID)id, itemHalf,
+			slotX + ictr, slotY + ictr);
 	}
 	/* Cursor-held BLOCK follows the mouse inside the same iso batch (held */
 	/*  ITEMS draw as sprites in the render pass instead). */
 	if (SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() < 256 && s->mouseX >= 0) {
-		IsometricDrawer_AddBatch((BlockID)SurvivalTest_CursorId(), halfSize,
+		IsometricDrawer_AddBatch((BlockID)SurvivalTest_CursorId(), itemHalf,
 			s->mouseX, s->mouseY);
 	}
 	s->isoVertCount = IsometricDrawer_EndBatch();
+	}
 
 	/* Stack-count digit overlay for slots with count > 1 */
 	countDst = data + SURVINV_MAX_ISO_VERTS;
@@ -2721,7 +2732,11 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 			SurvivalInv_SlotContent(slot, &id, &count);
 			if (count <= 1) continue;
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
-			s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
+			/* Indev: count sits at the 16px item's bottom (slotY+16*f), not */
+			/*  the 18px cell bottom; classic keeps its slotSize-relative spot. */
+			s->countAtlas.tex.y = IndevTest_Enabled
+				? slotY + (int)(s->texF * 16.0f) - s->countAtlas.tex.height
+				: slotY + s->slotSize - s->countAtlas.tex.height - 2;
 			s->countAtlas.curX  = slotX + 2;
 			TextAtlas_AddInt(&s->countAtlas, count, &cur);
 		}
@@ -2746,6 +2761,33 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	PackedCol highlight   = PackedCol_Make(255, 255, 255, 255);
 	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
 
+	if (IndevTest_Enabled && IndevTest_InvGuiTex()) {
+		/* Genuine look: the whole panel IS gui/inventory.png's 176x166 region */
+		/*  (slot bevels, craft arrow, armor boxes and doll window included). */
+		struct Texture panel;
+		panel.ID     = IndevTest_InvGuiTex();
+		panel.x      = (short)s->panelX;
+		panel.y      = (short)s->panelY;
+		panel.width  = (cc_uint16)s->panelW;
+		panel.height = (cc_uint16)s->panelH;
+		panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+		panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
+		Texture_Render(&panel);
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+
+		/* GuiContainer's mouse-over highlight: translucent white over the */
+		/*  16px slot area under the cursor. */
+		{
+			int hover = SurvivalInv_HitSlot(s, s->mouseX, s->mouseY);
+			int inner = (int)(16 * s->texF);
+			if (hover >= 0 && hover != SURVINV_RESULT_HIT) {
+				SurvivalInv_AnySlotXY(s, hover, &slotX, &slotY);
+				Gfx_Draw2DFlat(slotX, slotY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+			} else if (hover == SURVINV_RESULT_HIT) {
+				Gfx_Draw2DFlat(s->resultX, s->resultY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+			}
+		}
+	} else {
 	/* Panel: outer dark border then light-grey fill */
 	Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
 	Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
@@ -2767,21 +2809,11 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_Draw2DFlat(slotX + 1, slotY + s->slotSize - 2, s->slotSize - 2, 1, highlight);
 		Gfx_Draw2DFlat(slotX + s->slotSize - 2, slotY + 1, 1, s->slotSize - 2, highlight);
 	}
-
-	/* Crafting arrow: a small dark bar pointing grid -> result (Indev only). */
-	if (IndevTest_Enabled) {
-		int ay = s->resultY + s->slotSize / 2;
-		int ax = s->craftX + 2 * s->slotSize + 2;
-		int aw = s->resultX - ax - 2;
-		if (aw > 2) {
-			Gfx_Draw2DFlat(ax, ay - 1, aw, 3, panelBorder);
-			Gfx_Draw2DFlat(s->resultX - 5, ay - 4, 2, 9, panelBorder);
-			Gfx_Draw2DFlat(s->resultX - 7, ay - 2, 2, 5, panelBorder);
-		}
 	}
 
-	/* "Inventory" title above the panel */
-	if (s->titleTex.ID) {
+	/* "Inventory" title above the panel (Indev's textured panel is self- */
+	/*  contained, so no floating title there). */
+	if (s->titleTex.ID && !(IndevTest_Enabled && IndevTest_InvGuiTex())) {
 		s->titleTex.x = s->panelX + (s->panelW - s->titleTex.width) / 2;
 		s->titleTex.y = s->panelY - s->titleTex.height - 4;
 		Texture_Render(&s->titleTex);
@@ -2802,7 +2834,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	/*  icons from items.png; blocks already drew via the ISO pass above. */
 	if (IndevTest_Enabled && IndevTest_ItemsTex()) {
 		struct Texture itex;
-		int isize = (int)(s->slotSize * 0.75f);
+		int isize = IndevTest_Enabled ? (int)(s->texF * 16.0f) : (int)(s->slotSize * 0.75f);
 		itex.ID = IndevTest_ItemsTex();
 		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
 			int slot = SurvivalInv_DisplaySlot(i), id, count;
@@ -2811,8 +2843,8 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
 
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
-			itex.x = (short)(slotX + (s->slotSize - isize) / 2);
-			itex.y = (short)(slotY + (s->slotSize - isize) / 2);
+			itex.x = (short)(IndevTest_Enabled ? slotX : slotX + (s->slotSize - isize) / 2);
+			itex.y = (short)(IndevTest_Enabled ? slotY : slotY + (s->slotSize - isize) / 2);
 			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
 			Texture_Render(&itex);
 		}
@@ -2905,6 +2937,36 @@ static void SurvivalInvScreen_Layout(void* screen) {
 	gap = (int)(SURVINV_GAP_BASE * Gui_GetInventoryScale());
 	pad = (int)(SURVINV_PAD_BASE * Gui_GetInventoryScale());
 
+	if (IndevTest_Enabled) {
+		/* Genuine GuiInventory: a 176x166 texture panel, slots on its fixed */
+		/*  18px grid - craft 2x2 at (88,26), result (144,36), storage (8,84), */
+		/*  hotbar (8,142), doll window (26,8)-(74,78). texF scales it all. */
+		float f = s->slotSize / 18.0f;
+		s->texF   = f;
+		s->panelW = (int)(176 * f);
+		s->panelH = (int)(166 * f);
+		s->panelX = (Window_Main.Width  - s->panelW) / 2;
+		s->panelY = (Window_Main.Height - s->panelH) / 2;
+
+		s->gridX   = s->panelX + (int)(8   * f);
+		s->gridY   = s->panelY + (int)(84  * f);
+		s->hotY    = s->panelY + (int)(142 * f);
+		s->craftX  = s->panelX + (int)(88  * f);
+		s->craftY  = s->panelY + (int)(26  * f);
+		s->resultX = s->panelX + (int)(144 * f);
+		s->resultY = s->panelY + (int)(36  * f);
+		/* Genuine window: x 26..74 (48 wide), feet at y=76 - a TALL region, */
+		/*  not square, so legs aren't clipped. dollBoxSize stays the WIDTH */
+		/*  (mouse-follow + horizontal centring key off it); dollBoxH is the */
+		/*  viewport height. */
+		s->dollBoxX    = s->panelX + (int)(26 * f);
+		s->dollBoxY    = s->panelY + (int)(8  * f);
+		s->dollBoxSize = (int)(48 * f);
+		s->dollBoxH    = (int)(68 * f);
+		s->dirty = true;
+		return;
+	}
+
 	storageW = SURVINV_STORAGE_COLS * s->slotSize;
 	storageH = SURVINV_STORAGE_ROWS * s->slotSize;
 	s->dollBoxSize = SURVINV_DOLL_UNITS * s->slotSize;
@@ -2939,6 +3001,7 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  how GuiInventory separates the two regions. */
 		s->hotY   = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap * 2;
 	}
+	s->dollBoxH = s->dollBoxSize; /* square doll box outside Indev */
 
 	s->dirty = true;
 }

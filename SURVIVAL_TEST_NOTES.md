@@ -1,5 +1,30 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Indev inventory GUI now uses the genuine texture (latest)
+
+The flat grey survival panel is replaced, in Indev mode, by the real
+gui/inventory.png from the b1.7.3 jar - so the screen matches Indev's look.
+- BetaPatcher (Resources.c) now also extracts gui/inventory.png into
+  default.zip; IndevTest exposes it via IndevTest_InvGuiTex() + the
+  inventory.png TextureEntry (texpack-overridable).
+- Layout: Indev branch uses GuiInventory's exact 176x166 geometry - the
+  whole panel is one textured quad (0,0)-(176,166); slots on the genuine
+  18px grid at craft (88,26), result (144,36), storage (8,84), hotbar
+  (8,142). texF = slotSize/18 scales it all. Classic/Enhanced c0.30 keeps
+  the old flat panel unchanged (else branch).
+- Paperdoll renders in the genuine window: a TALL region (x 26..74, ~68
+  high, not square) so legs aren't clipped - added dollBoxH + viewport
+  aspect = boxW/boxH so the model isn't stretched. Feet land at the
+  window's genuine spot.
+- Items/blocks now centre in the genuine 16px item area (slotX = item
+  origin), block iso halfSize = 8*texF, sprites = 16*texF at slotX,
+  count digits at the 16px item bottom. Mouse-over draws GuiContainer's
+  translucent-white 16px highlight. Flat panel/dollbox/title/arrow all
+  suppressed for Indev (the texture supplies them).
+- Existing installs: delete default.zip once to re-extract inventory.png
+  (added as a required entry, so a fresh generate picks it up too).
+
+
 Branch: `survival-test` (renamed from `claude/c030-s-gamemode-8fpmns`)
 
 This file is the living context/handoff for the c0.30-s survival gamemode recreation.
