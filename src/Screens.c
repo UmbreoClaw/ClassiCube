@@ -2701,9 +2701,11 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	data     = Screen_LockVb(s);
 	halfSize = s->slotSize * 0.5f;
 	/* Indev slots are the genuine texture's 18px cells with slotX at the item */
-	/*  origin - block pictures are the 16px item area, centred on it. */
+	/*  origin. Blocks fill the cell (same prominent size as the classic/HUD */
+	/*  iso pictures - genuine renderBlockOnInventory blocks are big too), */
+	/*  centred on the cell centre (item origin + 8 texture units). */
 	{
-	float itemHalf = IndevTest_Enabled ? s->texF * 8.0f : halfSize;
+	float itemHalf = halfSize;
 	int   ictr     = IndevTest_Enabled ? (int)(s->texF * 8.0f) : s->slotSize / 2;
 
 	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
