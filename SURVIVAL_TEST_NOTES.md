@@ -94,6 +94,29 @@ mob item drops -> crafting + GUIs -> day/night + lighting -> chests/furnaces
 - So half-stack splitting / one-by-one placement for crafting works:
   right-click a stack to halve, right-click cells to distribute singles.
 
+### BLOCK ADDITIONS LANDED: workbench/chest/furnace/torch defined
+- BetaPatcher now also extracts terrain.png from the b1.7.3 jar and patches
+  the Indev tiles into our reserved free cells (sources verified VISUALLY
+  against the rendered atlas): wb top(11,2)/side(12,3)/front(11,3), furnace
+  front(12,2)/lit(13,3)/side(13,2)/top(14,3), chest top(9,1)/side(10,1)/
+  front(11,1), torch(0,5), crops (8..15,5), farmland wet/dry (6,5)/(7,5).
+  Crops need 8 stages so the reservation extends into row 7: crops 107-114,
+  farmland 115/116 (both rows fully free per the derivation).
+- Blocks defined at ids 66-70 via Block_SetName/Block_Tex/Block_DefineCustom:
+  Workbench(66, wood 30 hits), Chest(67), Furnace(68, stone 70),
+  Furnace-lit(69), Torch(70: fullbright walk-through sprite, instant break).
+  Front textures on FACE_ZMIN; drops = self via the default drop path;
+  placement/consumption flow through the existing survival gates unchanged.
+- Recipes added: 2x2 planks -> WORKBENCH (craftable in the pocket grid!),
+  coal-over-stick -> 4 torches (also 2x2-able), planks ring -> chest and
+  cobble ring -> furnace (registered now, craftable once the 3x3 exists).
+- NEXT: right-clicking a placed workbench opens the crafting screen with a
+  3x3 grid (parameterise SURVIVAL_CRAFT grid size); furnace smelting +
+  chest storage are their own later phases (need tile-entity state).
+- Existing installs: default.zip lacks a version stamp for the terrain
+  patch - delete default.zip (or texpacks/default.zip) once to re-generate
+  with the new tiles; fresh installs get them automatically.
+
 ### BLOCK ADDITIONS: atlas + id reservations DERIVED (blocker cleared)
 Computed from core_blockDefs + both jar patchers + the fire animation cell:
 the engine uses only 74/256 terrain cells - ROWS 6-15 (tile indices 96-255)

@@ -846,6 +846,7 @@ static cc_result ModernPatcher_ExtractFiles(struct HttpRequest* req);
 static cc_result TerrainPatcher_Process(struct HttpRequest* req);
 static cc_result NewTextures_ExtractGui(struct HttpRequest* req);
 static cc_result BetaPatcher_ExtractItems(struct HttpRequest* req);
+static void PatchTerrainTile(struct Bitmap* src, int srcX, int srcY, int tileX, int tileY);
 
 static cc_result Classic0023Patcher_OldGoldBlock(struct HttpRequest* req);
 static cc_result Classic0023Patcher_OldGoldOre(  struct HttpRequest* req);
@@ -934,14 +935,54 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req) {
 			entries, Array_Elems(entries));
 }
 
-/* Pulls gui/items.png out of the beta jar into default.zip as items.png */
+/* Pulls gui/items.png out of the beta jar into default.zip as items.png, */
+/*  and copies the Indev block tiles (workbench/furnace/chest/torch/crops) */
+/*  from its terrain.png into the FREE atlas cells reserved for them (rows */
+/*  6-7, indices 96+ - see SURVIVAL_TEST_NOTES.md's reservation table). */
 static cc_bool BetaPatcher_SelectEntry(const cc_string* path) {
-	return String_CaselessEqualsConst(path, "gui/items.png");
+	return String_CaselessEqualsConst(path, "gui/items.png")
+		|| String_CaselessEqualsConst(path, "terrain.png");
 }
+
+/* src cell (b1.7.3 terrain.png, verified visually) -> dst cell (our atlas) */
+static const struct BetaTile { cc_uint8 sx, sy, dx, dy; } beta_tiles[] = {
+	{ 11,2,  0,6 }, /*  96 workbench top   */
+	{ 12,3,  1,6 }, /*  97 workbench side  */
+	{ 11,3,  2,6 }, /*  98 workbench front */
+	{ 12,2,  3,6 }, /*  99 furnace front   */
+	{ 13,3,  4,6 }, /* 100 furnace lit     */
+	{ 13,2,  5,6 }, /* 101 furnace side    */
+	{ 14,3,  6,6 }, /* 102 furnace top     */
+	{ 11,1,  7,6 }, /* 103 chest front     */
+	{ 10,1,  8,6 }, /* 104 chest side      */
+	{  9,1,  9,6 }, /* 105 chest top       */
+	{  0,5, 10,6 }, /* 106 torch           */
+	{  8,5, 11,6 }, { 9,5, 12,6 }, { 10,5, 13,6 }, { 11,5, 14,6 }, /* 107-110 crops 0-3 */
+	{ 12,5, 15,6 }, { 13,5,  0,7 }, { 14,5,  1,7 }, { 15,5,  2,7 }, /* 111-114 crops 4-7 */
+	{  6,5,  3,7 }, /* 115 farmland wet */
+	{  7,5,  4,7 }, /* 116 farmland dry */
+};
 
 static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* data, struct ZipEntry* source) {
 	static const cc_string itemsPng = String_FromConst("items.png");
-	struct ResourceZipEntry* e = ZipEntries_Find(&itemsPng);
+	struct ResourceZipEntry* e;
+	struct Bitmap bmp;
+	cc_result res;
+	int i;
+
+	if (String_CaselessEqualsConst(path, "terrain.png")) {
+		res = Png_Decode(&bmp, data);
+		if (res) return res;
+
+		for (i = 0; i < Array_Elems(beta_tiles); i++) {
+			PatchTerrainTile(&bmp, beta_tiles[i].sx * 16, beta_tiles[i].sy * 16,
+							 beta_tiles[i].dx, beta_tiles[i].dy);
+		}
+		Mem_Free(bmp.scan0);
+		return 0;
+	}
+
+	e = ZipEntries_Find(&itemsPng);
 	return ZipEntry_ExtractData(e, data, source);
 }
 

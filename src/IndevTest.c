@@ -9,6 +9,7 @@
 #include "Block.h"
 #include "Audio.h"
 #include "Platform.h"
+#include "String_.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -219,6 +220,11 @@ static const struct IndevRecipe indevRecipes[] = {
 	{ BLOCK_GRAY,    1, 3,3, { R_ITEM(31),R_ITEM(31),R_ITEM(31), R_ITEM(31),R_ITEM(31),R_ITEM(31), R_ITEM(31),R_ITEM(31),R_ITEM(31) } },
 	/* TNT: gunpowder/sand checkerboard */
 	{ BLOCK_TNT,     1, 3,3, { R_ITEM(33),BLOCK_SAND,R_ITEM(33), BLOCK_SAND,R_ITEM(33),BLOCK_SAND, R_ITEM(33),BLOCK_SAND,R_ITEM(33) } },
+	/* the new Indev blocks: workbench (2x2!), torch; chest/furnace need 3x3 */
+	{ 66,            1, 2,2, { BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD } },
+	{ 70,            4, 1,2, { R_ITEM(7), R_ITEM(24) } },
+	{ 67,            1, 3,3, { BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD, BLOCK_WOOD,0,BLOCK_WOOD, BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD } },
+	{ 68,            1, 3,3, { BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE, BLOCK_COBBLE,0,BLOCK_COBBLE, BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE } },
 	/* bowls x4; mushroom soup (both mushroom orders); flint&steel */
 	{ R_ITEM(25),    4, 3,2, { BLOCK_WOOD,0,BLOCK_WOOD, 0,BLOCK_WOOD,0 } },
 	{ R_ITEM(26),    1, 1,3, { BLOCK_RED_SHROOM, BLOCK_BROWN_SHROOM, R_ITEM(25) } },
@@ -322,11 +328,68 @@ static void IndevItems_Seed(void) {
 	}
 }
 
+/*########################################################################################################################*
+*---------------------------------------------------Indev block additions-------------------------------------------------*
+*#########################################################################################################################*/
+/* Blocks the classic set lacks, defined at the reserved ids (66+) with the */
+/*  reserved atlas tiles (96+, patched in from the b1.7.3 jar's terrain.png */
+/*  by Resources.c's BetaPatcher - see the notes' reservation table). */
+#define INDEV_BLOCK_WORKBENCH   66
+#define INDEV_BLOCK_CHEST       67
+#define INDEV_BLOCK_FURNACE     68
+#define INDEV_BLOCK_FURNACE_LIT 69
+#define INDEV_BLOCK_TORCH       70
+
+static void IndevBlock_Define(BlockID id, const char* name, int top, int side,
+							  int front, int bottom, cc_uint8 sound, int hardness) {
+	cc_string str = String_FromReadonly(name);
+	Block_SetName(id, &str);
+
+	Block_Tex(id, FACE_YMAX) = (TextureLoc)top;
+	Block_Tex(id, FACE_YMIN) = (TextureLoc)bottom;
+	Block_SetSide((TextureLoc)side, id);
+	Block_Tex(id, FACE_ZMIN) = (TextureLoc)front; /* the "face" side */
+
+	Blocks.Collide[id]         = COLLIDE_SOLID;
+	Blocks.ExtendedCollide[id] = COLLIDE_SOLID;
+	Blocks.Draw[id]            = DRAW_OPAQUE;
+	Blocks.DigSounds[id]       = sound;
+	Blocks.StepSounds[id]      = sound;
+	Blocks.CanPlace[id]        = true;
+	Blocks.CanDelete[id]       = true;
+	Blocks.BlocksLight[id]     = true;
+	Blocks.SpeedMultiplier[id] = 1.0f;
+	Vec3_Set(Blocks.MinBB[id], 0.0f, 0.0f, 0.0f);
+	Vec3_Set(Blocks.MaxBB[id], 1.0f, 1.0f, 1.0f);
+
+	Block_DefineCustom(id, false);
+	SurvivalTest_SetHardness(id, hardness);
+}
+
+static void IndevBlocks_Define(void) {
+	/* tiles: 96 wb top, 97 wb side, 98 wb front, 99 furn front, 100 furn lit, */
+	/*  101 furn side, 102 furn top, 103 chest front, 104 chest side, 105 top */
+	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  30);
+	IndevBlock_Define(INDEV_BLOCK_CHEST,       "Chest",     105, 104, 103, 105, SOUND_WOOD, 30);
+	IndevBlock_Define(INDEV_BLOCK_FURNACE,     "Furnace",   102, 101,  99, 102, SOUND_STONE, 70);
+	IndevBlock_Define(INDEV_BLOCK_FURNACE_LIT, "Furnace (lit)", 102, 101, 100, 102, SOUND_STONE, 70);
+
+	/* Torch: a fullbright sprite, walk-through, instant to break */
+	IndevBlock_Define(INDEV_BLOCK_TORCH, "Torch", 106, 106, 106, 106, SOUND_WOOD, 0);
+	Blocks.Collide[INDEV_BLOCK_TORCH]         = COLLIDE_NONE;
+	Blocks.ExtendedCollide[INDEV_BLOCK_TORCH] = COLLIDE_NONE;
+	Blocks.Draw[INDEV_BLOCK_TORCH]            = DRAW_SPRITE;
+	Blocks.BlocksLight[INDEV_BLOCK_TORCH]     = false;
+	Blocks.Brightness[INDEV_BLOCK_TORCH]      = Blocks.Brightness[BLOCK_LAVA];
+	Block_DefineCustom(INDEV_BLOCK_TORCH, true);
+}
+
 static void OnInit(void) {
 	IndevTest_Enabled = Options_GetBool(OPT_INDEV_MODE, false);
 	if (!IndevTest_Enabled) return;
 
 	IndevItems_Seed();
+	IndevBlocks_Define();
 	TextureEntry_Register(&items_entry);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
