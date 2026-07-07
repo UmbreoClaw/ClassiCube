@@ -2599,8 +2599,12 @@ static const struct EntityVTABLE survivalDoll_VTABLE = {
 };
 
 static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
+	static const cc_string human = String_FromConst("humanoid");
 	Entity_Init(&s->doll);
 	s->doll.VTABLE = &survivalDoll_VTABLE;
+	/* Guarantee the model + Size are set (Entity_Init calls SetModel, but be */
+	/*  explicit so Position.y framing below never reads a zero Size). */
+	Entity_SetModel(&s->doll, &human);
 }
 
 /* Renders the 3D player-skin paperdoll, confined to the doll preview box. */
@@ -2617,11 +2621,24 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	int boxH  = s->dollBoxH > 0 ? s->dollBoxH : s->dollBoxSize;
 	if (boxSize <= 0) return;
 
-	s->doll.SkinType     = p->SkinType;
-	s->doll.TextureId    = p->TextureId;
-	s->doll.NonHumanSkin = p->NonHumanSkin;
-	s->doll.uScale       = p->uScale;
-	s->doll.vScale       = p->vScale;
+	/* Use the player's skin when it has one; otherwise fall back to the */
+	/*  default char.png. In singleplayer with no ClassiCube skin, the local */
+	/*  player's TextureId can be 0 - forcing NonHumanSkin=false + TextureId=0 */
+	/*  makes Model_ApplyTexture use the model's defaultTex (default Steve), */
+	/*  never an unbound/black texture. */
+	if (p->TextureId) {
+		s->doll.SkinType     = p->SkinType;
+		s->doll.TextureId    = p->TextureId;
+		s->doll.NonHumanSkin = p->NonHumanSkin;
+		s->doll.uScale       = p->uScale;
+		s->doll.vScale       = p->vScale;
+	} else {
+		s->doll.SkinType     = SKIN_64x32;
+		s->doll.TextureId    = 0;      /* -> model defaultTex (char.png) */
+		s->doll.NonHumanSkin = false;
+		s->doll.uScale       = 1.0f;
+		s->doll.vScale       = 1.0f;
+	}
 
 	if (s->mouseX < 0) {
 		/* No PointerMove event has reached this screen yet (e.g. the very first */
