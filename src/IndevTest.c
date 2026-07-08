@@ -14,6 +14,7 @@
 #include "Event.h"
 #include "ExtMath.h"
 #include "Entity.h"
+#include "Lighting.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -495,14 +496,25 @@ static void IndevBlocks_Define(void) {
 		Block_DefineCustom((BlockID)(INDEV_BLOCK_FURNL_V0 + k), false);
 	}
 
-	/* Torch: a fullbright sprite, walk-through, instant to break */
+	/* Torch: a thin 2/16-wide, 10/16-tall column (BlockTorch's stick model, */
+	/*  NOT a flower-style X sprite), walk-through, instant to break, and a */
+	/*  light source - Indev registers it with setLightValue(14/16). The */
+	/*  lamp (white) nibble drives fancy lighting's light propagation. */
 	IndevBlock_Define(INDEV_BLOCK_TORCH, "Torch", 106, 106, 106, 106, SOUND_WOOD, 0);
 	Blocks.Collide[INDEV_BLOCK_TORCH]         = COLLIDE_NONE;
 	Blocks.ExtendedCollide[INDEV_BLOCK_TORCH] = COLLIDE_NONE;
-	Blocks.Draw[INDEV_BLOCK_TORCH]            = DRAW_SPRITE;
+	Blocks.Draw[INDEV_BLOCK_TORCH]            = DRAW_TRANSPARENT;
 	Blocks.BlocksLight[INDEV_BLOCK_TORCH]     = false;
-	Blocks.Brightness[INDEV_BLOCK_TORCH]      = Blocks.Brightness[BLOCK_LAVA];
-	Block_DefineCustom(INDEV_BLOCK_TORCH, true);
+	Blocks.Brightness[INDEV_BLOCK_TORCH]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_TORCH],  7.0f/16.0f, 0.0f,        7.0f/16.0f);
+	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_TORCH],  9.0f/16.0f, 10.0f/16.0f, 9.0f/16.0f);
+	Block_DefineCustom(INDEV_BLOCK_TORCH, false);
+
+	/* Lit furnaces also glow (BlockFurnace active: setLightValue(14/16)) */
+	Blocks.Brightness[INDEV_BLOCK_FURNACE_LIT] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	for (k = 0; k < 4; k++) {
+		Blocks.Brightness[INDEV_BLOCK_FURNL_V0 + k] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	}
 }
 
 /*########################################################################################################################*
@@ -727,9 +739,90 @@ int IndevTest_FurnaceCookScaled(void) {
 	return te->cookTime * 24 / 200; /* getCookProgressScaled */
 }
 
+/*########################################################################################################################*
+*-------------------------------------------------Day/night cycle (World.java)--------------------------------------------*
+*#########################################################################################################################*/
+/* worldTime ticks at 20Hz and wraps at 24000 (20 minutes per day). All the
+    colour/brightness curves are exact ports of World.getCelestialAngle /
+    getSkyColor / getFogColor / getCloudColor / getSkyBrightness. */
+static int indev_worldTime;
+static int indev_skyBright = 15; /* Environment.SkyBrightness; > 15 = always day */
+static PackedCol indev_baseSky, indev_baseFog, indev_baseClouds;
+static cc_bool   indev_baseColsKnown;
+static int       indev_lastSkyLight = -1;
+
+int  IndevTest_WorldTime(void)      { return indev_worldTime; }
+void IndevTest_SetWorldTime(int t)  { indev_worldTime = t >= 0 ? t % 24000 : 0; }
+void IndevTest_SetSkyBrightness(int b) { indev_skyBright = b; }
+
+/* Full-daylight base colours for .mclevel saving - the live Env colours */
+/*  are time-of-day scaled, and saving those (e.g. at night) would bake a */
+/*  black sky into the file as the map's base colour. */
+PackedCol IndevTest_BaseSkyCol(void)    { return indev_baseColsKnown ? indev_baseSky    : Env.SkyCol; }
+PackedCol IndevTest_BaseFogCol(void)    { return indev_baseColsKnown ? indev_baseFog    : Env.FogCol; }
+PackedCol IndevTest_BaseCloudsCol(void) { return indev_baseColsKnown ? indev_baseClouds : Env.CloudsCol; }
+
+static float Indev_CelestialAngle(void) {
+	if (indev_skyBright > 15) return 0.0f; /* "paradise" maps: always noon */
+	return (float)indev_worldTime / 24000.0f - 0.15f;
+}
+
+/* clamp01(cos(angle * 2PI) * mul + add) */
+static float Indev_DayFactor(float mul, float add) {
+	float f = Math_CosF(Indev_CelestialAngle() * MATH_PI * 2.0f) * mul + add;
+	if (f < 0.0f) f = 0.0f;
+	if (f > 1.0f) f = 1.0f;
+	return f;
+}
+
+static PackedCol Indev_ScaleColor(PackedCol base, float r, float g, float b) {
+	return PackedCol_Make((cc_uint8)(PackedCol_R(base) * r),
+						  (cc_uint8)(PackedCol_G(base) * g),
+						  (cc_uint8)(PackedCol_B(base) * b), 255);
+}
+
+/* World.getSkyBrightness: the sky light level, 15 at noon down to 4 at night */
+static int Indev_SkyLight(void) {
+	float f = Indev_DayFactor(1.5f, 0.5f);
+	int light = (int)(f * ((float)(15 * indev_skyBright) / 15.0f - 4.0f) + 4.0f);
+	if (light > 15) light = 15;
+	if (light < 4)  light = 4;
+	return light;
+}
+
+static void Indev_TickDayNight(void) {
+	float f;
+	int   light;
+
+	indev_worldTime++;
+	if (indev_worldTime >= 24000) indev_worldTime = 0;
+	if (!indev_baseColsKnown || !World.Loaded) return;
+
+	/* getSkyColor: base * clamp01(cos*2 + 0.5) */
+	f = Indev_DayFactor(2.0f, 0.5f);
+	Env_SetSkyCol(Indev_ScaleColor(indev_baseSky, f, f, f));
+	/* getFogColor: floors keep dawn/dusk fog slightly blue-tinted */
+	Env_SetFogCol(Indev_ScaleColor(indev_baseFog,
+		f * 0.94f + 0.06f, f * 0.94f + 0.06f, f * 0.91f + 0.09f));
+	/* getCloudColor */
+	Env_SetCloudsCol(Indev_ScaleColor(indev_baseClouds,
+		f * 0.9f + 0.1f, f * 0.9f + 0.1f, f * 0.85f + 0.15f));
+
+	/* skylightSubtracted: dim the world's sun/shadow lighting with the sky */
+	/*  light level (4..15). Sun/shadow changes trigger a relight, so only */
+	/*  apply when the level actually moves (11 steps across dawn/dusk). */
+	light = Indev_SkyLight();
+	if (light != indev_lastSkyLight) {
+		indev_lastSkyLight = light;
+		Env_SetSunCol(PackedCol_Scale(ENV_DEFAULT_SUN_COLOR,    (float)light / 15.0f));
+		Env_SetShadowCol(PackedCol_Scale(ENV_DEFAULT_SHADOW_COLOR, (float)light / 15.0f));
+	}
+}
+
 static void IndevTest_Tick(struct ScheduledTask* task) {
 	int i;
 	if (!IndevTest_Enabled) return;
+	Indev_TickDayNight();
 	for (i = 0; i < INDEV_TE_MAX; i++) {
 		if (!indev_tes[i].used || indev_tes[i].kind != INDEV_CONTAINER_FURNACE) continue;
 		Furnace_Tick(&indev_tes[i]);
@@ -784,10 +877,23 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 
 /* Map loading runs Game_Reset, which wipes ALL custom block definitions - */
 /*  the Indev block ids survive in the map data but rendered as undefined */
-/*  (the reported "green blocks"). Re-define them once the map is in. */
+/*  (the reported "green blocks"). Re-define them once the map is in. Also */
+/*  snapshot the env colours as the day/night cycle's full-daylight base */
+/*  (a loaded .mclevel has applied its Environment colours by now), and */
+/*  switch to fancy lighting so torches/lit furnaces cast real light. */
 static void OnNewMapLoaded(void) {
 	if (!IndevTest_Enabled) return;
 	IndevBlocks_Define();
+
+	indev_baseSky      = Env.SkyCol;
+	indev_baseFog      = Env.FogCol;
+	indev_baseClouds   = Env.CloudsCol;
+	indev_baseColsKnown = true;
+	indev_lastSkyLight  = -1; /* reapply sun/shadow for the new map */
+
+	if (Lighting_Mode != LIGHTING_MODE_FANCY && !Lighting_ModeLockedByServer) {
+		Lighting_SetMode(LIGHTING_MODE_FANCY, false);
+	}
 }
 
 static void OnInit(void) {

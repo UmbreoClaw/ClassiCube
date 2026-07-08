@@ -97,6 +97,17 @@ BlockID IndevTest_FacingVariant(BlockID canonical, int meta);
 /*  destruction) - for removal paths that don't raise BlockChanged, like */
 /*  explosions. Safe to call for any block id. */
 void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock);
+
+/* Day/night cycle: world time in ticks (0..23999, 20 minutes per day) and */
+/*  the Environment SkyBrightness (> 15 = "paradise" maps, always day). */
+/*  Round-trips through .mclevel's TimeOfDay/SkyBrightness tags. */
+int  IndevTest_WorldTime(void);
+void IndevTest_SetWorldTime(int t);
+void IndevTest_SetSkyBrightness(int b);
+/* Full-daylight base env colours (the live Env colours are time-scaled). */
+PackedCol IndevTest_BaseSkyCol(void);
+PackedCol IndevTest_BaseFogCol(void);
+PackedCol IndevTest_BaseCloudsCol(void);
 /* Whether a tile entity exists at a position (save-side world scan). */
 cc_bool IndevTest_HasTE(int x, int y, int z);
 /* Tile entity iteration for .mclevel save: next used pool index after prev */

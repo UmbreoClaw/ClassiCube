@@ -1443,8 +1443,11 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 		mcl_sidesHeight = NbtTag_U16(tag);
 	} else if (IsTag(tag, "SurroundingWaterHeight")) {
 		mcl_edgeHeight  = NbtTag_U16(tag);
+	} else if (IsTag(tag, "TimeOfDay")) {
+		IndevTest_SetWorldTime(NbtTag_I16(tag));
+	} else if (IsTag(tag, "SkyBrightness")) {
+		IndevTest_SetSkyBrightness(NbtTag_U8(tag));
 	}
-	/* TODO: SkyBrightness */
 }
 
 
@@ -1764,9 +1767,9 @@ cc_result MCLevel_Save(struct Stream* stream) {
 
 	cur = Nbt_WriteDict(cur, "Environment");
 	{
-		cur = Nbt_WriteInt32 (cur, "CloudColor", MCLevel_PackRGB(Env.CloudsCol));
-		cur = Nbt_WriteInt32 (cur, "SkyColor",   MCLevel_PackRGB(Env.SkyCol));
-		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(Env.FogCol));
+		cur = Nbt_WriteInt32 (cur, "CloudColor", MCLevel_PackRGB(IndevTest_BaseCloudsCol()));
+		cur = Nbt_WriteInt32 (cur, "SkyColor",   MCLevel_PackRGB(IndevTest_BaseSkyCol()));
+		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(IndevTest_BaseFogCol()));
 		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", 15);
 		cur = Nbt_WriteUInt16(cur, "CloudHeight", (cc_uint16)Env.CloudsHeight);
 		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(Env.EdgeHeight + Env.SidesOffset));
@@ -1774,7 +1777,7 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		cur = Nbt_WriteUInt8 (cur, "SurroundingGroundType", 2 /* grass */);
 		cur = Nbt_WriteUInt8 (cur, "SurroundingWaterType",
 				IndevTest_BlockToIndev((BlockRaw)Env.EdgeBlock));
-		cur = Nbt_WriteUInt16(cur, "TimeOfDay", 0);
+		cur = Nbt_WriteUInt16(cur, "TimeOfDay", (cc_uint16)IndevTest_WorldTime());
 	} *cur++ = NBT_END;
 
 	cur = Nbt_WriteDict(cur, "Map");

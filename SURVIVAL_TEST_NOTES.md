@@ -143,6 +143,38 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — day/night cycle, torch model + real torch light
+
+### Day/night (exact World.java ports, verified at night in the rig)
+- `worldTime` ticks at 20Hz in IndevTest_Tick, wraps at 24000 (20 min/day).
+- `getCelestialAngle` = (worldTime/24000) - 0.15; "paradise" maps
+  (SkyBrightness > 15) pin it to 0 = always noon.
+- Sky colour: base * clamp01(cos(a*2PI)*2 + 0.5); fog floors
+  (f*0.94+0.06, f*0.94+0.06, f*0.91+0.09); clouds (0.9+0.1 / 0.85+0.15).
+  Base colours snapshotted at OnNewMapLoaded (after .mclevel env applied) -
+  the SAVER writes the base colours, not the live scaled ones, else saving
+  at night would bake a black sky into the file.
+- `getSkyBrightness`: clamp01(cos*1.5 + 0.5) -> light level 15 (noon) to 4
+  (night). Sun/shadow env colours scaled by light/15 - only applied when
+  the level steps (sun colour changes trigger a world relight; 11 steps
+  per dawn/dusk transition is cheap).
+- .mclevel TimeOfDay + SkyBrightness now round-trip (load was TODO before;
+  save previously wrote 0). VERIFIED: hand-patched a save to TimeOfDay
+  15500, loaded -> black sky, dim level-4 terrain, exact night look.
+
+### Torch fixes (user: "not a true torch model - it's the flower render")
+- Was DRAW_SPRITE (flower X-cross). Now a genuine thin column: MinBB/MaxBB
+  (7/16, 0, 7/16)-(9/16, 10/16, 9/16), DRAW_TRANSPARENT - the engine crops
+  the tile UVs to the bounds per face, matching BlockTorch's stick look
+  (minus the wall-mount tilt; torches are floor-standing only for now).
+- Torches now EMIT light: Brightness = 14 << FANCY_LIGHTING_LAMP_SHIFT
+  (white lamp light, Indev setLightValue(14/16)), and Indev mode switches
+  to LIGHTING_MODE_FANCY at map load (unless a server locked the mode) so
+  the light actually propagates. Lit furnaces (all facings) also emit 14.
+- NEEDS LIVE RETEST: torch column look + cast light in a dark area.
+
+---
+
 ## SESSION LOG — GUI parity with genuine Indev (side-by-side screenshots)
 
 User compared our chest GUI against real Indev's side by side. Fixed:
