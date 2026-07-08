@@ -143,6 +143,29 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — GUI parity with genuine Indev (side-by-side screenshots)
+
+User compared our chest GUI against real Indev's side by side. Fixed:
+- **Placement facing was 180 degrees flipped** (fronts faced away) -
+  ClassiCube yaw != Beta yaw convention; metadata quadrant picks swapped
+  (2/5/3/4 -> 3/4/2/5). Verified direction still needs one more live test.
+- **Foreground labels added**: genuine GuiContainer draws dark-gray
+  (0x404040 = &8) unshadowed text - "Chest"(8,6)/"Furnace"(60,6)/
+  "Crafting"(28,6) + "Inventory"(8,72/74); pocket GuiInventory has
+  "Crafting"(86,16). Rendered as prebuilt text textures at texF-scaled
+  genuine coords. Verified in the rig (pocket Crafting label correct).
+- **Stack counts hung off the slot's right edge**: the width estimate used
+  TextAtlas.offset - which is the PREFIX width (0 for the digits atlas!),
+  not a per-digit advance - so textW was always 0. Now sums the atlas'
+  per-glyph widths[] and right-aligns at x+17 (renderItemOverlayIntoGUI's
+  x + 19 - 2 - stringWidth). Cursor count fixed the same way.
+- **Durability bars in every slot**: genuine draws the damage bar in ALL
+  GUI slots (chest/storage/hotbar rows), ours only did the HUD hotbar.
+  Same formulas as the HUD implementation, scaled by texF; container slot
+  damage read from the tile entity, craft-grid cells skipped.
+
+---
+
 ## SESSION LOG — real-Indev interop fixes + directional chests/furnaces
 
 User LIVE-TESTED our .mclevel files in genuine Indev: terrain loads, tools
