@@ -105,6 +105,34 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - paged debug menu + time switcher, torch top texture fix
+
+### Debug menu refactor (user: nestle options under pages)
+F9 menu is now TWO pages sharing one 18-button grid - the flip button
+relabels the widgets and re-hooks their MenuClick handlers in place (no
+widget rebuild). Page persists across open/close.
+- Page 1 "Mobs + Combat": the original spawn/heal/toggles/census set.
+- Page 2 "Items + Time": give shortcuts (iron pick/axe/sword, workbench,
+  chest, furnace, coal x10, iron ore x10, logs x10, torches x8, planks x32,
+  string x8, bread x5, arrows x8) and the TIME SWITCHER - Dawn 21600 /
+  Noon 3600 / Dusk 9600 / Midnight 15600 (celestial angle = t/24000 - 0.15,
+  so noon sits at t=3600). All verified in the rig: page flip, give
+  handlers, and Time: Midnight -> instant black-sky night on a freshly
+  generated world (confirming the day/night env path works for generated
+  worlds too, not just .mclevel loads).
+
+### Torch top texture (user report, verified against source)
+renderBlockTorch samples the top face at tile pixels x 7-9, y 6-8 (the
+ember), but the engine's bounds-crop reads y 7-9 - one pixel low, smearing
+flame+stick. Fix: BetaPatcher now writes tile 117 = the torch tile shifted
+DOWN 1px (PatchTerrainTileShifted), and the torch's FACE_YMAX uses 117, so
+the crop lands exactly on the genuine ember pixels.
+NOTE: existing installs need default.zip deleted once to regenerate the
+atlas with tile 117 (the required-entries check can't detect tile-level
+changes).
+
+---
+
 ## SESSION LOG — 2x2 crafting GUI (latest)
 
 The crafting loop is now playable end to end in Indev mode.

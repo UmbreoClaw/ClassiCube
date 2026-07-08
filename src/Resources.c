@@ -851,6 +851,7 @@ static cc_result TerrainPatcher_Process(struct HttpRequest* req);
 static cc_result NewTextures_ExtractGui(struct HttpRequest* req);
 static cc_result BetaPatcher_ExtractItems(struct HttpRequest* req);
 static void PatchTerrainTile(struct Bitmap* src, int srcX, int srcY, int tileX, int tileY);
+static void PatchTerrainTileShifted(struct Bitmap* src, int srcX, int srcY, int tileX, int tileY);
 
 static cc_result Classic0023Patcher_OldGoldBlock(struct HttpRequest* req);
 static cc_result Classic0023Patcher_OldGoldOre(  struct HttpRequest* req);
@@ -986,6 +987,9 @@ static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* 
 			PatchTerrainTile(&bmp, beta_tiles[i].sx * 16, beta_tiles[i].sy * 16,
 							 beta_tiles[i].dx, beta_tiles[i].dy);
 		}
+		/* 117: torch-top tile - the torch tile (0,5) shifted down 1px so the */
+		/*  block-bounds crop shows the genuine ember pixels (see the helper) */
+		PatchTerrainTileShifted(&bmp, 0 * 16, 5 * 16, 5, 7);
 		Mem_Free(bmp.scan0);
 		return 0;
 	}
@@ -1033,6 +1037,23 @@ static void PatchTerrainTile(struct Bitmap* src, int srcX, int srcY, int tileX, 
 	if (!dst->scan0) return;
 
 	Bitmap_UNSAFE_CopyBlock(srcX, srcY, tileX * 16, tileY * 16, src, dst, 16);
+}
+
+/* Copies a tile shifted DOWN one pixel. The torch's TOP face is cropped by */
+/*  the engine to the block bounds (pixels x 7-9, y 7-9), but the genuine */
+/*  renderBlockTorch samples the ember at y 6-8 - a 1px-shifted copy of the */
+/*  torch tile makes the bounds crop land on the right pixels. */
+static void PatchTerrainTileShifted(struct Bitmap* src, int srcX, int srcY, int tileX, int tileY) {
+	static const cc_string terrainPng = String_FromConst("terrain.png");
+	struct ResourceZipEntry* entry    = ZipEntries_Find(&terrainPng);
+	struct Bitmap* dst = &entry->value.bmp;
+	int y;
+	if (!dst->scan0) return;
+
+	for (y = 0; y < 15; y++) {
+		Mem_Copy(Bitmap_GetRow(dst, tileY * 16 + y + 1) + tileX * 16,
+				 Bitmap_GetRow(src, srcY + y) + srcX, 16 * BITMAPCOLOR_SIZE);
+	}
 }
 
 

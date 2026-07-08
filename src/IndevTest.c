@@ -508,6 +508,10 @@ static void IndevBlocks_Define(void) {
 	Blocks.Brightness[INDEV_BLOCK_TORCH]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
 	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_TORCH],  7.0f/16.0f, 0.0f,        7.0f/16.0f);
 	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_TORCH],  9.0f/16.0f, 10.0f/16.0f, 9.0f/16.0f);
+	/* Top face uses tile 117 (torch tile shifted down 1px in the patcher) so */
+	/*  the bounds crop (x 7-9, y 7-9) shows the ember, matching genuine */
+	/*  renderBlockTorch's top UVs of x 7-9, y 6-8. */
+	Block_Tex(INDEV_BLOCK_TORCH, FACE_YMAX) = 117;
 	Block_DefineCustom(INDEV_BLOCK_TORCH, false);
 
 	/* Lit furnaces also glow (BlockFurnace active: setLightValue(14/16)) */

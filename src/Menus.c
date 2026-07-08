@@ -38,6 +38,7 @@
 #include "InputHandler.h"
 #include "Protocol.h"
 #include "SurvivalTest.h"
+#include "IndevTest.h"
 
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
@@ -3021,8 +3022,9 @@ static struct SurvivalDebugScreen {
 	Screen_Body
 	struct TextWidget title;
 	struct ButtonWidget btns[DEBUG_MAX_BTNS];
+	struct ButtonWidget pageBtn;
 	struct ButtonWidget done;
-	struct Widget* __widgets[1 + DEBUG_MAX_BTNS + 1];
+	struct Widget* __widgets[1 + DEBUG_MAX_BTNS + 2];
 } SurvivalDebugScreen;
 
 static void SurvivalDebugScreen_Close(void* a, void* b) { Gui_Remove((struct Screen*)&SurvivalDebugScreen); }
@@ -3066,9 +3068,33 @@ static void SurvivalDebugScreen_ToggleInvinc(void* a, void* b) { SurvivalTest_De
 static void SurvivalDebugScreen_ToggleNoAI(void* a, void* b)   { SurvivalTest_DebugToggleNoAI();       SurvivalDebugScreen_RefreshToggles(a); }
 static void SurvivalDebugScreen_ToggleArmor(void* a, void* b)  { SurvivalTest_DebugToggleForceArmor(); SurvivalDebugScreen_RefreshToggles(a); }
 
-/* 3 columns (x = -160 / 0 / 160) to fit everything; toggle captions (indices */
-/*  12-14, see DEBUG_BTN_*) are placeholders, replaced by SetToggleLabels. */
-static const struct SimpleButtonDesc survivalDebug_descs[DEBUG_MAX_BTNS] = {
+/* Page 2: item giving + the day/night time switcher */
+static void SurvivalDebugScreen_GiveN(int id, int n) { while (n-- > 0) SurvivalTest_DebugGiveItem(id); }
+static void SurvivalDebugScreen_GiveIronAxe(void* a, void* b)   { SurvivalTest_DebugGiveItem(256 + 2); }
+static void SurvivalDebugScreen_GiveIronSword(void* a, void* b) { SurvivalTest_DebugGiveItem(256 + 11); }
+static void SurvivalDebugScreen_GiveWorkbench(void* a, void* b) { SurvivalTest_DebugGiveItem(66); }
+static void SurvivalDebugScreen_GiveChest(void* a, void* b)     { SurvivalTest_DebugGiveItem(67); }
+static void SurvivalDebugScreen_GiveFurnace(void* a, void* b)   { SurvivalTest_DebugGiveItem(68); }
+static void SurvivalDebugScreen_GiveCoal(void* a, void* b)      { SurvivalDebugScreen_GiveN(256 + 7,  10); }
+static void SurvivalDebugScreen_GiveIronOre(void* a, void* b)   { SurvivalDebugScreen_GiveN(BLOCK_IRON_ORE, 10); }
+static void SurvivalDebugScreen_GiveLogs(void* a, void* b)      { SurvivalDebugScreen_GiveN(BLOCK_LOG, 10); }
+static void SurvivalDebugScreen_GiveTorches(void* a, void* b)   { SurvivalDebugScreen_GiveN(70, 8); }
+static void SurvivalDebugScreen_GivePlanks(void* a, void* b)    { SurvivalDebugScreen_GiveN(BLOCK_WOOD, 32); }
+static void SurvivalDebugScreen_GiveString(void* a, void* b)    { SurvivalDebugScreen_GiveN(256 + 31, 8); }
+static void SurvivalDebugScreen_GiveBread(void* a, void* b)     { SurvivalDebugScreen_GiveN(256 + 41, 5); }
+static void SurvivalDebugScreen_GiveArrows(void* a, void* b)    { SurvivalDebugScreen_GiveN(256 + 6, 8); }
+
+/* worldTime presets: celestial angle = t/24000 - 0.15, so noon (angle 0) is */
+/*  t=3600; midnight t=15600; dawn/dusk are the half-lit cosine zeroes. */
+static void SurvivalDebugScreen_TimeDawn(void* a, void* b)     { IndevTest_SetWorldTime(21600); }
+static void SurvivalDebugScreen_TimeNoon(void* a, void* b)     { IndevTest_SetWorldTime(3600); }
+static void SurvivalDebugScreen_TimeDusk(void* a, void* b)     { IndevTest_SetWorldTime(9600); }
+static void SurvivalDebugScreen_TimeMidnight(void* a, void* b) { IndevTest_SetWorldTime(15600); }
+
+/* 3 columns (x = -160 / 0 / 160), two PAGES sharing one button grid - the */
+/*  page-flip button relabels + re-hooks the same 18 widgets. Page 1's toggle */
+/*  captions (indices 12-14, see DEBUG_BTN_*) are replaced by SetToggleLabels. */
+static const struct SimpleButtonDesc survivalDebug_page0[DEBUG_MAX_BTNS] = {
 	{ -160, -150, "Spawn Zombie",    SurvivalDebugScreen_SpawnZombie },
 	{    0, -150, "Spawn Skeleton",  SurvivalDebugScreen_SpawnSkeleton },
 	{  160, -150, "Spawn Spider",    SurvivalDebugScreen_SpawnSpider },
@@ -3084,10 +3110,60 @@ static const struct SimpleButtonDesc survivalDebug_descs[DEBUG_MAX_BTNS] = {
 	{ -160,   30, "Invincible: OFF", SurvivalDebugScreen_ToggleInvinc },
 	{    0,   30, "No-AI: OFF",      SurvivalDebugScreen_ToggleNoAI },
 	{  160,   30, "Armor: OFF",      SurvivalDebugScreen_ToggleArmor },
-	{    0,   80, "Kill all mobs",   SurvivalDebugScreen_KillAllMobs },
 	{ -160,   80, "Mob census",      SurvivalDebugScreen_MobCensus },
+	{    0,   80, "Kill all mobs",   SurvivalDebugScreen_KillAllMobs },
 	{  160,   80, "Give Iron Pick",  SurvivalDebugScreen_GivePickaxe },
 };
+static const struct SimpleButtonDesc survivalDebug_page1[DEBUG_MAX_BTNS] = {
+	{ -160, -150, "Give Iron Pick",  SurvivalDebugScreen_GivePickaxe },
+	{    0, -150, "Give Iron Axe",   SurvivalDebugScreen_GiveIronAxe },
+	{  160, -150, "Give Iron Sword", SurvivalDebugScreen_GiveIronSword },
+	{ -160, -105, "Give Workbench",  SurvivalDebugScreen_GiveWorkbench },
+	{    0, -105, "Give Chest",      SurvivalDebugScreen_GiveChest },
+	{  160, -105, "Give Furnace",    SurvivalDebugScreen_GiveFurnace },
+	{ -160,  -60, "Give Coal x10",   SurvivalDebugScreen_GiveCoal },
+	{    0,  -60, "Give Iron Ore x10", SurvivalDebugScreen_GiveIronOre },
+	{  160,  -60, "Give Logs x10",   SurvivalDebugScreen_GiveLogs },
+	{ -160,  -15, "Give Torches x8", SurvivalDebugScreen_GiveTorches },
+	{    0,  -15, "Give Planks x32", SurvivalDebugScreen_GivePlanks },
+	{  160,  -15, "Give String x8",  SurvivalDebugScreen_GiveString },
+	{ -160,   30, "Give Bread x5",   SurvivalDebugScreen_GiveBread },
+	{    0,   30, "Give Arrows x8",  SurvivalDebugScreen_GiveArrows },
+	{  160,   30, "Time: Dawn",      SurvivalDebugScreen_TimeDawn },
+	{ -160,   80, "Time: Noon",      SurvivalDebugScreen_TimeNoon },
+	{    0,   80, "Time: Dusk",      SurvivalDebugScreen_TimeDusk },
+	{  160,   80, "Time: Midnight",  SurvivalDebugScreen_TimeMidnight },
+};
+static int survivalDebug_page;
+static const struct SimpleButtonDesc* SurvivalDebugScreen_Descs(void) {
+	return survivalDebug_page ? survivalDebug_page1 : survivalDebug_page0;
+}
+
+/* Applies the current page: relabels the shared button grid, re-hooks each */
+/*  button's click handler, and refreshes the toggle captions (page 1 only). */
+static void SurvivalDebugScreen_ApplyPage(struct SurvivalDebugScreen* s, struct FontDesc* font) {
+	const struct SimpleButtonDesc* descs = SurvivalDebugScreen_Descs();
+	int i;
+	for (i = 0; i < DEBUG_MAX_BTNS; i++) {
+		ButtonWidget_SetConst(&s->btns[i], descs[i].title, font);
+		s->btns[i].MenuClick = descs[i].onClick;
+	}
+	if (!survivalDebug_page) SurvivalDebugScreen_SetToggleLabels(s, font);
+
+	TextWidget_SetConst(&s->title, survivalDebug_page ?
+		"Survival debug - Items + Time (F9)" : "Survival debug - Mobs + Combat (F9)", font);
+	ButtonWidget_SetConst(&s->pageBtn, survivalDebug_page ?
+		"<< Mobs + Combat" : "Items + Time >>", font);
+}
+
+static void SurvivalDebugScreen_FlipPage(void* screen, void* b) {
+	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
+	struct FontDesc font;
+	survivalDebug_page ^= 1;
+	Gui_MakeTitleFont(&font);
+	SurvivalDebugScreen_ApplyPage(s, &font);
+	Font_Free(&font);
+}
 
 static void SurvivalDebugScreen_ContextRecreated(void* screen) {
 	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
@@ -3095,9 +3171,7 @@ static void SurvivalDebugScreen_ContextRecreated(void* screen) {
 	Screen_UpdateVb(screen);
 	Gui_MakeTitleFont(&titleFont);
 
-	TextWidget_SetConst(&s->title, "Survival debug menu (F9)", &titleFont);
-	Menu_SetButtons(s->btns, &titleFont, survivalDebug_descs, DEBUG_MAX_BTNS);
-	SurvivalDebugScreen_SetToggleLabels(s, &titleFont); /* override the 3 toggles with ON/OFF state */
+	SurvivalDebugScreen_ApplyPage(s, &titleFont);
 	ButtonWidget_SetConst(&s->done, "Close", &titleFont);
 
 	Font_Free(&titleFont);
@@ -3106,7 +3180,9 @@ static void SurvivalDebugScreen_ContextRecreated(void* screen) {
 static void SurvivalDebugScreen_Layout(void* screen) {
 	struct SurvivalDebugScreen* s = (struct SurvivalDebugScreen*)screen;
 	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -195);
-	Menu_LayoutButtons(s->btns, survivalDebug_descs, DEBUG_MAX_BTNS);
+	/* both pages share one grid, so page 0's coordinates lay out either */
+	Menu_LayoutButtons(s->btns, survivalDebug_page0, DEBUG_MAX_BTNS);
+	Widget_SetLocation(&s->pageBtn, ANCHOR_CENTRE, ANCHOR_MAX, 0, 70);
 	Menu_LayoutBack(&s->done);
 }
 
@@ -3117,7 +3193,8 @@ static void SurvivalDebugScreen_Init(void* screen) {
 	s->maxWidgets = Array_Elems(s->__widgets);
 
 	TextWidget_Add(s, &s->title);
-	Menu_AddButtons(s, s->btns, 140, survivalDebug_descs, DEBUG_MAX_BTNS);
+	Menu_AddButtons(s, s->btns, 140, survivalDebug_page0, DEBUG_MAX_BTNS);
+	ButtonWidget_Add(s, &s->pageBtn, 200, SurvivalDebugScreen_FlipPage);
 	ButtonWidget_Add(s, &s->done, 120, SurvivalDebugScreen_Close);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
