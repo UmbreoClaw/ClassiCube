@@ -78,6 +78,17 @@ static struct TextureEntry contgui_entry = { "container.png", ContGuiPngProcess 
 
 GfxResourceID IndevTest_ContGuiTex(void) { return indev_contGuiTexId; }
 
+/* terrain/sun.png + terrain/moon.png - the celestial quads renderSky draws */
+static GfxResourceID indev_sunTexId, indev_moonTexId;
+static void SunPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_sunTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry sun_entry = { "sun.png", SunPngProcess };
+static void MoonPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_moonTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry moon_entry = { "moon.png", MoonPngProcess };
+
 /* Item definitions - the complete in-20100223 roster from Item.java's static
     init (local ids; shiftedIndex = id + 256). kind drives behaviour:
     tools/swords/hoes carry a tier (maxDamage = 32 << tier, ItemTool.java:14)
@@ -823,6 +834,137 @@ static void Indev_TickDayNight(void) {
 	}
 }
 
+/*########################################################################################################################*
+*--------------------------------------------Sun, moon and stars (renderSky)----------------------------------------------*
+*#########################################################################################################################*/
+/* RenderGlobal.renderSky: sun quad (+-30 at y=+100, /terrain/sun.png), moon
+    quad (+-20 at y=-100, flipped UVs), and 500 stars baked from
+    Random(10842) with cumulative random rotations - all spinning around the
+    X axis by celestialAngle * 360 with additive blending, fog off, no depth
+    writes. ClassiCube's RNG is java.util.Random-compatible, so the star
+    sizes/angles match genuine (composition handedness may mirror the field,
+    which is indistinguishable for a random sky). */
+#define INDEV_STARS 500
+static struct VertexColoured indev_starVerts[INDEV_STARS * 4];
+static cc_bool indev_starsBaked;
+static GfxResourceID indev_starVb, indev_skyQuadVb;
+
+static void Indev_TransformRow(float x, float y, float z, const struct Matrix* m,
+							   struct VertexColoured* v) {
+	v->x = x * m->row1.x + y * m->row2.x + z * m->row3.x + m->row4.x;
+	v->y = x * m->row1.y + y * m->row2.y + z * m->row3.y + m->row4.y;
+	v->z = x * m->row1.z + y * m->row2.z + z * m->row3.z + m->row4.z;
+}
+
+static void Indev_BakeStars(void) {
+	RNGState rng;
+	struct Matrix m = Matrix_Identity, r, tmp;
+	float rx, ry, rz, s;
+	int i;
+	Random_Seed(&rng, 10842);
+
+	for (i = 0; i < INDEV_STARS; i++) {
+		/* the genuine display list never resets the matrix - rotations */
+		/*  accumulate from star to star */
+		rx = Random_Float(&rng) * 360.0f * MATH_DEG2RAD;
+		ry = Random_Float(&rng) * 360.0f * MATH_DEG2RAD;
+		rz = Random_Float(&rng) * 360.0f * MATH_DEG2RAD;
+		Matrix_RotateX(&r, rx); tmp = m; Matrix_Mul(&m, &r, &tmp);
+		Matrix_RotateY(&r, ry); tmp = m; Matrix_Mul(&m, &r, &tmp);
+		Matrix_RotateZ(&r, rz); tmp = m; Matrix_Mul(&m, &r, &tmp);
+		s = 0.25f + Random_Float(&rng) * 0.25f;
+
+		Indev_TransformRow(-s, -100.0f,  s, &m, &indev_starVerts[i * 4 + 0]);
+		Indev_TransformRow( s, -100.0f,  s, &m, &indev_starVerts[i * 4 + 1]);
+		Indev_TransformRow( s, -100.0f, -s, &m, &indev_starVerts[i * 4 + 2]);
+		Indev_TransformRow(-s, -100.0f, -s, &m, &indev_starVerts[i * 4 + 3]);
+	}
+}
+
+static void Indev_SkyQuad(struct VertexTextured* v, float size, float y,
+						  cc_bool flipUV) {
+	float u0 = flipUV ? 1.0f : 0.0f, u1 = 1.0f - u0;
+	v[0].x = -size; v[0].y = y; v[0].z = -size; v[0].Col = PACKEDCOL_WHITE; v[0].U = u0; v[0].V = u0;
+	v[1].x =  size; v[1].y = y; v[1].z = -size; v[1].Col = PACKEDCOL_WHITE; v[1].U = u1; v[1].V = u0;
+	v[2].x =  size; v[2].y = y; v[2].z =  size; v[2].Col = PACKEDCOL_WHITE; v[2].U = u1; v[2].V = u1;
+	v[3].x = -size; v[3].y = y; v[3].z =  size; v[3].Col = PACKEDCOL_WHITE; v[3].U = u0; v[3].V = u1;
+}
+
+/* World.getStarBrightness: clamp01(1 - (cos(a*2PI)*2 + 12/16)) squared * 0.5 */
+static float Indev_StarBrightness(void) {
+	float f = 1.0f - (Math_CosF(Indev_CelestialAngle() * MATH_PI * 2.0f) * 2.0f + 12.0f/16.0f);
+	if (f < 0.0f) f = 0.0f;
+	if (f > 1.0f) f = 1.0f;
+	return f * f * 0.5f;
+}
+
+void IndevTest_RenderSky(void) {
+	struct Matrix view, rot, m;
+	struct VertexTextured quad[4];
+	PackedCol col;
+	float bright;
+	cc_bool hadFog;
+	int i, b;
+
+	if (!IndevTest_Enabled || !World.Loaded) return;
+
+	if (!indev_starsBaked) { Indev_BakeStars(); indev_starsBaked = true; }
+	if (!indev_starVb)   indev_starVb   = Gfx_CreateDynamicVb(VERTEX_FORMAT_COLOURED, INDEV_STARS * 4);
+	if (!indev_skyQuadVb) indev_skyQuadVb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 4);
+	if (!indev_starVb || !indev_skyQuadVb) return;
+
+	/* sky-space rotation (celestial angle around X) then the camera's view */
+	/*  rotation WITHOUT its translation - the sky is centred on the eye */
+	view = Gfx.View;
+	view.row4.x = 0.0f; view.row4.y = 0.0f; view.row4.z = 0.0f;
+	Matrix_RotateX(&rot, Indev_CelestialAngle() * MATH_PI * 2.0f);
+	Matrix_Mul(&m, &rot, &view);
+	Gfx_LoadMatrix(MATRIX_VIEW, &m);
+
+	hadFog = Gfx_GetFog();
+	if (hadFog) Gfx_SetFog(false);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetAlphaBlendingAdditive(true); /* dst + src, like glBlendFunc(ONE, ONE) */
+
+	if (indev_sunTexId) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(indev_sunTexId);
+		Indev_SkyQuad(quad, 30.0f, 100.0f, false);
+		Gfx_SetDynamicVbData(indev_skyQuadVb, quad, 4);
+		Gfx_DrawVb_IndexedTris(4);
+	}
+	if (indev_moonTexId) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(indev_moonTexId);
+		Indev_SkyQuad(quad, 20.0f, -100.0f, true);
+		Gfx_SetDynamicVbData(indev_skyQuadVb, quad, 4);
+		Gfx_DrawVb_IndexedTris(4);
+	}
+
+	bright = Indev_StarBrightness();
+	if (bright > 0.002f) {
+		b   = (int)(bright * 255.0f);
+		col = PackedCol_Make(b, b, b, 255);
+		for (i = 0; i < INDEV_STARS * 4; i++) indev_starVerts[i].Col = col;
+
+		Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
+		Gfx_SetDynamicVbData(indev_starVb, indev_starVerts, INDEV_STARS * 4);
+		Gfx_DrawVb_IndexedTris(INDEV_STARS * 4);
+	}
+
+	Gfx_SetAlphaBlendingAdditive(false);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthWrite(true);
+	if (hadFog) Gfx_SetFog(true);
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+}
+
+static void IndevTest_ContextLost(void* obj) {
+	Gfx_DeleteDynamicVb(&indev_starVb);
+	Gfx_DeleteDynamicVb(&indev_skyQuadVb);
+}
+
 static void IndevTest_Tick(struct ScheduledTask* task) {
 	int i;
 	if (!IndevTest_Enabled) return;
@@ -914,9 +1056,12 @@ static void OnInit(void) {
 	TextureEntry_Register(&craftgui_entry);
 	TextureEntry_Register(&furngui_entry);
 	TextureEntry_Register(&contgui_entry);
+	TextureEntry_Register(&sun_entry);
+	TextureEntry_Register(&moon_entry);
 
 	Random_Seed(&indev_teRng, (int)Game.Time + 1);
 	Event_Register_(&UserEvents.BlockChanged, NULL, IndevTest_BlockChanged);
+	Event_Register_(&GfxEvents.ContextLost,   NULL, IndevTest_ContextLost);
 	ScheduledTask_Add(GAME_DEF_TICKS, IndevTest_Tick);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }

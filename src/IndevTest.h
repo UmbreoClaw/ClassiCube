@@ -108,6 +108,9 @@ void IndevTest_SetSkyBrightness(int b);
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);
 PackedCol IndevTest_BaseCloudsCol(void);
+/* Renders the sun, moon and star field (RenderGlobal.renderSky port) - */
+/*  called from the 3D pass right after the sky plane, before clouds. */
+void IndevTest_RenderSky(void);
 /* Whether a tile entity exists at a position (save-side world scan). */
 cc_bool IndevTest_HasTE(int x, int y, int z);
 /* Tile entity iteration for .mclevel save: next used pool index after prev */

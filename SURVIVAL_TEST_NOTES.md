@@ -105,6 +105,31 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - sun, moon and stars (renderSky port)
+
+User asked whether in-20100223 had night stars + the sun texture: YES -
+RenderGlobal.renderSky draws /terrain/sun.png and /terrain/moon.png quads
+plus a 500-star field; World.getStarBrightness drives star alpha. Ported:
+- Sun: +-30 quad at y=+100; moon: +-20 quad at y=-100 with flipped UVs;
+  both rotate around X by celestialAngle*360, centred on the eye (view
+  translation stripped), additive blending, fog off, no depth writes.
+- Stars: 500 quads baked once from java-Random(10842) - ClassiCube's RNG
+  is java.util.Random-compatible so sizes/angles match genuine; the
+  genuine display list never resets its matrix so rotations accumulate
+  star-to-star (composition handedness may mirror the field - visually
+  indistinguishable for a random sky). Colour = getStarBrightness
+  (clamp01(1 - (cos*2 + 12/16))^2 * 0.5), drawn only when > 0.
+- Hooked in Game.c between EnvRenderer_RenderSky and RenderClouds (the
+  genuine draw order). Dynamic VBs freed on context loss.
+- sun.png/moon.png extracted from the beta jar (terrain/*.png) as required
+  default.zip entries - which ALSO forces existing installs to regenerate
+  default.zip automatically, delivering the torch-top tile 117 without the
+  manual delete the previous entry asked for.
+- VERIFIED in the rig: star field + moon overhead at midnight, bright sun
+  overhead at noon (and night->noon colour recovery via the time switcher).
+
+---
+
 ## SESSION LOG - paged debug menu + time switcher, torch top texture fix
 
 ### Debug menu refactor (user: nestle options under pages)

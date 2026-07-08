@@ -514,6 +514,7 @@ static void Render3DFrame(float delta, float t) {
 
 	Particles_Render(t);
 	EnvRenderer_RenderSky();
+	IndevTest_RenderSky(); /* Indev sun/moon/stars, between sky and clouds */
 	EnvRenderer_RenderClouds();
 
 	MapRenderer_Update(delta);
