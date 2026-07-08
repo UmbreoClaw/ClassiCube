@@ -2514,6 +2514,9 @@ static struct SurvivalInvScreen {
 	struct FontDesc  font;
 	struct TextAtlas countAtlas;
 	struct Texture   titleTex;
+	/* Genuine GuiContainer foreground labels (0x404040 dark gray text): */
+	/*  "Chest"/"Furnace"/"Crafting" panel titles + "Inventory" section label */
+	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory;
 	struct Entity    doll;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
@@ -2648,6 +2651,34 @@ static int SurvivalInv_DisplaySlot(int n) {
 	if (cont)                              return SURVIVAL_CONTAINER_BASE + n;
 	if (n < cells)                         return SURVIVAL_CRAFT_BASE + n;
 	return SURVINV_RESULT_HIT;
+}
+
+/* Rendered pixel width of a stack count - summed from the atlas' per-glyph */
+/*  widths (atlas->offset is the PREFIX width, not a digit advance). */
+static int SurvivalInv_CountWidth(struct TextAtlas* atlas, int value) {
+	int w = 0;
+	if (value <= 0) return 0;
+	for (; value > 0; value /= 10) w += atlas->widths[value % 10];
+	return w;
+}
+
+/* Tool damage of any displayed slot (0 when not a damageable/damaged item). */
+static void SurvivalInv_SlotDamage(int slot, int* dmg, int* maxDmg) {
+	int id = 0, count = 0;
+	*dmg = 0; *maxDmg = 0;
+	if (slot == SURVINV_RESULT_HIT) return;
+
+	if (slot >= SURVIVAL_CONTAINER_BASE) {
+		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
+		id = p->id; count = p->count; *dmg = p->damage;
+	} else if (slot >= SURVIVAL_CRAFT_BASE) {
+		return; /* craft grid tools keep damage internally, bar not shown */
+	} else {
+		id = SurvivalTest_SlotId(slot); count = SurvivalTest_SlotCount(slot);
+		*dmg = SurvivalTest_SlotDamage(slot);
+	}
+	if (count <= 0) { *dmg = 0; return; }
+	*maxDmg = IndevTest_ToolMaxDamage(id);
 }
 
 /* The paperdoll is a static, unlit preview - just needs a constant base color. */
@@ -2831,12 +2862,14 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 			/* Indev: count sits at the 16px item's bottom (slotY+16*f), not */
 			/*  the 18px cell bottom; classic keeps its slotSize-relative spot. */
 			if (IndevTest_Enabled) {
-				/* renderItemOverlayIntoGUI right-aligns the count at the item's */
-				/*  bottom-right: x = slotX + 16 - textWidth, y at the item bottom. */
-				int ndig  = count >= 100 ? 3 : (count >= 10 ? 2 : 1);
-				int textW = ndig * s->countAtlas.offset;
-				s->countAtlas.tex.y = slotY + (int)(s->texF * 16.0f) - s->countAtlas.tex.height;
-				s->countAtlas.curX  = slotX + (int)(s->texF * 16.0f) - textW;
+				/* renderItemOverlayIntoGUI right-aligns the count with its right */
+				/*  edge at x+17 (drawString at x + 19 - 2 - stringWidth). NOTE: */
+				/*  width must come from the atlas' per-glyph widths - offset is */
+				/*  the PREFIX width (0 for the digits atlas), which used to make */
+				/*  textW 0 and hang counts off the slot's right edge. */
+				int textW = SurvivalInv_CountWidth(&s->countAtlas, count);
+				s->countAtlas.tex.y = slotY + (int)(s->texF * 17.0f) - s->countAtlas.tex.height;
+				s->countAtlas.curX  = slotX + (int)(s->texF * 17.0f) - textW;
 			} else {
 				s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
 				s->countAtlas.curX  = slotX + 2;
@@ -2846,10 +2879,9 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 		/* Cursor-held stack count follows the mouse (blocks and items alike). */
 		if (SurvivalTest_CursorCount() > 1 && s->mouseX >= 0) {
 			int cc    = SurvivalTest_CursorCount();
-			int ndig  = cc >= 100 ? 3 : (cc >= 10 ? 2 : 1);
 			int half  = (int)(s->texF * 8.0f);
 			s->countAtlas.tex.y = s->mouseY + half - s->countAtlas.tex.height;
-			s->countAtlas.curX  = s->mouseX + half - ndig * s->countAtlas.offset;
+			s->countAtlas.curX  = s->mouseX + half - SurvivalInv_CountWidth(&s->countAtlas, cc);
 			TextAtlas_AddInt(&s->countAtlas, cc, &cur);
 		}
 		s->countAtlas.tex.y = savedY;
@@ -2938,6 +2970,34 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			ovl.uv.u2  = (176.0f + w + 1) / 256.0f;    ovl.uv.v2 = 30.0f / 256.0f;
 			Texture_Render(&ovl);
 		}
+
+		/* GuiContainer foreground labels at the genuine coordinates: */
+		/*  chest "Chest"(8,6) + "Inventory"(8,74); furnace "Furnace"(60,6) */
+		/*  + "Inventory"(8,72); workbench "Crafting"(28,6) + "Inventory" */
+		/*  (8,72); pocket inventory "Crafting"(86,16). */
+		{
+			struct Texture* name = NULL;
+			int nx = 8, ny = 6, invY = 72;
+			if (contKind == INDEV_CONTAINER_CHEST) {
+				name = &s->lblChest; invY = 74;
+			} else if (contKind == INDEV_CONTAINER_FURNACE) {
+				name = &s->lblFurnace; nx = 60;
+			} else if (workbench) {
+				name = &s->lblCrafting; nx = 28;
+			} else if (s->lblCrafting.ID) {
+				name = &s->lblCrafting; nx = 86; ny = 16; invY = -1;
+			}
+			if (name && name->ID) {
+				name->x = (short)(s->panelX + (int)(nx * s->texF));
+				name->y = (short)(s->panelY + (int)(ny * s->texF));
+				Texture_Render(name);
+			}
+			if (invY >= 0 && s->lblInventory.ID) {
+				s->lblInventory.x = (short)(s->panelX + (int)(8 * s->texF));
+				s->lblInventory.y = (short)(s->panelY + (int)(invY * s->texF));
+				Texture_Render(&s->lblInventory);
+			}
+		}
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 
 		/* GuiContainer's mouse-over highlight: translucent white over the */
@@ -3019,6 +3079,32 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		}
 	}
 
+	/* Durability bars - renderItemOverlayIntoGUI draws them in EVERY slot */
+	/*  (chest/storage/hotbar alike), not just the HUD hotbar: 13x2 black */
+	/*  backing at (x+2, y+13), then the red->green remaining-durability bar. */
+	if (IndevTest_Enabled) {
+		float u = s->texF;
+		int   dmg, maxDmg, bx, by, v, w, h;
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i);
+			SurvivalInv_SlotDamage(slot, &dmg, &maxDmg);
+			if (maxDmg <= 0 || dmg <= 0) continue;
+
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			bx = slotX + (int)(2 * u); by = slotY + (int)(13 * u);
+			v  = 255 - dmg * 255 / maxDmg;
+			w  = 13  - dmg * 13  / maxDmg;
+			h  = (int)u; if (h < 1) h = 1;
+
+			Gfx_Draw2DFlat(bx, by, (int)(13 * u), h * 2, PackedCol_Make(0, 0, 0, 255));
+			Gfx_Draw2DFlat(bx, by, (int)(12 * u), h,
+				PackedCol_Make((cc_uint8)((255 - v) / 4), 63, 0, 255));
+			Gfx_Draw2DFlat(bx, by, (int)(w * u), h,
+				PackedCol_Make((cc_uint8)(255 - v), (cc_uint8)v, 0, 255));
+		}
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	}
+
 	/* Stack-count text overlay (drawn last so digits sit over both pictures) */
 	if (s->countVertCount > 0 && s->countAtlas.tex.ID) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
@@ -3079,6 +3165,10 @@ static void SurvivalInvScreen_ContextLost(void* screen) {
 	Font_Free(&s->font);
 	TextAtlas_Free(&s->countAtlas);
 	Gfx_DeleteTexture(&s->titleTex.ID);
+	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblFurnace.ID);
+	Gfx_DeleteTexture(&s->lblCrafting.ID);
+	Gfx_DeleteTexture(&s->lblInventory.ID);
 	Screen_ContextLost(screen);
 }
 
@@ -3086,6 +3176,12 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 	static const cc_string digits = String_FromConst("0123456789");
 	static const cc_string empty  = String_FromConst("");
 	static const cc_string title  = String_FromConst("Inventory");
+	/* GuiContainer foreground labels - colour 4210752 (0x404040) = &8, */
+	/*  drawn without shadow like drawString(..., 4210752) */
+	static const cc_string lblChe = String_FromConst("&8Chest");
+	static const cc_string lblFur = String_FromConst("&8Furnace");
+	static const cc_string lblCra = String_FromConst("&8Crafting");
+	static const cc_string lblInv = String_FromConst("&8Inventory");
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	struct DrawTextArgs args;
 
@@ -3096,6 +3192,15 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 
 	DrawTextArgs_Make(&args, &title, &s->font, true);
 	Drawer2D_MakeTextTexture(&s->titleTex, &args);
+
+	DrawTextArgs_Make(&args, &lblChe, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblChest, &args);
+	DrawTextArgs_Make(&args, &lblFur, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblFurnace, &args);
+	DrawTextArgs_Make(&args, &lblCra, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblCrafting, &args);
+	DrawTextArgs_Make(&args, &lblInv, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblInventory, &args);
 	s->dirty = true;
 }
 

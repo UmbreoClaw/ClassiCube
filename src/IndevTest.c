@@ -773,7 +773,10 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 	if (block == INDEV_BLOCK_CHEST || block == INDEV_BLOCK_FURNACE) {
 		p = &Entities.CurPlayer->Base;
 		q = (int)Math_Floor(p->Yaw * 4.0f / 360.0f + 0.5f) & 3;
-		meta = q == 0 ? 2 : (q == 1 ? 5 : (q == 2 ? 3 : 4));
+		/* ClassiCube's yaw is 180 degrees from Beta's convention (live-test */
+		/*  showed fronts facing AWAY) - so the metadata picks are swapped */
+		/*  north<->south / east<->west vs onBlockPlacedBy's 2/5/3/4. */
+		meta = q == 0 ? 3 : (q == 1 ? 4 : (q == 2 ? 2 : 5));
 		Game_UpdateBlock(coords.x, coords.y, coords.z,
 			IndevTest_FacingVariant(block, meta)); /* no event - avoids recursion */
 	}
