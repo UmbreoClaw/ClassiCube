@@ -15,6 +15,7 @@
 #include "ExtMath.h"
 #include "Entity.h"
 #include "Lighting.h"
+#include "BlockPhysics.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -181,6 +182,11 @@ static const struct IndevItemDef* IndevItems_Find(int id) {
 }
 
 /* ItemTool: maxDamage = 32 << tier. 0 when the id isn't a damageable tool. */
+cc_bool IndevTest_IsHoe(int id) {
+	const struct IndevItemDef* def = IndevItems_Find(id);
+	return def && def->kind == ITEM_KIND_HOE;
+}
+
 int IndevTest_ToolMaxDamage(int id) {
 	const struct IndevItemDef* d = IndevItems_Find(id);
 	if (!d) return 0;
@@ -411,6 +417,19 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_CHEST_V0    71 /* 71-74 */
 #define INDEV_BLOCK_FURN_V0     75 /* 75-78 idle */
 #define INDEV_BLOCK_FURNL_V0    79 /* 79-82 lit */
+/* Farming: farmland dry/wet (genuine id 60 + moisture metadata) and the */
+/*  8 crop growth stages (genuine id 59 + stage metadata 0-7). */
+#define INDEV_BLOCK_FARMLAND     83
+#define INDEV_BLOCK_FARMLAND_WET 84
+#define INDEV_BLOCK_CROPS_0      85 /* 85-92 */
+#define INDEV_BLOCK_CROPS_7      92
+
+static cc_bool Indev_IsFarmland(BlockID b) {
+	return b == INDEV_BLOCK_FARMLAND || b == INDEV_BLOCK_FARMLAND_WET;
+}
+static cc_bool Indev_IsCrops(BlockID b) {
+	return b >= INDEV_BLOCK_CROPS_0 && b <= INDEV_BLOCK_CROPS_7;
+}
 
 static cc_bool Indev_IsChestBlock(BlockID b) {
 	return b == INDEV_BLOCK_CHEST || (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3);
@@ -436,6 +455,24 @@ int IndevTest_BlockFacingMeta(BlockID b) {
 	if (b >= INDEV_BLOCK_FURN_V0  && b <= INDEV_BLOCK_FURN_V0  + 3) return 2 + (b - INDEV_BLOCK_FURN_V0);
 	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return 2 + (b - INDEV_BLOCK_FURNL_V0);
 	return 2;
+}
+
+/* Generic .mclevel metadata for a block: container facing, farmland */
+/*  moisture, crop stage - whatever the genuine block keeps in its nibble. */
+int IndevTest_BlockDataMeta(BlockID b) {
+	if (IndevTest_IsContainerBlock(b))    return IndevTest_BlockFacingMeta(b);
+	if (b == INDEV_BLOCK_FARMLAND_WET)    return 7;
+	if (Indev_IsCrops(b))                 return b - INDEV_BLOCK_CROPS_0;
+	if (b == INDEV_BLOCK_TORCH)           return 5; /* standing */
+	return 0;
+}
+
+/* Applies a loaded .mclevel metadata nibble to a base-mapped block. */
+BlockID IndevTest_ApplyDataMeta(BlockID b, int meta) {
+	if (IndevTest_IsContainerBlock(b)) return IndevTest_FacingVariant(b, meta);
+	if (b == INDEV_BLOCK_FARMLAND && meta > 0) return INDEV_BLOCK_FARMLAND_WET;
+	if (b == INDEV_BLOCK_CROPS_0 && meta > 0)  return (BlockID)(INDEV_BLOCK_CROPS_0 + (meta > 7 ? 7 : meta));
+	return b;
 }
 
 /* Directional variant of a canonical container for facing metadata 2-5. */
@@ -529,6 +566,26 @@ static void IndevBlocks_Define(void) {
 	Blocks.Brightness[INDEV_BLOCK_FURNACE_LIT] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
 	for (k = 0; k < 4; k++) {
 		Blocks.Brightness[INDEV_BLOCK_FURNL_V0 + k] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	}
+
+	/* Farmland: dirt sides/bottom, tilled top (tile 116 dry / 115 wet), */
+	/*  hardness dirt-like (0.6s). Only obtainable by hoeing - not placeable. */
+	IndevBlock_Define(INDEV_BLOCK_FARMLAND,     "Farmland", 116, 2, 2, 2, SOUND_GRAVEL, 12);
+	IndevBlock_Define(INDEV_BLOCK_FARMLAND_WET, "Farmland", 115, 2, 2, 2, SOUND_GRAVEL, 12);
+	Blocks.CanPlace[INDEV_BLOCK_FARMLAND]     = false;
+	Blocks.CanPlace[INDEV_BLOCK_FARMLAND_WET] = false;
+
+	/* Crop stages 0-7: X-sprites of tiles 107-114, walk-through, instant */
+	/*  break, not placeable (planted via seeds). */
+	for (k = 0; k < 8; k++) {
+		BlockID id = (BlockID)(INDEV_BLOCK_CROPS_0 + k);
+		IndevBlock_Define(id, "Crops", 107 + k, 107 + k, 107 + k, 107 + k, SOUND_GRASS, 0);
+		Blocks.Collide[id]         = COLLIDE_NONE;
+		Blocks.ExtendedCollide[id] = COLLIDE_NONE;
+		Blocks.Draw[id]            = DRAW_SPRITE;
+		Blocks.BlocksLight[id]     = false;
+		Blocks.CanPlace[id]        = false;
+		Block_DefineCustom(id, false);
 	}
 }
 
@@ -844,6 +901,142 @@ static void Indev_TickDayNight(void) {
 }
 
 /*########################################################################################################################*
+*-------------------------------------------------Farming (random ticks)--------------------------------------------------*
+*#########################################################################################################################*/
+/* Growth needs combined light >= 9 above the plant. Approximated as "the
+    column is sky-lit AND the current sky light level is >= 9" - torch-grown
+    night farms aren't supported yet (needs a per-block light query). */
+static cc_bool Indev_GrowLightOk(int x, int y, int z) {
+	return Lighting.IsLit(x, y, z) && Indev_SkyLight() >= 9;
+}
+
+static cc_bool Indev_WaterNear(int x, int y, int z) {
+	int wx, wy, wz;
+	BlockID b;
+	/* BlockFarmland.updateTick: any water within x/z +-4, at y or y+1 */
+	for (wx = x - 4; wx <= x + 4; wx++) {
+		for (wy = y; wy <= y + 1; wy++) {
+			for (wz = z - 4; wz <= z + 4; wz++) {
+				if (!World_Contains(wx, wy, wz)) continue;
+				b = World_GetBlock(wx, wy, wz);
+				if (b == BLOCK_WATER || b == BLOCK_STILL_WATER) return true;
+			}
+		}
+	}
+	return false;
+}
+
+/* BlockFarmland.updateTick (gated 1-in-5 per random tick): hydrate from */
+/*  nearby water; dry out; revert to dirt once dry with no crops above. */
+static void Indev_TickFarmland(int index, BlockID block) {
+	int x, y, z;
+	BlockID above;
+	World_Unpack(index, x, y, z);
+	if (Random_Next(&indev_teRng, 5) != 0) return;
+
+	above = y + 1 < World.Height ? World_GetBlock(x, y + 1, z) : BLOCK_AIR;
+	/* solid cover reverts it (genuine does this on neighbour change) */
+	if (Blocks.Collide[above] == COLLIDE_SOLID) {
+		Game_UpdateBlock(x, y, z, BLOCK_DIRT);
+		return;
+	}
+
+	if (Indev_WaterNear(x, y, z)) {
+		if (block != INDEV_BLOCK_FARMLAND_WET) Game_UpdateBlock(x, y, z, INDEV_BLOCK_FARMLAND_WET);
+		return;
+	}
+	if (block == INDEV_BLOCK_FARMLAND_WET) {
+		Game_UpdateBlock(x, y, z, INDEV_BLOCK_FARMLAND); /* moisture decays */
+		return;
+	}
+	if (!Indev_IsCrops(above)) {
+		Game_UpdateBlock(x, y, z, BLOCK_DIRT); /* dry + nothing planted */
+	}
+}
+
+/* BlockCrops.updateTick: growth rate from the farmland below (1 dry / 3 */
+/*  wet, neighbours at quarter weight), halved when crowded by adjacent */
+/*  crops; then a 1-in-(100/rate) roll advances the stage. */
+static void Indev_TickCrops(int index, BlockID block) {
+	float rate = 1.0f, f;
+	int x, y, z, dx, dz;
+	BlockID below;
+	cc_bool rowX, rowZ, diag;
+	World_Unpack(index, x, y, z);
+
+	if (block >= INDEV_BLOCK_CROPS_7) return;
+	if (y + 1 >= World.Height || !Indev_GrowLightOk(x, y + 1, z)) return;
+
+	for (dx = -1; dx <= 1; dx++) {
+		for (dz = -1; dz <= 1; dz++) {
+			if (!World_Contains(x + dx, y - 1, z + dz)) continue;
+			below = World_GetBlock(x + dx, y - 1, z + dz);
+			f = 0.0f;
+			if (below == INDEV_BLOCK_FARMLAND)     f = 1.0f;
+			if (below == INDEV_BLOCK_FARMLAND_WET) f = 3.0f;
+			if (dx || dz) f /= 4.0f;
+			rate += f;
+		}
+	}
+
+	#define CROP_AT(cx, cz) (World_Contains((cx), y, (cz)) && Indev_IsCrops(World_GetBlock((cx), y, (cz))))
+	rowX = CROP_AT(x - 1, z)     || CROP_AT(x + 1, z);
+	rowZ = CROP_AT(x, z - 1)     || CROP_AT(x, z + 1);
+	diag = CROP_AT(x - 1, z - 1) || CROP_AT(x + 1, z - 1) ||
+		   CROP_AT(x + 1, z + 1) || CROP_AT(x - 1, z + 1);
+	#undef CROP_AT
+	if (diag || (rowX && rowZ)) rate /= 2.0f;
+
+	if (Random_Next(&indev_teRng, (int)(100.0f / rate)) == 0) {
+		Game_UpdateBlock(x, y, z, (BlockID)(block + 1));
+	}
+}
+
+static void Indev_RegisterFarmTicks(void) {
+	int k;
+	Physics.OnRandomTick[INDEV_BLOCK_FARMLAND]     = Indev_TickFarmland;
+	Physics.OnRandomTick[INDEV_BLOCK_FARMLAND_WET] = Indev_TickFarmland;
+	for (k = 0; k < 8; k++) {
+		Physics.OnRandomTick[INDEV_BLOCK_CROPS_0 + k] = Indev_TickCrops;
+	}
+}
+
+/* ItemHoe.onItemUse: turns grass (with non-solid above) or dirt into dry */
+/*  farmland, wearing the tool; hoed GRASS has a 1-in-8 seed drop. */
+/* ItemSeeds.onItemUse: plants stage-0 crops above farmland. */
+cc_bool IndevTest_UseHeldItem(int heldId, IVec3 pos) {
+	BlockID target, above;
+	cc_bool solidAbove;
+	if (!IndevTest_Enabled) return false;
+
+	target     = World_GetBlock(pos.x, pos.y, pos.z);
+	above      = pos.y + 1 < World.Height ? World_GetBlock(pos.x, pos.y + 1, pos.z) : BLOCK_AIR;
+	solidAbove = Blocks.Collide[above] == COLLIDE_SOLID;
+
+	if (IndevTest_IsHoe(heldId)) {
+		if ((target != BLOCK_GRASS || solidAbove) && target != BLOCK_DIRT) return false;
+		Game_ChangeBlock(pos.x, pos.y, pos.z, INDEV_BLOCK_FARMLAND);
+		SurvivalTest_DamageHeldItem(1);
+		if (target == BLOCK_GRASS && Random_Next(&indev_teRng, 8) == 0) {
+			Vec3 dp;
+			dp.x = pos.x + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+			dp.y = pos.y + 1.2f;
+			dp.z = pos.z + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+			SurvivalTest_SpawnDropWorld(dp, 256 + 39, 1); /* Seeds */
+		}
+		return true;
+	}
+
+	if (heldId == 256 + 39) { /* Seeds */
+		if (!Indev_IsFarmland(target) || above != BLOCK_AIR) return false;
+		Game_ChangeBlock(pos.x, pos.y + 1, pos.z, INDEV_BLOCK_CROPS_0);
+		SurvivalTest_ConsumeHeld();
+		return true;
+	}
+	return false;
+}
+
+/*########################################################################################################################*
 *--------------------------------------------Sun, moon and stars (renderSky)----------------------------------------------*
 *#########################################################################################################################*/
 /* RenderGlobal.renderSky: sun quad (+-30 at y=+100, /terrain/sun.png), moon
@@ -1013,6 +1206,13 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 	nowFurn = Indev_IsFurnaceIdle(block)    || Indev_IsFurnaceLit(block);
 	if (oldFurn && nowFurn) return; /* lit/unlit swap - state survives */
 
+	/* crops pop off when their farmland vanishes (BlockFlower.canBlockStay) */
+	if (Indev_IsFarmland(oldBlock) && !Indev_IsFarmland(block) &&
+		coords.y + 1 < World.Height &&
+		Indev_IsCrops(World_GetBlock(coords.x, coords.y + 1, coords.z))) {
+		Game_ChangeBlock(coords.x, coords.y + 1, coords.z, BLOCK_AIR);
+	}
+
 	IndevTest_NotifyBlockRemoved(coords, oldBlock);
 
 	/* Player placed a canonical chest/furnace: rotate it so the front faces */
@@ -1039,6 +1239,7 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 static void OnNewMapLoaded(void) {
 	if (!IndevTest_Enabled) return;
 	IndevBlocks_Define();
+	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 
 	indev_baseSky      = Env.SkyCol;
 	indev_baseFog      = Env.FogCol;
@@ -1069,6 +1270,7 @@ static void OnInit(void) {
 	TextureEntry_Register(&moon_entry);
 
 	Random_Seed(&indev_teRng, (int)Game.Time + 1);
+	Indev_RegisterFarmTicks();
 	Event_Register_(&UserEvents.BlockChanged, NULL, IndevTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, IndevTest_ContextLost);
 	ScheduledTask_Add(GAME_DEF_TICKS, IndevTest_Tick);
@@ -1112,6 +1314,8 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 		if (Indev_IsChestBlock(b))   return 54;
 		if (Indev_IsFurnaceIdle(b))  return 61;
 		if (Indev_IsFurnaceLit(b))   return 62;
+		if (Indev_IsFarmland(b))     return 60; /* moisture in the Data nibble */
+		if (Indev_IsCrops(b))        return 59; /* stage in the Data nibble */
 		return 1; /* anything else -> stone */
 	}
 }
@@ -1127,8 +1331,8 @@ BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	case 56: return 16; /* diamond ore   -> coal ore (closest visual) */
 	case 57: return 42; /* diamond block -> iron block */
 	case 58: return 66; /* workbench */
-	case 59: return 0;  /* crops    -> air (no crop blocks yet) */
-	case 60: return 3;  /* farmland -> dirt (no farmland block yet) */
+	case 59: return INDEV_BLOCK_CROPS_0;  /* + stage from the Data nibble */
+	case 60: return INDEV_BLOCK_FARMLAND; /* wet variant from the Data nibble */
 	case 61: return 68; /* furnace idle */
 	case 62: return 69; /* furnace lit */
 	default: return b <= 49 ? b : 0;

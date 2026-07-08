@@ -110,6 +110,9 @@ void SurvivalTest_InvChanged(void);
 /* .mclevel load: restore one inventory slot / the saved player stats. */
 void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage);
 void SurvivalTest_RestoreStats(int health, int score);
+/* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
+void SurvivalTest_DamageHeldItem(int amount);
+void SurvivalTest_ConsumeHeld(void);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 

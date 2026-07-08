@@ -61,6 +61,16 @@ enum IndevContainerKind {
 	INDEV_CONTAINER_CHEST = 1, /* 27 slots */
 	INDEV_CONTAINER_FURNACE = 2 /* 3 slots: 0 input, 1 fuel, 2 output */
 };
+/* Whether the held item id is a hoe (any tier). */
+cc_bool IndevTest_IsHoe(int id);
+/* ItemHoe/ItemSeeds.onItemUse: hoe tills grass/dirt to farmland (with the
+    genuine 1-in-8 grass seed drop), seeds plant crops on farmland. True when
+    the right-click was consumed. */
+cc_bool IndevTest_UseHeldItem(int heldId, IVec3 pos);
+/* .mclevel Data-nibble metadata: container facing / farmland moisture /
+    crop stage on save, and its application to a loaded base block. */
+int     IndevTest_BlockDataMeta(BlockID b);
+BlockID IndevTest_ApplyDataMeta(BlockID b, int meta);
 /* Whether a dropped id renders as an upright sprite instead of a miniature */
 /*  block: item ids, sprite-draw blocks (flowers etc) and torches. False */
 /*  outside Indev mode (c0.30 renders every block drop as its cropped cube). */

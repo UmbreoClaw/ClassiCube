@@ -3082,6 +3082,7 @@ static void SurvivalDebugScreen_GiveTorches(void* a, void* b)   { SurvivalDebugS
 static void SurvivalDebugScreen_GivePlanks(void* a, void* b)    { SurvivalDebugScreen_GiveN(BLOCK_WOOD, 32); }
 static void SurvivalDebugScreen_GiveString(void* a, void* b)    { SurvivalDebugScreen_GiveN(256 + 31, 8); }
 static void SurvivalDebugScreen_GiveBread(void* a, void* b)     { SurvivalDebugScreen_GiveN(256 + 41, 5); }
+static void SurvivalDebugScreen_GiveFarming(void* a, void* b)   { SurvivalTest_DebugGiveItem(256 + 36); SurvivalDebugScreen_GiveN(256 + 39, 8); }
 static void SurvivalDebugScreen_GiveArrows(void* a, void* b)    { SurvivalDebugScreen_GiveN(256 + 6, 8); }
 
 /* worldTime presets: celestial angle = t/24000 - 0.15, so noon (angle 0) is */
@@ -3127,7 +3128,7 @@ static const struct SimpleButtonDesc survivalDebug_page1[DEBUG_MAX_BTNS] = {
 	{ -160,  -15, "Give Torches x8", SurvivalDebugScreen_GiveTorches },
 	{    0,  -15, "Give Planks x32", SurvivalDebugScreen_GivePlanks },
 	{  160,  -15, "Give String x8",  SurvivalDebugScreen_GiveString },
-	{ -160,   30, "Give Bread x5",   SurvivalDebugScreen_GiveBread },
+	{ -160,   30, "Give Hoe, Seeds", SurvivalDebugScreen_GiveFarming },
 	{    0,   30, "Give Arrows x8",  SurvivalDebugScreen_GiveArrows },
 	{  160,   30, "Time: Dawn",      SurvivalDebugScreen_TimeDawn },
 	{ -160,   80, "Time: Noon",      SurvivalDebugScreen_TimeNoon },

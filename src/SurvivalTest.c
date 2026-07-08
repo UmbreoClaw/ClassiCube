@@ -152,6 +152,7 @@ static cc_bool SurvivalTest_AddItem(cc_uint16 id);
 #define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
 /* Defined in the Mining section - forward declared for the melee attack path */
 static void SurvivalTest_DamageHeldTool(int amount);
+static void SurvivalTest_ConsumeSelected(void);
 /* Defined later, in the Ticking section - forward declared so the Mobs */
 /*  section below (which ticks before Ticking is reached) can reuse it. */
 static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
@@ -604,6 +605,22 @@ static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	dropId   = oldBlock; /* most blocks drop themselves */
 
 	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); return; }
+
+	/* BlockCrops: wheat only at full stage, plus up to 3 bonus seed rolls */
+	/*  weighted by the stage. Farmland drops dirt (BlockFarmland.idDropped). */
+	if (IndevTest_Enabled && oldBlock >= 85 && oldBlock <= 92) {
+		int stage = oldBlock - 85;
+		if (stage == 7) SurvivalTest_SpawnDrop(coords, 256 + 40); /* Wheat */
+		for (i = 0; i < 3; i++) {
+			if (Random_Next(&st_dropRng, 15) <= stage) SurvivalTest_SpawnDrop(coords, 256 + 39); /* Seeds */
+		}
+		return;
+	}
+	if (IndevTest_Enabled && (oldBlock == 83 || oldBlock == 84)) {
+		SurvivalTest_SpawnDrop(coords, BLOCK_DIRT);
+		return;
+	}
+
 	/* canHarvestBlock: rock/iron needs a pickaxe (see IndevTest_CanHarvest) */
 	if (!IndevTest_CanHarvest(heldId, oldBlock)) return;
 
@@ -3975,6 +3992,11 @@ void SurvivalTest_DebugGiveItem(int id) {
 	SurvivalTest_AddItem((cc_uint16)id);
 }
 
+/* Public wrappers for the Indev layer's held-item actions (hoe wear, */
+/*  seed consumption). */
+void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
+void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
+
 /* Right-clicking a placed workbench opens the 3x3 crafting screen; a chest */
 /*  or furnace opens its container screen. Returns true (click consumed) so */
 /*  no block is placed. The regular E-inventory opens the pocket 2x2; all */
@@ -4002,6 +4024,9 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 		if (IndevTest_OpenContainer(pos)) SurvivalInvScreen_Show();
 		return true;
 	}
+
+	/* Item.onItemUse comes after blockActivated: hoe tilling, seed planting */
+	if (IndevTest_UseHeldItem(st_inv[Inventory.SelectedIndex].id, pos)) return true;
 	return false;
 }
 

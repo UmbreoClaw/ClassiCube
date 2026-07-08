@@ -105,6 +105,48 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - farming + growth pipeline (in-20100223 ports)
+
+New blocks: farmland dry 83 / wet 84 (tiles 116/115, dirt sides, not
+placeable) and crop stages 85-92 (X-sprites of tiles 107-114, instant
+break, planted only via seeds).
+
+Mechanics (exact ports, hooked into the ENGINE's random-tick system via
+Physics.OnRandomTick - so BlockPhysics' volume-scaled ticking drives them,
+and its existing sapling handler already grows trees):
+- ItemHoe.onItemUse: grass (non-solid above) / dirt -> dry farmland, tool
+  wear 1, 1-in-8 seed drop from hoed GRASS. Wired into TryUseBlock after
+  the container checks (genuine order: blockActivated then item use).
+- ItemSeeds.onItemUse: plants stage-0 crops on farmland, consumes 1.
+- BlockFarmland.updateTick (1-in-5 gate): water within x/z +-4 at y/y+1
+  hydrates; else wet dries to dry; dry with no crops above reverts to
+  dirt; solid cover reverts (genuine does that on neighbour change).
+  Moisture is binary wet/dry (genuine has 0-7; only >0 matters for crops
+  rate 3.0 and the top texture).
+- BlockCrops.updateTick: light >= 9 above (approximated: column sky-lit
+  AND sky light >= 9 - torch-grown night farms need a per-block light
+  query, noted), growth rate 1 + farmland below (1 dry/3 wet, neighbours
+  quarter-weighted), halved when crowded (diag or both-axis row crops),
+  then 1-in-(100/rate) advances the stage.
+- Breaking crops: wheat at stage 7 only + up to 3 seed rolls weighted by
+  stage (nextInt(15) <= stage). Farmland drops dirt. Crops pop off when
+  their farmland vanishes.
+- Saplings: the engine's classic Physics sapling handler (TreeGen, light
+  gated) covers tree growth; genuine Indev's staged metadata counter is
+  approximated by it (rate differs slightly - acceptable, noted).
+- .mclevel: farmland <-> 60 (moisture nibble), crops <-> 59 (stage
+  nibble) via new generic IndevTest_BlockDataMeta/ApplyDataMeta - REAL
+  Indev farms round-trip with stages and moisture intact.
+- Debug page 2: "Give Hoe, Seeds" button (replaced Give Bread - bread is
+  craftable from wheat anyway).
+
+NEEDS LIVE RETEST (rig spawn was a sand pit; code paths compile + mirror
+verified infrastructure): hoe tilling + seed drop, planting, growth over
+a day, wheat/seed harvest at stage 7, farmland hydration visual, and an
+mclevel round-trip of a farm to genuine Indev.
+
+---
+
 ## SESSION LOG - sun, moon and stars (renderSky port)
 
 User asked whether in-20100223 had night stars + the sun texture: YES -
