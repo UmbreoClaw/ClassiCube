@@ -709,6 +709,103 @@ static void OnInit(void) {
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 
+/*########################################################################################################################*
+*-----------------------------------------------.mclevel format support---------------------------------------------------*
+*#########################################################################################################################*/
+/* Genuine Indev block ids: 0-49 match classic 1:1; 50-62 are Indev's own */
+/*  (torch/fire/sources/chest/gear/diamond/workbench/crops/farmland/ovens), */
+/*  which collide with ClassiCube's CPE ids 50-65. Mapping is exact for our */
+/*  custom blocks and lossy-but-sensible for the rest. */
+BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
+	switch (b) {
+	case 50: return 44; /* cobble slab  -> stairSingle */
+	case 51: return 0;  /* rope         -> air */
+	case 52: return 12; /* sandstone    -> sand */
+	case 53: return 0;  /* snow layer   -> air */
+	case 54: return 51; /* fire         -> fire (exact) */
+	case 55: return 33; /* light pink   -> clothRose */
+	case 56: return 25; /* forest green -> clothGreen */
+	case 57: return 3;  /* brown        -> dirt */
+	case 58: return 29; /* deep blue    -> clothUltramarine */
+	case 59: return 28; /* turquoise    -> clothCapri */
+	case 60: return 20; /* ice          -> glass */
+	case 61: return 45; /* ceramic tile -> brick */
+	case 62: return 49; /* magma        -> obsidian */
+	case 63: return 1;  /* pillar       -> stone */
+	case 64: return 54; /* crate        -> chest */
+	case 65: return 1;  /* stone brick  -> stone */
+	case 66: return 58; /* workbench (exact) */
+	case 67: return 54; /* chest (exact) */
+	case 68: return 61; /* furnace idle (exact) */
+	case 69: return 62; /* furnace lit (exact) */
+	case 70: return 50; /* torch (exact) */
+	default: return b <= 49 ? b : 1; /* classic identity; anything else -> stone */
+	}
+}
+
+BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
+	switch (b) {
+	case 50: return 70; /* torch */
+	case 51: return 54; /* fire -> CPE fire (exact) */
+	case 52: return 8;  /* waterSource -> water */
+	case 53: return 10; /* lavaSource  -> lava */
+	case 54: return 67; /* chest */
+	case 55: return 0;  /* gear -> air */
+	case 56: return 16; /* diamond ore   -> coal ore (closest visual) */
+	case 57: return 42; /* diamond block -> iron block */
+	case 58: return 66; /* workbench */
+	case 59: return 0;  /* crops    -> air (no crop blocks yet) */
+	case 60: return 3;  /* farmland -> dirt (no farmland block yet) */
+	case 61: return 68; /* furnace idle */
+	case 62: return 69; /* furnace lit */
+	default: return b <= 49 ? b : 0;
+	}
+}
+
+int IndevTest_TENext(int prev) {
+	int i;
+	for (i = prev + 1; i < INDEV_TE_MAX; i++) {
+		if (indev_tes[i].used) return i;
+	}
+	return -1;
+}
+
+void IndevTest_TEInfo(int i, int* kind, IVec3* pos, int* burn, int* cook) {
+	*kind = indev_tes[i].kind;
+	*pos  = indev_tes[i].pos;
+	*burn = indev_tes[i].burnTime;
+	*cook = indev_tes[i].cookTime;
+}
+
+void IndevTest_TEItem(int i, int slot, int* id, int* count, int* damage) {
+	struct SurvivalSlot* s = &indev_tes[i].slots[slot];
+	*id = s->id; *count = s->count; *damage = s->damage;
+}
+
+void IndevTest_RestoreTE(int kind, int x, int y, int z, int burn, int cook,
+						 const cc_uint16* ids, const cc_int16* counts, const cc_int16* damages) {
+	IVec3 pos; int i, idx;
+	if (!IndevTest_Enabled) return;
+	pos.x = x; pos.y = y; pos.z = z;
+
+	idx = IndevTE_Find(pos);
+	if (idx < 0) idx = IndevTE_Create(kind, pos);
+	if (idx < 0) return; /* pool exhausted */
+
+	indev_tes[idx].kind     = (cc_uint8)kind;
+	indev_tes[idx].burnTime = burn;
+	indev_tes[idx].cookTime = cook;
+	for (i = 0; i < SURVIVAL_CONTAINER_SLOTS; i++) {
+		indev_tes[idx].slots[i].id     = ids[i];
+		indev_tes[idx].slots[i].count  = counts[i];
+		indev_tes[idx].slots[i].damage = damages[i];
+	}
+	/* currentItemBurnTime isn't saved - recomputed from the fuel slot like */
+	/*  TileEntityFurnace.readFromNBT does */
+	indev_tes[idx].currentBurn = Furnace_FuelTime(indev_tes[idx].slots[1].id);
+	if (indev_tes[idx].currentBurn < burn) indev_tes[idx].currentBurn = burn;
+}
+
 /* A new/reloaded map invalidates every block position - clear the tile */
 /*  entity pool, else a chest placed at the same coords in the NEW world */
 /*  would inherit (duplicate) the old world's contents. */

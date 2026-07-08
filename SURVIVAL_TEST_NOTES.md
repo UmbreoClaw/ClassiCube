@@ -143,6 +143,59 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — world persistence via genuine Indev .mclevel format
+
+User request: save inventory + chest/furnace contents with worlds, using the
+"backwards approach" - the genuine Indev format itself, rather than bolting
+survival data onto .cw. Schema ported exactly from the in-20100223 decompile
+(LevelLoader.java, EntityPlayerSP.writeEntityToNBT, ItemStack.writeToNBT,
+TileEntityChest/Furnace NBT).
+
+### What was added
+- **MCLevel_Save** (Formats.c): full gzipped "MinecraftLevel" NBT writer -
+  About / Environment / Map (Width/Length/Height, Blocks remapped to genuine
+  Indev block ids, Data array = full-light nibbles, Spawn) / Entities
+  [LocalPlayer: Pos(+1.62 eye)/Motion/Rotation floats, Health, Score,
+  Inventory list of {Slot, id, Count, Damage}] / TileEntities [{Pos packed
+  x+(y<<10)+(z<<20), id "Chest"/"Furnace", Items, BurnTime, CookTime}].
+- **MCLevel_Load extensions**: the existing blocks/spawn/env loader now also
+  parses Entities (LocalPlayer -> inventory slots 0-35, health, score, exact
+  saved position/rotation; armor slots 100-103 skipped - no armor system yet)
+  and TileEntities (chests/furnaces recreated with contents; currentBurn
+  recomputed from the fuel slot like readFromNBT). Accumulate-and-commit
+  parser - the NBT walker fires compound callbacks AFTER children, and field
+  order is never assumed (genuine files order by Java HashMap).
+- **Block id mapping** (IndevTest.c): bidirectional 50+ tables. Exact pairs:
+  torch 50<->70, chest 54<->67, workbench 58<->66, furnace 61/62<->68/69,
+  fire 51<->CPE fire 54. Lossy: crops->air, farmland->dirt, gear->air,
+  diamond ore->coal ore, diamond block->iron block; our CPE 50-65 -> nearest
+  Indev equivalent (slab->stairSingle, ice->glass, etc). Load remap only
+  applies when Indev mode is on (blocks 66-70 undefined otherwise).
+- **Menus.c**: save screen writes maps/<name>.mclevel when the Indev gamemode
+  is active (else .cw as before); .mclevel added to the save-file dialog.
+  Loading needed no wiring - the .mclevel importer was already registered.
+
+### Compatibility notes (user question: genuine Indev interop)
+- Genuine Indev saves .mclevel (NOT .dat - that's Classic's serialized-Java
+  format, which ClassiCube already imports terrain-only via Dat_Load).
+- Real Indev world -> us: terrain (remapped), spawn, env colors, player
+  position/health/score/inventory, chest+furnace contents all restore. Mobs/
+  dropped items/paintings in Entities are skipped (mobs respawn); Data
+  light/metadata discarded (furnace facing lost - we don't track facing).
+- Us -> real Indev: full genuine schema written; item ids already mirror
+  shiftedIndex 1:1. UNTESTED in a real Indev client so far; creative-mode
+  saves write an empty Entities list (no player) - unknown how genuine Indev
+  reacts to that; Indev-mode saves always include the player.
+- KNOWN GAP CLOSED: chest/furnace contents + inventory now survive save/load.
+
+### Status
+Compiles + links clean. Live headless round-trip verification pending (was
+interrupted); retest checklist: save Indev world with items + placed chest/
+furnace, reload, verify inventory/containers/furnace-burn restore, and blocks
+66-70 survive the id round-trip.
+
+---
+
 ## SESSION LOG — chests + furnaces (tile entities), instant-break fix, recipe fixes
 
 Big feature drop, all mechanics ported from the in-20100223 decompile and

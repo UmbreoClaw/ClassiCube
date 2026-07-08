@@ -107,6 +107,9 @@ int SurvivalTest_HotbarCount(int slot);
 int SurvivalTest_InvVersion(void);
 /* Bumps the inventory version (for external mutators like the furnace tick). */
 void SurvivalTest_InvChanged(void);
+/* .mclevel load: restore one inventory slot / the saved player stats. */
+void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage);
+void SurvivalTest_RestoreStats(int health, int score);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 

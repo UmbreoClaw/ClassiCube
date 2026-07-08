@@ -17,6 +17,8 @@
 #include "TexturePack.h"
 #include "Utils.h"
 #include "Audio.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
 
 #ifdef CC_BUILD_FILESYSTEM
 static struct LocationUpdate* spawn_point;
@@ -1462,10 +1464,174 @@ static void MCLevel_Callback_3(struct NbtTag* tag) {
 	}
 }
 
+/*------------------------------------------------- survival extensions ---------------------------------------------------*/
+/* Entities/TileEntities restore (genuine Indev schema): compounds inside the
+    lists arrive as unnamed tags; their FIELD tags fire first and are
+    accumulated below, then the compound's own callback fires (the walker
+    visits parents after children) and the accumulated state is committed.
+    NBT compound field order is arbitrary (Java HashMap), so no field-order
+    assumptions are made. */
+static struct { int slot, id, count, damage; } mcl_item;
+static struct {
+	cc_bool isPlayer;
+	float px, py, pz, yaw, pitch;
+	int health, score;
+	cc_uint16 ids[SURVIVAL_INV_SLOTS]; cc_int16 counts[SURVIVAL_INV_SLOTS], dmg[SURVIVAL_INV_SLOTS];
+} mcl_ent;
+static struct {
+	int kind; /* INDEV_CONTAINER_* resolved from the id string */
+	int pos, burn, cook;
+	cc_uint16 ids[SURVIVAL_CONTAINER_SLOTS]; cc_int16 counts[SURVIVAL_CONTAINER_SLOTS], dmg[SURVIVAL_CONTAINER_SLOTS];
+} mcl_te;
+
+static void MCLevel_ResetItem(void) { mcl_item.slot = -1; mcl_item.id = 0; mcl_item.count = 0; mcl_item.damage = 0; }
+static void MCLevel_ResetEnt(void) {
+	Mem_Set(&mcl_ent, 0, sizeof(mcl_ent));
+	MCLevel_ResetItem();
+}
+static void MCLevel_ResetTE(void) {
+	Mem_Set(&mcl_te, 0, sizeof(mcl_te));
+	MCLevel_ResetItem();
+}
+
+static cc_bool MCLevel_TagIs(struct NbtTag* tag, const char* name) {
+	return tag && String_CaselessEqualsConst(&tag->name, name);
+}
+
+/* Fields of an item compound inside an "Inventory" (player) or "Items" */
+/*  (chest/furnace) list. */
+static void MCLevel_ParseItemField(struct NbtTag* tag) {
+	if (IsTag(tag, "Slot"))   { mcl_item.slot   = NbtTag_U8(tag);  return; }
+	if (IsTag(tag, "id"))     { mcl_item.id     = NbtTag_I16(tag); return; }
+	if (IsTag(tag, "Count"))  { mcl_item.count  = (cc_int8)NbtTag_U8(tag); return; }
+	if (IsTag(tag, "Damage")) { mcl_item.damage = NbtTag_I16(tag); return; }
+}
+
+static void MCLevel_CommitItem(cc_bool toEntity) {
+	int slot = mcl_item.slot;
+	if (toEntity) {
+		/* armor slots are saved as 100-103; no armor system yet - skipped */
+		if (slot >= 0 && slot < SURVIVAL_INV_SLOTS) {
+			mcl_ent.ids[slot]    = (cc_uint16)mcl_item.id;
+			mcl_ent.counts[slot] = (cc_int16)mcl_item.count;
+			mcl_ent.dmg[slot]    = (cc_int16)mcl_item.damage;
+		}
+	} else {
+		if (slot >= 0 && slot < SURVIVAL_CONTAINER_SLOTS) {
+			mcl_te.ids[slot]    = (cc_uint16)mcl_item.id;
+			mcl_te.counts[slot] = (cc_int16)mcl_item.count;
+			mcl_te.dmg[slot]    = (cc_int16)mcl_item.damage;
+		}
+	}
+	MCLevel_ResetItem();
+}
+
+static void MCLevel_CommitEntity(void) {
+	int i;
+	if (mcl_ent.isPlayer && SurvivalTest_Enabled) {
+		for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+			SurvivalTest_RestoreSlot(i, mcl_ent.ids[i], mcl_ent.counts[i], mcl_ent.dmg[i]);
+		}
+		SurvivalTest_RestoreStats(mcl_ent.health, mcl_ent.score);
+		/* Reappear exactly where the level was saved (entity Pos is at eye */
+		/*  height; LocationUpdate wants feet) */
+		if (mcl_ent.px || mcl_ent.py || mcl_ent.pz) {
+			spawn_point->flags |= LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH;
+			spawn_point->pos.x = mcl_ent.px;
+			spawn_point->pos.y = mcl_ent.py - 1.62f;
+			spawn_point->pos.z = mcl_ent.pz;
+			spawn_point->yaw   = mcl_ent.yaw;
+			spawn_point->pitch = mcl_ent.pitch;
+		}
+	}
+	/* other entity kinds (mobs/items/paintings) are not restored yet */
+	MCLevel_ResetEnt();
+}
+
+static void MCLevel_CommitTileEntity(void) {
+	int x, y, z;
+	if (mcl_te.kind && IndevTest_Enabled) {
+		/* Pos is a single packed int: x + (y << 10) + (z << 20) */
+		x =  mcl_te.pos        & 1023;
+		y = (mcl_te.pos >> 10) & 1023;
+		z = (mcl_te.pos >> 20) & 1023;
+		IndevTest_RestoreTE(mcl_te.kind, x, y, z, mcl_te.burn, mcl_te.cook,
+							mcl_te.ids, mcl_te.counts, mcl_te.dmg);
+	}
+	MCLevel_ResetTE();
+}
+
+/* Handles every tag under the "Entities"/"TileEntities" lists; returns false
+    when the tag isn't part of either subtree. */
+static cc_bool MCLevel_ParseSurvival(struct NbtTag* tag) {
+	struct NbtTag* p1 = tag->parent;                  /* element / field list */
+	struct NbtTag* p2 = p1 ? p1->parent : NULL;
+	struct NbtTag* p3 = p2 ? p2->parent : NULL;
+	cc_string str;
+
+	/* element compound END: [unnamed] under the top-level lists */
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Entities"))     { MCLevel_CommitEntity();     return true; }
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "TileEntities")) { MCLevel_CommitTileEntity(); return true; }
+
+	/* item compound END: [unnamed] under "Inventory"/"Items" lists */
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Inventory") && MCLevel_TagIs(p3, "Entities"))     { MCLevel_CommitItem(true);  return true; }
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Items")     && MCLevel_TagIs(p3, "TileEntities")) { MCLevel_CommitItem(false); return true; }
+
+	/* item fields: [field] -> [unnamed item] -> Inventory/Items list */
+	if (p2 && (MCLevel_TagIs(p2, "Inventory") || MCLevel_TagIs(p2, "Items"))) {
+		MCLevel_ParseItemField(tag);
+		return true;
+	}
+
+	/* entity fields: [field] -> [unnamed entity] -> Entities */
+	if (MCLevel_TagIs(p2, "Entities")) {
+		if (IsTag(tag, "id")) {
+			str = NbtTag_String(tag);
+			mcl_ent.isPlayer = String_CaselessEqualsConst(&str, "LocalPlayer");
+			return true;
+		}
+		if (IsTag(tag, "Health")) { mcl_ent.health = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "Score"))  { mcl_ent.score  = NbtTag_I32(tag); return true; }
+		return true;
+	}
+	/* entity Pos/Rotation lists: [float] -> Pos/Rotation -> [unnamed] -> Entities */
+	if (MCLevel_TagIs(p3, "Entities")) {
+		if (MCLevel_TagIs(p1, "Pos")) {
+			if (tag->listIndex == 0) mcl_ent.px = NbtTag_F32(tag);
+			if (tag->listIndex == 1) mcl_ent.py = NbtTag_F32(tag);
+			if (tag->listIndex == 2) mcl_ent.pz = NbtTag_F32(tag);
+			return true;
+		}
+		if (MCLevel_TagIs(p1, "Rotation")) {
+			if (tag->listIndex == 0) mcl_ent.yaw   = NbtTag_F32(tag);
+			if (tag->listIndex == 1) mcl_ent.pitch = NbtTag_F32(tag);
+			return true;
+		}
+		return true;
+	}
+
+	/* tile entity fields: [field] -> [unnamed te] -> TileEntities */
+	if (MCLevel_TagIs(p2, "TileEntities")) {
+		if (IsTag(tag, "id")) {
+			str = NbtTag_String(tag);
+			if (String_CaselessEqualsConst(&str, "Chest"))   mcl_te.kind = INDEV_CONTAINER_CHEST;
+			if (String_CaselessEqualsConst(&str, "Furnace")) mcl_te.kind = INDEV_CONTAINER_FURNACE;
+			return true;
+		}
+		if (IsTag(tag, "Pos"))      { mcl_te.pos  = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "BurnTime")) { mcl_te.burn = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "CookTime")) { mcl_te.cook = NbtTag_I16(tag); return true; }
+		return true;
+	}
+	return false;
+}
+
 static void MCLevel_Callback(struct NbtTag* tag) {
 	struct NbtTag* tmp = tag->parent;
 	int depth = 0;
 	while (tmp) { depth++; tmp = tmp->parent; }
+
+	if (MCLevel_ParseSurvival(tag)) return;
 
 	switch (depth) {
 	case 2: MCLevel_Callback_2(tag); return;
@@ -1478,11 +1644,229 @@ static void MCLevel_Callback(struct NbtTag* tag) {
 /* Imports a world from a .mclevel NBT map file */
 /* Used by Minecraft Indev client */
 static cc_result MCLevel_Load(struct Stream* stream) {
-	cc_result res = Nbt_Read(stream, MCLevel_Callback);
+	cc_result res;
+	cc_uint32 i;
+
+	MCLevel_ResetEnt();
+	MCLevel_ResetTE();
+	res = Nbt_Read(stream, MCLevel_Callback);
 
 	Env.EdgeHeight  = mcl_edgeHeight;
 	Env.SidesOffset = mcl_sidesHeight - mcl_edgeHeight;
+
+	/* Genuine Indev block ids 50-62 (torch/chest/workbench/furnaces/...) */
+	/*  collide with CPE ids - remap them onto the Indev-mode blocks. Only */
+	/*  done in Indev mode, where those blocks are actually defined. */
+	if (!res && World.Blocks && IndevTest_Enabled) {
+		for (i = 0; i < World.Volume; i++) {
+			if (World.Blocks[i] >= 50) World.Blocks[i] = IndevTest_BlockFromIndev(World.Blocks[i]);
+		}
+	}
 	return res;
+}
+
+/*########################################################################################################################*
+*--------------------------------------------------MCLevel export---------------------------------------------------------*
+*#########################################################################################################################*/
+static cc_uint8* Nbt_WriteList(cc_uint8* data, const char* name, cc_uint8 childType, int count) {
+	*data++ = NBT_LIST;
+	data    = Nbt_WriteConst(data, name);
+	*data++ = childType;
+	Mem_WriteU32_BE(data, count);
+	return data + 4;
+}
+
+static cc_uint8* Nbt_WriteInt64Zero(cc_uint8* data, const char* name) {
+	*data++ = NBT_I64;
+	data    = Nbt_WriteConst(data, name);
+	Mem_Set(data, 0, 8);
+	return data + 8;
+}
+
+static int MCLevel_PackRGB(PackedCol c) {
+	return (PackedCol_R(c) << 16) | (PackedCol_G(c) << 8) | PackedCol_B(c);
+}
+
+/* One item compound inside a list (list elements are unnamed - fields only, */
+/*  then the compound terminator). */
+static cc_uint8* MCLevel_WriteItem(cc_uint8* cur, int slot, int id, int count, int damage) {
+	cur = Nbt_WriteUInt8 (cur, "Slot",  (cc_uint8)slot);
+	cur = Nbt_WriteUInt16(cur, "id",    (cc_uint16)id);
+	cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)count);
+	cur = Nbt_WriteUInt16(cur, "Damage",(cc_uint16)damage);
+	*cur++ = NBT_END;
+	return cur;
+}
+
+static cc_uint8* MCLevel_WriteFloatList(cc_uint8* cur, const char* name, const float* v, int n) {
+	union IntAndFloat raw;
+	int i;
+	cur = Nbt_WriteList(cur, name, NBT_F32, n);
+	for (i = 0; i < n; i++) {
+		raw.f = v[i];
+		Mem_WriteU32_BE(cur, raw.u); cur += 4;
+	}
+	return cur;
+}
+
+/* Exports the world in Minecraft Indev's own .mclevel format (gzipped NBT, */
+/*  schema per the in-20100223 LevelLoader) - including the survival player */
+/*  (position, health, score, inventory) and chest/furnace tile entities, */
+/*  so saving and reloading an Indev-mode world keeps everything. Files are */
+/*  written id-compatible with genuine Indev (block ids remapped). */
+cc_result MCLevel_Save(struct Stream* stream) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	cc_uint8 buffer[4096];
+	cc_uint8 chunk[2048];
+	cc_uint8* cur;
+	cc_result res;
+	cc_uint32 i, blk;
+	int n, te, kind, burn, cook, count, invCount;
+	int id, cnt, dmg, slots;
+	IVec3 tpos;
+	float fv[3];
+
+	cur = buffer;
+	cur = Nbt_WriteDict(cur, "MinecraftLevel");
+
+	cur = Nbt_WriteDict(cur, "About");
+	{
+		static const cc_string author = String_FromConst("ClassiCube");
+		cur = Nbt_WriteString(cur, "Author", &author);
+		cur = Nbt_WriteString(cur, "Name",   &World.Name);
+		cur = Nbt_WriteInt64Zero(cur, "CreatedOn");
+	} *cur++ = NBT_END;
+
+	cur = Nbt_WriteDict(cur, "Environment");
+	{
+		cur = Nbt_WriteInt32 (cur, "CloudColor", MCLevel_PackRGB(Env.CloudsCol));
+		cur = Nbt_WriteInt32 (cur, "SkyColor",   MCLevel_PackRGB(Env.SkyCol));
+		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(Env.FogCol));
+		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", 15);
+		cur = Nbt_WriteUInt16(cur, "CloudHeight", (cc_uint16)Env.CloudsHeight);
+		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(Env.EdgeHeight + Env.SidesOffset));
+		cur = Nbt_WriteUInt16(cur, "SurroundingWaterHeight",  (cc_uint16)Env.EdgeHeight);
+		cur = Nbt_WriteUInt8 (cur, "SurroundingGroundType", 2 /* grass */);
+		cur = Nbt_WriteUInt8 (cur, "SurroundingWaterType",
+				IndevTest_BlockToIndev((BlockRaw)Env.EdgeBlock));
+		cur = Nbt_WriteUInt16(cur, "TimeOfDay", 0);
+	} *cur++ = NBT_END;
+
+	cur = Nbt_WriteDict(cur, "Map");
+	{
+		cur = Nbt_WriteUInt16(cur, "Width",  World.Width);
+		cur = Nbt_WriteUInt16(cur, "Length", World.Length);
+		cur = Nbt_WriteUInt16(cur, "Height", World.Height);
+		cur = Nbt_WriteList  (cur, "Spawn", NBT_I16, 3);
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.x); cur += 2;
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.y); cur += 2;
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.z); cur += 2;
+		cur = Nbt_WriteArray(cur, "Blocks", World.Volume);
+	}
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+	/* blocks, remapped to genuine Indev ids in chunks */
+	for (i = 0; i < World.Volume; i += n) {
+		n = min(World.Volume - i, sizeof(chunk));
+		for (blk = 0; blk < (cc_uint32)n; blk++) {
+			chunk[blk] = IndevTest_BlockToIndev(World.Blocks[i + blk]);
+		}
+		if ((res = Stream_Write(stream, chunk, n))) return res;
+	}
+
+	/* Data array: metadata high nibble (none) | light low nibble (full) */
+	cur = buffer;
+	cur = Nbt_WriteArray(cur, "Data", World.Volume);
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+	Mem_Set(chunk, 0x0F, sizeof(chunk));
+	for (i = 0; i < World.Volume; i += n) {
+		n = min(World.Volume - i, sizeof(chunk));
+		if ((res = Stream_Write(stream, chunk, n))) return res;
+	}
+	cur = buffer;
+	*cur++ = NBT_END; /* close Map */
+
+	/* Entities: just the LocalPlayer (mobs respawn on load) */
+	cur = Nbt_WriteList(cur, "Entities", NBT_DICT, SurvivalTest_Enabled ? 1 : 0);
+	if (SurvivalTest_Enabled) {
+		static const cc_string localPlayer = String_FromConst("LocalPlayer");
+		invCount = 0;
+		for (n = 0; n < SURVIVAL_INV_SLOTS; n++) {
+			if (SurvivalTest_SlotCount(n) > 0) invCount++;
+		}
+
+		cur = Nbt_WriteString(cur, "id", &localPlayer);
+		fv[0] = p->Base.Position.x; fv[1] = p->Base.Position.y + 1.62f; fv[2] = p->Base.Position.z;
+		cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+		fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+		cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+		fv[0] = p->Base.Yaw; fv[1] = p->Base.Pitch;
+		cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+		cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+		cur = Nbt_WriteUInt16(cur, "Fire", 0);
+		cur = Nbt_WriteUInt16(cur, "Air",  300);
+		cur = Nbt_WriteUInt16(cur, "Health", (cc_uint16)SurvivalTest_Health);
+		cur = Nbt_WriteUInt16(cur, "HurtTime", 0);
+		cur = Nbt_WriteUInt16(cur, "DeathTime", 0);
+		cur = Nbt_WriteUInt16(cur, "AttackTime", 0);
+		cur = Nbt_WriteInt32 (cur, "Score", SurvivalTest_Score());
+		cur = Nbt_WriteList  (cur, "Inventory", NBT_DICT, invCount);
+		if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+		cur = buffer;
+		for (n = 0; n < SURVIVAL_INV_SLOTS; n++) {
+			if (SurvivalTest_SlotCount(n) <= 0) continue;
+			cur = MCLevel_WriteItem(cur, n, SurvivalTest_SlotId(n),
+					SurvivalTest_SlotCount(n), SurvivalTest_SlotDamage(n));
+		}
+		*cur++ = NBT_END; /* close player compound */
+	}
+
+	/* TileEntities: chests + furnaces with their contents */
+	count = 0;
+	if (IndevTest_Enabled) {
+		for (te = IndevTest_TENext(-1); te >= 0; te = IndevTest_TENext(te)) count++;
+	}
+	cur = Nbt_WriteList(cur, "TileEntities", NBT_DICT, count);
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+	if (IndevTest_Enabled) {
+		static const cc_string chestId = String_FromConst("Chest");
+		static const cc_string furnId  = String_FromConst("Furnace");
+
+		for (te = IndevTest_TENext(-1); te >= 0; te = IndevTest_TENext(te)) {
+			IndevTest_TEInfo(te, &kind, &tpos, &burn, &cook);
+			slots = kind == INDEV_CONTAINER_FURNACE ? 3 : SURVIVAL_CONTAINER_SLOTS;
+
+			invCount = 0;
+			for (n = 0; n < slots; n++) {
+				IndevTest_TEItem(te, n, &id, &cnt, &dmg);
+				if (cnt > 0) invCount++;
+			}
+
+			cur = buffer;
+			cur = Nbt_WriteInt32(cur, "Pos", tpos.x + (tpos.y << 10) + (tpos.z << 20));
+			if (kind == INDEV_CONTAINER_FURNACE) {
+				cur = Nbt_WriteString(cur, "id", &furnId);
+				cur = Nbt_WriteUInt16(cur, "BurnTime", (cc_uint16)burn);
+				cur = Nbt_WriteUInt16(cur, "CookTime", (cc_uint16)cook);
+			} else {
+				cur = Nbt_WriteString(cur, "id", &chestId);
+			}
+			cur = Nbt_WriteList(cur, "Items", NBT_DICT, invCount);
+			for (n = 0; n < slots; n++) {
+				IndevTest_TEItem(te, n, &id, &cnt, &dmg);
+				if (cnt <= 0) continue;
+				cur = MCLevel_WriteItem(cur, n, id, cnt, dmg);
+			}
+			*cur++ = NBT_END; /* close tile entity compound */
+			if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+		}
+		cur = buffer;
+	}
+
+	*cur++ = NBT_END; /* close MinecraftLevel */
+	return Stream_Write(stream, buffer, (int)(cur - buffer));
 }
 
 

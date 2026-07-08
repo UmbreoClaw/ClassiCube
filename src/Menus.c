@@ -1355,6 +1355,7 @@ static void SaveLevelScreen_OnInputTextChanged(void* elem) {
 static cc_result DoSaveMap(const cc_string* path, struct GZipState* state) {
 	static const cc_string schematic = String_FromConst(".schematic");
 	static const cc_string mine      = String_FromConst(".mine");
+	static const cc_string mclevel   = String_FromConst(".mclevel");
 	struct Stream stream, compStream;
 	cc_filepath raw_path;
 	cc_result res;
@@ -1369,6 +1370,8 @@ static cc_result DoSaveMap(const cc_string* path, struct GZipState* state) {
 		res = Schematic_Save(&compStream);
 	} else if (String_CaselessEnds(path, &mine)) {
 		res = Dat_Save(&compStream);
+	} else if (String_CaselessEnds(path, &mclevel)) {
+		res = MCLevel_Save(&compStream);
 	} else {
 		res = Cw_Save(&compStream);
 	}
@@ -1419,7 +1422,13 @@ static void SaveLevelScreen_Save(void* screen, void* widget) {
 	}
 
 	String_InitArray(path, pathBuffer);
-	String_Format1(&path, "maps/%s.cw", &file);
+	/* Indev mode saves in Minecraft Indev's own .mclevel format, which */
+	/*  natively carries the player inventory + chest/furnace contents. */
+	if (SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV) {
+		String_Format1(&path, "maps/%s.mclevel", &file);
+	} else {
+		String_Format1(&path, "maps/%s.cw", &file);
+	}
 	String_Copy(&World.Name, &file);
 
 	Platform_EncodePath(&str, &path);
@@ -1446,10 +1455,10 @@ static void SaveLevelScreen_UploadCallback(const cc_string* path) {
 
 static void SaveLevelScreen_File(void* screen, void* b) {
 	static const char* const titles[] = {
-		"ClassiCube map", "Minecraft schematic", "Minecraft classic map", NULL
+		"ClassiCube map", "Minecraft schematic", "Minecraft classic map", "Minecraft Indev map", NULL
 	};
 	static const char* const filters[] = {
-		".cw", ".schematic", ".mine", NULL
+		".cw", ".schematic", ".mine", ".mclevel", NULL
 	};
 	struct SaveLevelScreen* s = (struct SaveLevelScreen*)screen;
 	struct SaveFileDialogArgs args;

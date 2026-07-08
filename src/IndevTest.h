@@ -82,5 +82,19 @@ struct SurvivalSlot* IndevTest_ContainerSlot(int i);
 int  IndevTest_FurnaceBurnScaled(void);
 int  IndevTest_FurnaceCookScaled(void);
 
+/* .mclevel format support: bidirectional block id mapping between the */
+/*  genuine Indev id space (torch 50, chest 54, workbench 58, furnace 61/62) */
+/*  and ours (66-70 custom ids; lossy fallbacks for the rest - see tables). */
+BlockRaw IndevTest_BlockToIndev(BlockRaw b);
+BlockRaw IndevTest_BlockFromIndev(BlockRaw b);
+/* Tile entity iteration for .mclevel save: next used pool index after prev */
+/*  (start with -1), or -1 when done; then info + per-slot reads. */
+int  IndevTest_TENext(int prev);
+void IndevTest_TEInfo(int i, int* kind, IVec3* pos, int* burn, int* cook);
+void IndevTest_TEItem(int i, int slot, int* id, int* count, int* damage);
+/* .mclevel load: recreates one tile entity with its contents. */
+void IndevTest_RestoreTE(int kind, int x, int y, int z, int burn, int cook,
+						 const cc_uint16* ids, const cc_int16* counts, const cc_int16* damages);
+
 CC_END_HEADER
 #endif

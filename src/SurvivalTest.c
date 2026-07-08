@@ -3532,6 +3532,29 @@ int     SurvivalTest_InvVersion(void) { return st_invVersion; }
 /*  can tell the open inventory screen to rebuild its mesh. */
 void    SurvivalTest_InvChanged(void)  { st_invVersion++; }
 
+static void SurvivalTest_SyncHotbar(void);
+
+/* .mclevel load: restores one inventory slot (id 0 clears the slot). */
+void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage) {
+	if (!SurvivalTest_Enabled) return;
+	if (slot < 0 || slot >= SURVIVAL_INV_SLOTS) return;
+	if (count <= 0) id = 0;
+
+	st_inv[slot].id     = (cc_uint16)id;
+	st_inv[slot].count  = (cc_int16)(id ? count : 0);
+	st_inv[slot].damage = (cc_int16)damage;
+	SurvivalTest_SyncHotbar();
+}
+
+/* .mclevel load: restores the saved player stats. */
+void SurvivalTest_RestoreStats(int health, int score) {
+	if (!SurvivalTest_Enabled) return;
+	Math_Clamp(health, 0, SURVIVAL_MAX_HEALTH);
+	SurvivalTest_Health = health;
+	st_lastHealth       = health;
+	st_score            = score;
+}
+
 cc_bool SurvivalTest_CanPlace(BlockID block) {
 	int slot = Inventory.SelectedIndex;
 	if (!SurvivalTest_Enabled) return true;
