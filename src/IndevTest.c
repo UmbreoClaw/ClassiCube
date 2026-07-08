@@ -709,6 +709,18 @@ static void OnInit(void) {
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 
+/* A new/reloaded map invalidates every block position - clear the tile */
+/*  entity pool, else a chest placed at the same coords in the NEW world */
+/*  would inherit (duplicate) the old world's contents. */
+static void OnNewMap(void) {
+	int i;
+	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
+	indev_openTE = -1;
+}
+
 struct IGameComponent IndevTest_Component = {
-	OnInit /* Init */
+	OnInit,   /* Init  */
+	NULL,     /* Free  */
+	OnNewMap, /* Reset (reconnect) - same invalidation applies */
+	OnNewMap  /* OnNewMap */
 };
