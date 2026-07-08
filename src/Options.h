@@ -87,6 +87,10 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_SURVIVAL_MODE "survival-mode"
 #define OPT_SURVIVAL_ENHANCED "survival-enhanced"
 #define OPT_INDEV_MODE "indev-mode"
+/* THE authoritative gamemode key (0 off, 1 c0.30 survival, 2 indev). The two
+/*  legacy booleans above are only written for downgrade compat and only read
+/*  as a one-time migration when this key is absent. */
+#define OPT_SURVIVAL_GAMEMODE "survival-gamemode"
 #define OPT_INV_SCROLLBAR_SCALE "inv-scrollbar-scale"
 #define OPT_ANAGLYPH3D "anaglyph-3d"
 

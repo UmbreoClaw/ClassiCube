@@ -143,6 +143,64 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — single gamemode enum replaces the two mode booleans
+
+User asked for a better scheme than "a bunch of flags that can unfortunately
+interfere with each other", then approved: one authoritative option key,
+`survival-gamemode` (`OPT_SURVIVAL_GAMEMODE`), an int enum:
+
+- `SURVIVAL_GAMEMODE_OFF   = 0` — plain creative ClassiCube
+- `SURVIVAL_GAMEMODE_C030  = 1` — faithful c0.30 Survival Test
+- `SURVIVAL_GAMEMODE_INDEV = 2` — Indev (in-20100223) layer over the core
+
+### Why (previous bugs this class-of-design caused)
+1. **Feathers/string/porkchops leaking into c0.30 survival**: both
+   `survival-mode` AND `indev-mode` could be true at once (the old Indev
+   launcher button set indev without clearing survival for a while), and the
+   Indev drop tables keyed only off `IndevTest_Enabled`. Order-dependent
+   precedence hacks (`indev && !survival`) papered over it.
+2. **Dead "Indev (WIP)" launcher button**: `UseModeIndev` set the flag, then
+   `ChooseMode_Click` unconditionally cleared it — two writers of the same
+   pair of booleans disagreeing about invariants.
+3. **Workbench right-click doing nothing**: the both-flags-set state from (1)
+   made the precedence hack disable the Indev layer entirely, so
+   `IndevTest_IsWorkbench` never matched. (Logic itself verified correct.)
+
+With a single enum the three states are mutually exclusive *by construction* —
+no writer can produce "both on".
+
+### Implementation (everywhere)
+- `Options.h`: `OPT_SURVIVAL_GAMEMODE "survival-gamemode"` — the authoritative
+  key; the two legacy booleans remain only for migration/downgrade compat.
+- `SurvivalTest.h`: `enum SurvivalGamemode` + `int SurvivalTest_Gamemode(void)`.
+- `SurvivalTest.c`: resolver reads the int option (missing-key sentinel -1);
+  falls back to the legacy booleans (survival wins a tie, matching the old
+  runtime backstop so upgraded installs keep their behaviour). OnInit:
+  `SurvivalTest_Enabled = Gamemode() != OFF`.
+- `IndevTest.c`: `IndevTest_Enabled = Gamemode() == INDEV` — the init-order
+  dependency between the two components' OnInit hooks is gone.
+- `Audio.c`: music-gap defaults keyed off the resolver (order-independent).
+- `LScreens.c` (CRLF!): new `SetSurvivalGamemode(mode)` helper writes the enum
+  AND keeps both legacy booleans in sync (downgrade compat). `SurvivalMode_Click`
+  toggles C030<->OFF via the resolver; `ChooseMode_Click` gained the rule
+  "Indev button selects INDEV; plain mode buttons only turn Indev off,
+  preserving an existing c0.30 choice" (matches the old intent, now explicit);
+  the "Survival: ON/OFF" caption reads `Gamemode() == C030`.
+- Remaining legacy-flag references verified down to exactly two sites:
+  the resolver's migration fallback and the launcher's compat writers.
+
+### Migration behaviour
+- Fresh installs / new picks: only the enum matters.
+- Old options.txt (booleans only): resolver maps survival->1, indev->2,
+  both->1 (survival wins, same as the old backstop), none->0. First launcher
+  mode pick writes the enum and the state is canonical from then on.
+
+Full clean build verified. **User retest needed**: re-pick Indev in the
+launcher (writes the enum, clears any stale both-flags state), delete
+default.zip once (for gui/crafting.png), then retry workbench right-click.
+
+---
+
 ## SESSION LOG — Indev mode plumbing + modularity groundwork
 
 Next major goal: an **Indev (in-20100223) gamemode** layered on the survival

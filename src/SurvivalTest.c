@@ -34,6 +34,17 @@
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
+int SurvivalTest_Gamemode(void) {
+	int mode = Options_GetInt(OPT_SURVIVAL_GAMEMODE, 0, 2, -1);
+	if (mode >= 0) return mode;
+
+	/* Legacy two-boolean migration: survival-mode wins a tie, matching the
+	    old runtime backstop, so upgraded installs keep their behaviour. */
+	if (Options_GetBool(OPT_SURVIVAL_MODE, false)) return SURVIVAL_GAMEMODE_C030;
+	if (Options_GetBool(OPT_INDEV_MODE,    false)) return SURVIVAL_GAMEMODE_INDEV;
+	return SURVIVAL_GAMEMODE_OFF;
+}
+
 cc_bool SurvivalTest_Enabled;
 cc_bool SurvivalTest_Enhanced;
 int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
@@ -4429,7 +4440,7 @@ static void SurvivalTest_Init(void) {
 
 	/* The survival core also runs under Indev mode - IndevTest_Component's
 	    Init ran first (see Game.c ordering), so its flag is already set. */
-	SurvivalTest_Enabled = Options_GetBool(OPT_SURVIVAL_MODE, false) || IndevTest_Enabled;
+	SurvivalTest_Enabled = SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF;
 	if (!SurvivalTest_Enabled) return;
 
 	Random_SeedFromCurrentTime(&st_dropRng);

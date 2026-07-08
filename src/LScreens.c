@@ -19,6 +19,7 @@
 #include "Http.h"
 #include "Game.h"
 #include "main.h"
+#include "SurvivalTest.h"
 
 #define LAYOUTS static const struct LLayout
 #define IsBackButton(btn) (btn == CCKEY_ESCAPE || btn == CCPAD_SELECT || btn == CCPAD_2)
@@ -214,22 +215,36 @@ LAYOUTS mode_lblHelp[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 160 } };
 LAYOUTS mode_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 170 } };
 
 
+static void SetSurvivalGamemode(int mode) {
+	/* survival-gamemode is the single authoritative key; the two legacy */
+	/*  booleans are kept in sync so older builds still read this choice. */
+	Options_SetInt(OPT_SURVIVAL_GAMEMODE, mode);
+	Options_SetBool(OPT_SURVIVAL_MODE, mode == SURVIVAL_GAMEMODE_C030);
+	Options_SetBool(OPT_INDEV_MODE,    mode == SURVIVAL_GAMEMODE_INDEV);
+}
+
 static void SurvivalMode_Click(void* w_) {
 	struct LButton* w = (struct LButton*)w_;
-	cc_bool enabled = !Options_GetBool(OPT_SURVIVAL_MODE, false);
+	cc_bool enabled = SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_C030;
 
-	Options_SetBool(OPT_SURVIVAL_MODE, enabled);
-	if (enabled) Options_SetBool(OPT_INDEV_MODE, false); /* modes are exclusive */
+	SetSurvivalGamemode(enabled ? SURVIVAL_GAMEMODE_C030 : SURVIVAL_GAMEMODE_OFF);
 	LButton_SetConst(w, enabled ? "Survival: ON" : "Survival: OFF");
 }
 
 CC_NOINLINE static void ChooseMode_Click(cc_bool classic, cc_bool classicHacks, cc_bool indev) {
+	int mode = SurvivalTest_Gamemode();
+	/* The four buttons are exclusive MODES: Indev selects its gamemode, */
+	/*  while the plain modes only turn Indev off (the survival toggle */
+	/*  button is separate, so an existing c0.30 choice is preserved). */
+	if (indev) {
+		mode = SURVIVAL_GAMEMODE_INDEV;
+	} else if (mode == SURVIVAL_GAMEMODE_INDEV) {
+		mode = SURVIVAL_GAMEMODE_OFF;
+	}
+
 	Options_PauseSaving();
 		Options_SetBool(OPT_CLASSIC_MODE, classic);
-		/* The four buttons are exclusive MODES: picking any of them decides */
-		/*  both survival flags (Indev implies the survival core at runtime). */
-		Options_SetBool(OPT_INDEV_MODE, indev);
-		if (indev) Options_SetBool(OPT_SURVIVAL_MODE, false);
+		SetSurvivalGamemode(mode);
 		if (classic) Options_SetBool(OPT_CLASSIC_HACKS, classicHacks);
 
 		Options_SetBool(OPT_CUSTOM_BLOCKS,   !classic);
@@ -271,7 +286,7 @@ static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	LLabel_Add(s,  &s->lblClassic[1], "&ethe original minecraft classic",     mode_lblClassic1);
 
 	LButton_Add(s, &s->btnSurvival, 145, 35,
-				Options_GetBool(OPT_SURVIVAL_MODE, false) ? "Survival: ON" : "Survival: OFF",
+				SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_C030 ? "Survival: ON" : "Survival: OFF",
 				SurvivalMode_Click, mode_btnSurvival);
 	LButton_Add(s, &s->btnIndev, 145, 35, "Indev (WIP)",
 				UseModeIndev, mode_btnIndev);

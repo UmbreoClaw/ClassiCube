@@ -10,6 +10,21 @@ CC_BEGIN_HEADER
 struct IGameComponent;
 extern struct IGameComponent SurvivalTest_Component;
 
+/* The three mutually-exclusive gamemodes, stored as ONE option value so the
+    conflicting "both survival and indev set" state is unrepresentable (that
+    exact state caused the Indev-drops-in-survival and dead-Indev-button bugs
+    when the modes were two independent booleans). */
+enum SurvivalGamemode {
+	SURVIVAL_GAMEMODE_OFF   = 0, /* plain creative ClassiCube */
+	SURVIVAL_GAMEMODE_C030  = 1, /* faithful c0.30 Survival Test */
+	SURVIVAL_GAMEMODE_INDEV = 2  /* Indev (in-20100223) layer over the core */
+};
+/* Resolves the current gamemode from OPT_SURVIVAL_GAMEMODE, falling back to
+    the legacy survival-mode/indev-mode booleans (survival wins a tie) when
+    the new key is absent. Reads options each call - order-independent, safe
+    from any component's Init regardless of init sequence. */
+int SurvivalTest_Gamemode(void);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */

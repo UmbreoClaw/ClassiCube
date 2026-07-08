@@ -515,8 +515,9 @@ static void Music_Init(void) {
 	/* Survival Test's genuine gap between calm tracks is 300 + rand(900) */
 	/*  seconds (Minecraft.tick's lastBGM roll) - only the DEFAULTS change, a */
 	/*  user-configured delay still wins. */
-	music_minDelay = Options_GetInt(OPT_MIN_MUSIC_DELAY, 0, 3600, SurvivalTest_Enabled ? 300  : 120) * MILLIS_PER_SEC;
-	music_maxDelay = Options_GetInt(OPT_MAX_MUSIC_DELAY, 0, 3600, SurvivalTest_Enabled ? 1200 : 420) * MILLIS_PER_SEC;
+	music_minDelay = Options_GetInt(OPT_MIN_MUSIC_DELAY, 0, 3600,
+						SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF ? 300  : 120) * MILLIS_PER_SEC;
+	music_maxDelay = Options_GetInt(OPT_MAX_MUSIC_DELAY, 0, 3600, SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF ? 1200 : 420) * MILLIS_PER_SEC;
 	music_waitable = Waitable_Create("Music sleep");
 
 	volume = Options_GetInt(OPT_MUSIC_VOLUME, 0, 100, DEFAULT_MUSIC_VOLUME);

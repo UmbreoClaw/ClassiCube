@@ -404,12 +404,10 @@ static void IndevBlocks_Define(void) {
 }
 
 static void OnInit(void) {
-	/* Indev and Survival Test are exclusive gamemodes. If both options are */
-	/*  somehow set at once, Survival Test wins - so its c0.30 behaviour never */
-	/*  gets Indev drops/blocks/recipes leaking in (the launcher keeps them */
-	/*  exclusive, this is the runtime backstop). */
-	IndevTest_Enabled = Options_GetBool(OPT_INDEV_MODE, false)
-	                 && !Options_GetBool(OPT_SURVIVAL_MODE, false);
+	/* Derived from the single authoritative gamemode value - the conflicting */
+	/*  "both modes set" state is unrepresentable there, and this works */
+	/*  regardless of component init order. */
+	IndevTest_Enabled = SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV;
 	if (!IndevTest_Enabled) return;
 
 	IndevItems_Seed();
