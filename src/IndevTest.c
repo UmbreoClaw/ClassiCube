@@ -10,6 +10,9 @@
 #include "Audio.h"
 #include "Platform.h"
 #include "String_.h"
+#include "World.h"
+#include "Event.h"
+#include "ExtMath.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -54,6 +57,24 @@ static void CraftGuiPngProcess(struct Stream* stream, const cc_string* name) {
 static struct TextureEntry craftgui_entry = { "crafting.png", CraftGuiPngProcess };
 
 GfxResourceID IndevTest_CraftGuiTex(void) { return indev_craftGuiTexId; }
+
+/* gui/furnace.png - the furnace GUI (GuiFurnace binds "/gui/furnace.png") */
+static GfxResourceID indev_furnGuiTexId;
+static void FurnGuiPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_furnGuiTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry furngui_entry = { "furnace.png", FurnGuiPngProcess };
+
+GfxResourceID IndevTest_FurnGuiTex(void) { return indev_furnGuiTexId; }
+
+/* gui/container.png - the chest GUI (GuiChest binds "/gui/container.png") */
+static GfxResourceID indev_contGuiTexId;
+static void ContGuiPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_contGuiTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry contgui_entry = { "container.png", ContGuiPngProcess };
+
+GfxResourceID IndevTest_ContGuiTex(void) { return indev_contGuiTexId; }
 
 /* Item definitions - the complete in-20100223 roster from Item.java's static
     init (local ids; shiftedIndex = id + 256). kind drives behaviour:
@@ -248,6 +269,19 @@ static const struct IndevRecipe indevRecipes[] = {
 	{ R_ITEM(26),    1, 1,3, { BLOCK_RED_SHROOM, BLOCK_BROWN_SHROOM, R_ITEM(25) } },
 	{ R_ITEM(26),    1, 1,3, { BLOCK_BROWN_SHROOM, BLOCK_RED_SHROOM, R_ITEM(25) } },
 	{ R_ITEM(3),     1, 2,2, { R_ITEM(9),0, 0,R_ITEM(62) } },
+	/* RecipesWeapons extras: bow (" #X"/"# X"/" #X", # stick, X string) and */
+	/*  arrows x4 ("X"/"#"/"Y" = iron ingot / stick / feather) */
+	{ R_ITEM(5),     1, 3,3, { 0,R_ITEM(24),R_ITEM(31), R_ITEM(24),0,R_ITEM(31), 0,R_ITEM(24),R_ITEM(31) } },
+	{ R_ITEM(6),     4, 1,3, { R_ITEM(9), R_ITEM(24), R_ITEM(32) } },
+	/* RecipesIngots: 9 ingots <-> storage block, both directions. (The
+	    diamond pair is genuine too, but the classic block set has no diamond
+	    block id to map it onto, so that pair is omitted.) */
+	{ BLOCK_GOLD,    1, 3,3, { R_ITEM(10),R_ITEM(10),R_ITEM(10), R_ITEM(10),R_ITEM(10),R_ITEM(10), R_ITEM(10),R_ITEM(10),R_ITEM(10) } },
+	{ BLOCK_IRON,    1, 3,3, { R_ITEM(9),R_ITEM(9),R_ITEM(9), R_ITEM(9),R_ITEM(9),R_ITEM(9), R_ITEM(9),R_ITEM(9),R_ITEM(9) } },
+	{ R_ITEM(10),    9, 1,1, { BLOCK_GOLD } },
+	{ R_ITEM(9),     9, 1,1, { BLOCK_IRON } },
+	/* painting: ring of planks around gray cloth */
+	{ R_ITEM(65),    1, 3,3, { BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD, BLOCK_WOOD,BLOCK_GRAY,BLOCK_WOOD, BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD } },
 };
 
 /* Tool recipes are generated like RecipesTools/RecipesWeapons: 5 materials */
@@ -304,23 +338,22 @@ cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId,
 
 	/* Generated tool shapes (X = material, # = stick), RecipesTools' patterns:
 	    pickaxe "XXX/ # / # ", shovel "X/#/#", axe "XX/X#/ #", hoe "XX/ #/ #",
-	    sword "X/X/#" */
+	    sword "X/X/#". Cells are TIGHTLY packed row-major at each pattern's
+	    own width (Recipe_MatchesAt reads cells[ry*w + rx]) - the old 3-wide
+	    storage for the 2-wide axe/hoe scrambled their rows, which made axes
+	    and hoes permanently uncraftable. */
 	for (m = 0; m < 5; m++) {
 		cc_uint16 X = toolMaterial[m], S = (cc_uint16)R_ITEM(24);
 		const cc_uint16 pats[5][9] = {
-			{ X,X,X, 0,S,0, 0,S,0 },
-			{ X,S,S, 0,0,0, 0,0,0 }, /* 1x3 stored row-major below via w/h */
-			{ X,X,0, X,S,0, 0,S,0 },
-			{ X,X,0, 0,S,0, 0,S,0 },
-			{ X,X,S, 0,0,0, 0,0,0 }, /* 1x3 sword */
+			{ X,X,X, 0,S,0, 0,S,0 }, /* pickaxe 3x3 */
+			{ X,S,S },               /* shovel  1x3 */
+			{ X,X, X,S, 0,S },       /* axe     2x3 */
+			{ X,X, 0,S, 0,S },       /* hoe     2x3 */
+			{ X,X,S },               /* sword   1x3 */
 		};
 		for (t = 0; t < 5; t++) {
 			Mem_Copy(r.cells, pats[t], sizeof(r.cells));
 			r.w = toolPatW[t]; r.h = toolPatH[t];
-			if (t == 1 || t == 4) { /* 1-wide column patterns packed tightly */
-				r.cells[0] = pats[t][0]; r.cells[1] = (t == 4) ? X : S; r.cells[2] = S;
-				r.w = 1; r.h = 3;
-			}
 			r.result = (cc_uint16)R_ITEM(toolResult[m][t]); r.count = 1;
 			if (Recipe_Matches(&r, grid, gw, gh)) {
 				*outId = r.result; *outCount = 1;
@@ -388,8 +421,10 @@ static void IndevBlock_Define(BlockID id, const char* name, int top, int side,
 static void IndevBlocks_Define(void) {
 	/* tiles: 96 wb top, 97 wb side, 98 wb front, 99 furn front, 100 furn lit, */
 	/*  101 furn side, 102 furn top, 103 chest front, 104 chest side, 105 top */
-	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  30);
-	IndevBlock_Define(INDEV_BLOCK_CHEST,       "Chest",     105, 104, 103, 105, SOUND_WOOD, 30);
+	/* Hardness from Block.java registration: workbench/chest setHardness(2.5F), */
+	/*  furnace 3.5F, torch 0.0F - our units are 20 per hardness-second. */
+	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  50);
+	IndevBlock_Define(INDEV_BLOCK_CHEST,       "Chest",     105, 104, 103, 105, SOUND_WOOD, 50);
 	IndevBlock_Define(INDEV_BLOCK_FURNACE,     "Furnace",   102, 101,  99, 102, SOUND_STONE, 70);
 	IndevBlock_Define(INDEV_BLOCK_FURNACE_LIT, "Furnace (lit)", 102, 101, 100, 102, SOUND_STONE, 70);
 
@@ -401,6 +436,256 @@ static void IndevBlocks_Define(void) {
 	Blocks.BlocksLight[INDEV_BLOCK_TORCH]     = false;
 	Blocks.Brightness[INDEV_BLOCK_TORCH]      = Blocks.Brightness[BLOCK_LAVA];
 	Block_DefineCustom(INDEV_BLOCK_TORCH, true);
+}
+
+/*########################################################################################################################*
+*-----------------------------------------------Container tile entities---------------------------------------------------*
+*#########################################################################################################################*/
+/* Per-position storage for chests + furnaces, ported from TileEntityChest /
+    TileEntityFurnace (in-20100223). ClassiCube has no tile entity concept,
+    so this is a flat pool keyed by block position. Created lazily on first
+    open (which also covers blocks that predate this feature or came from a
+    loaded map); destroyed by the BlockChanged hook when the block goes away.
+    KNOWN GAP: contents are NOT saved with the map - a save/load loses
+    chest/furnace contents (serialisation needs a sidecar format; planned). */
+#define INDEV_TE_MAX 192
+struct IndevTE {
+	cc_bool  used;
+	cc_uint8 kind;                /* INDEV_CONTAINER_* */
+	IVec3    pos;
+	struct SurvivalSlot slots[SURVIVAL_CONTAINER_SLOTS];
+	int burnTime, cookTime, currentBurn; /* furnace: furnaceBurnTime/furnaceCookTime/currentItemBurnTime */
+};
+static struct IndevTE indev_tes[INDEV_TE_MAX];
+static int indev_openTE = -1;           /* pool index of the open container, -1 = none */
+static struct SurvivalSlot indev_discardSlot; /* safe target when nothing is open */
+static RNGState indev_teRng;
+
+static int IndevTest_ContainerKindOf(BlockID b) {
+	if (b == INDEV_BLOCK_CHEST) return INDEV_CONTAINER_CHEST;
+	if (b == INDEV_BLOCK_FURNACE || b == INDEV_BLOCK_FURNACE_LIT) return INDEV_CONTAINER_FURNACE;
+	return INDEV_CONTAINER_NONE;
+}
+
+static int IndevTE_Find(IVec3 pos) {
+	int i;
+	for (i = 0; i < INDEV_TE_MAX; i++) {
+		if (indev_tes[i].used && indev_tes[i].pos.x == pos.x &&
+			indev_tes[i].pos.y == pos.y && indev_tes[i].pos.z == pos.z) return i;
+	}
+	return -1;
+}
+
+static int IndevTE_Create(int kind, IVec3 pos) {
+	int i;
+	for (i = 0; i < INDEV_TE_MAX; i++) {
+		if (indev_tes[i].used) continue;
+		Mem_Set(&indev_tes[i], 0, sizeof(struct IndevTE));
+		indev_tes[i].used = true;
+		indev_tes[i].kind = (cc_uint8)kind;
+		indev_tes[i].pos  = pos;
+		return i;
+	}
+	return -1; /* pool exhausted - the container simply won't open */
+}
+
+/* BlockChest.onBlockRemoval: scatter the contents as item drops - one random
+    0.1..0.9 offset per slot, stacks split into random chunks of 10..30. */
+static void IndevTE_Scatter(struct IndevTE* te) {
+	struct SurvivalSlot* s;
+	Vec3 p; int i, chunk;
+	for (i = 0; i < SURVIVAL_CONTAINER_SLOTS; i++) {
+		s = &te->slots[i];
+		if (s->count <= 0 || !s->id) continue;
+		p.x = te->pos.x + Random_Float(&indev_teRng) * 0.8f + 0.1f;
+		p.y = te->pos.y + Random_Float(&indev_teRng) * 0.8f + 0.1f;
+		p.z = te->pos.z + Random_Float(&indev_teRng) * 0.8f + 0.1f;
+		while (s->count > 0) {
+			chunk = Random_Next(&indev_teRng, 21) + 10;
+			if (chunk > s->count) chunk = s->count;
+			s->count -= chunk;
+			SurvivalTest_SpawnDropWorld(p, s->id, chunk);
+		}
+		s->id = 0; s->count = 0; s->damage = 0;
+	}
+}
+
+cc_bool IndevTest_IsContainerBlock(BlockID b) {
+	return IndevTest_Enabled && IndevTest_ContainerKindOf(b) != INDEV_CONTAINER_NONE;
+}
+
+int IndevTest_OpenContainer(IVec3 pos) {
+	BlockID b, above;
+	int kind, i;
+	if (!IndevTest_Enabled) return INDEV_CONTAINER_NONE;
+
+	b    = World_GetBlock(pos.x, pos.y, pos.z);
+	kind = IndevTest_ContainerKindOf(b);
+	if (!kind) return INDEV_CONTAINER_NONE;
+
+	/* BlockChest.blockActivated: a normal (opaque) cube directly above the */
+	/*  chest keeps it shut. Furnaces have no such rule. */
+	if (kind == INDEV_CONTAINER_CHEST && World_Contains(pos.x, pos.y + 1, pos.z)) {
+		above = World_GetBlock(pos.x, pos.y + 1, pos.z);
+		if (Blocks.Draw[above] == DRAW_OPAQUE) return INDEV_CONTAINER_NONE;
+	}
+
+	i = IndevTE_Find(pos);
+	if (i < 0) i = IndevTE_Create(kind, pos);
+	if (i < 0) return INDEV_CONTAINER_NONE;
+
+	indev_openTE = i;
+	return kind;
+}
+
+int IndevTest_OpenKind(void) {
+	if (!IndevTest_Enabled || indev_openTE < 0) return INDEV_CONTAINER_NONE;
+	return indev_tes[indev_openTE].kind;
+}
+
+void IndevTest_CloseContainer(void) { indev_openTE = -1; }
+
+struct SurvivalSlot* IndevTest_ContainerSlot(int i) {
+	if (indev_openTE >= 0 && i >= 0 && i < SURVIVAL_CONTAINER_SLOTS)
+		return &indev_tes[indev_openTE].slots[i];
+	/* Nothing open (or the container block was destroyed under an open */
+	/*  screen): hand back a zeroed discard slot so clicks can't corrupt. */
+	indev_discardSlot.id = 0; indev_discardSlot.count = 0; indev_discardSlot.damage = 0;
+	return &indev_discardSlot;
+}
+
+/*########################################################################################################################*
+*--------------------------------------------------Furnace (TileEntityFurnace)--------------------------------------------*
+*#########################################################################################################################*/
+/* TileEntityFurnace.smeltItem: iron ore -> iron ingot, gold ore -> gold
+    ingot, sand -> glass, cobblestone -> stone, raw -> cooked porkchop.
+    (Indev also smelts diamond ore -> diamond, but the classic block set has
+    no diamond ore block, so that entry has nothing to map from.) */
+static int Furnace_SmeltResult(int id) {
+	if (id == BLOCK_IRON_ORE) return 256 + 9;  /* Iron Ingot */
+	if (id == BLOCK_GOLD_ORE) return 256 + 10; /* Gold Ingot */
+	if (id == BLOCK_SAND)     return BLOCK_GLASS;
+	if (id == BLOCK_COBBLE)   return BLOCK_STONE;
+	if (id == 256 + 63)       return 256 + 64; /* Raw -> Cooked Porkchop */
+	return 0;
+}
+
+/* TileEntityFurnace.getItemBurnTime: wood-material blocks 300 ticks, stick
+    100, coal 1600. Wood material is approximated by the wood dig sound
+    (planks/log/bookshelf/workbench/chest) - the torch is excluded since its
+    genuine material is circuits, not wood. */
+static int Furnace_FuelTime(int id) {
+	if (id == 256 + 7)  return 1600; /* Coal */
+	if (id == 256 + 24) return 100;  /* Stick */
+	if (id > 0 && id < 256 && id != INDEV_BLOCK_TORCH &&
+		Blocks.DigSounds[id] == SOUND_WOOD) return 300;
+	return 0;
+}
+
+/* TileEntityFurnace.canSmelt: input present + smeltable + output empty or
+    same id with room (inventory stack limit 64). */
+static cc_bool Furnace_CanSmelt(struct IndevTE* te) {
+	int result;
+	if (te->slots[0].count <= 0) return false;
+	result = Furnace_SmeltResult(te->slots[0].id);
+	if (!result) return false;
+	if (te->slots[2].count <= 0) return true;
+	if (te->slots[2].id != (cc_uint16)result) return false;
+	return te->slots[2].count < 64;
+}
+
+/* TileEntityFurnace.updateEntity, 20Hz. Faithful order: burn down; consume
+    fuel only when burnt out AND smeltable; progress while burning+smeltable
+    (200 ticks per item); ALL partial progress lost the moment it can't
+    smelt; lit/unlit block swap on burning-state change (the BlockChanged
+    hook recognises furnace<->furnace swaps and keeps this tile entity). */
+static void Furnace_Tick(struct IndevTE* te) {
+	cc_bool wasBurning = te->burnTime > 0, burning;
+	cc_bool slotsChanged = false;
+	int result;
+
+	if (te->burnTime > 0) te->burnTime--;
+
+	if (te->burnTime == 0 && Furnace_CanSmelt(te)) {
+		te->currentBurn = te->burnTime = Furnace_FuelTime(te->slots[1].id);
+		if (te->burnTime > 0) {
+			te->slots[1].count--;
+			if (te->slots[1].count <= 0) { te->slots[1].id = 0; te->slots[1].count = 0; }
+			slotsChanged = true;
+		}
+	}
+
+	if (te->burnTime > 0 && Furnace_CanSmelt(te)) {
+		te->cookTime++;
+		if (te->cookTime >= 200) {
+			te->cookTime = 0;
+			result = Furnace_SmeltResult(te->slots[0].id);
+			if (te->slots[2].count > 0) {
+				te->slots[2].count++;
+			} else {
+				te->slots[2].id = (cc_uint16)result; te->slots[2].count = 1; te->slots[2].damage = 0;
+			}
+			te->slots[0].count--;
+			if (te->slots[0].count <= 0) { te->slots[0].id = 0; te->slots[0].count = 0; }
+			slotsChanged = true;
+		}
+	} else {
+		te->cookTime = 0;
+	}
+
+	burning = te->burnTime > 0;
+	if (burning != wasBurning) {
+		Game_ChangeBlock(te->pos.x, te->pos.y, te->pos.z,
+			burning ? INDEV_BLOCK_FURNACE_LIT : INDEV_BLOCK_FURNACE);
+	}
+	if (slotsChanged) SurvivalTest_InvChanged();
+}
+
+int IndevTest_FurnaceBurnScaled(void) {
+	struct IndevTE* te;
+	if (indev_openTE < 0) return 0;
+	te = &indev_tes[indev_openTE];
+	if (te->kind != INDEV_CONTAINER_FURNACE || te->currentBurn <= 0) return 0;
+	return te->burnTime * 12 / te->currentBurn; /* getBurnTimeRemainingScaled */
+}
+
+int IndevTest_FurnaceCookScaled(void) {
+	struct IndevTE* te;
+	if (indev_openTE < 0) return 0;
+	te = &indev_tes[indev_openTE];
+	if (te->kind != INDEV_CONTAINER_FURNACE) return 0;
+	return te->cookTime * 24 / 200; /* getCookProgressScaled */
+}
+
+static void IndevTest_Tick(struct ScheduledTask* task) {
+	int i;
+	if (!IndevTest_Enabled) return;
+	for (i = 0; i < INDEV_TE_MAX; i++) {
+		if (!indev_tes[i].used || indev_tes[i].kind != INDEV_CONTAINER_FURNACE) continue;
+		Furnace_Tick(&indev_tes[i]);
+	}
+}
+
+/* Tile entity lifecycle, driven off block changes: a chest scatters its
+    contents when broken (BlockChest.onBlockRemoval); a furnace's contents
+    are silently destroyed (faithful - BlockContainer.onBlockRemoval only
+    removes the tile entity); the lit<->unlit furnace swap keeps its state. */
+static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, BlockID block) {
+	cc_bool oldFurn, nowFurn;
+	int i;
+	if (!IndevTest_Enabled) return;
+
+	oldFurn = oldBlock == INDEV_BLOCK_FURNACE || oldBlock == INDEV_BLOCK_FURNACE_LIT;
+	nowFurn = block    == INDEV_BLOCK_FURNACE || block    == INDEV_BLOCK_FURNACE_LIT;
+	if (oldFurn && nowFurn) return; /* lit/unlit swap - state survives */
+
+	if (oldBlock == INDEV_BLOCK_CHEST || oldFurn) {
+		i = IndevTE_Find(coords);
+		if (i < 0) return;
+		if (oldBlock == INDEV_BLOCK_CHEST) IndevTE_Scatter(&indev_tes[i]);
+		if (indev_openTE == i) indev_openTE = -1; /* screen falls back to the discard slot */
+		indev_tes[i].used = false;
+	}
 }
 
 static void OnInit(void) {
@@ -415,6 +700,12 @@ static void OnInit(void) {
 	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&invgui_entry);
 	TextureEntry_Register(&craftgui_entry);
+	TextureEntry_Register(&furngui_entry);
+	TextureEntry_Register(&contgui_entry);
+
+	Random_Seed(&indev_teRng, (int)Game.Time + 1);
+	Event_Register_(&UserEvents.BlockChanged, NULL, IndevTest_BlockChanged);
+	ScheduledTask_Add(GAME_DEF_TICKS, IndevTest_Tick);
 	Chat_AddRaw("&eIndev mode: plumbing active (survival core + Indev layer WIP)");
 }
 

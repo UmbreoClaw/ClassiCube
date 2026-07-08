@@ -143,6 +143,91 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — chests + furnaces (tile entities), instant-break fix, recipe fixes
+
+Big feature drop, all mechanics ported from the in-20100223 decompile and
+live-verified in the headless rig (screenshots of every stage).
+
+### Instant-break root cause (user report: new blocks broke instantly)
+`SurvivalTest_SetHardness` wrote into `st_hardness[]` WITHOUT seeding, and
+the table's lazy first-read seed (inside `SurvivalTest_Hardness`) rewrote ALL
+entries from the c0.30 defaults - whose `default: return 0` covers ids 66-70.
+Sequence: IndevTest OnInit sets 66-70 hardness -> first left-click triggers
+`CanInstaBreak` -> seed loop clobbers them to 0 -> instant break. Fixed by
+seed-before-override (`SurvivalTest_SeedHardness()` called from both paths).
+**Identical latent bug found & fixed in `st_maxStack`** - IndevItems_Seed's
+64-max/tools-stack-1 values were clobbered back to 99 on first read.
+Hardness values also corrected to the decompile: workbench/chest 2.5F -> 50
+ticks (was 30), furnace 3.5F -> 70 (already right), torch 0.
+
+### Tile entities (IndevTest.c)
+Flat pool (`INDEV_TE_MAX` 192) keyed by block position; created lazily on
+first open (covers pre-existing/loaded blocks), destroyed via a BlockChanged
+hook. Slots use the shared `struct SurvivalSlot` (moved to SurvivalTest.h).
+- **Chest break**: contents scatter as drops - faithful BlockChest.onBlockRemoval
+  port (0.1-0.9 offset per slot, stacks split into 10-30 chunks).
+- **Furnace break**: contents silently destroyed - faithful (BlockContainer
+  only removes the TE; Indev really did eat your ore).
+- **Lit<->unlit furnace swap keeps the TE** (hook ignores furnace->furnace).
+- KNOWN GAP: TE contents are NOT saved with the map (needs sidecar format).
+
+### Furnace (TileEntityFurnace port, verified live: 5 ore -> 5 ingots)
+- Slots 0 input / 1 fuel / 2 output. Smelts iron ore->iron ingot, gold
+  ore->gold ingot, sand->glass, cobblestone->stone, raw->cooked porkchop
+  (diamond ore pair omitted - no diamond ore block in the classic set).
+- Fuel: coal 1600 ticks, stick 100, wood-material blocks 300 (approximated
+  by SOUND_WOOD dig sound, torch excluded - its material is circuits).
+- 200 ticks/item; fuel consumed only when burnt out AND smeltable; ALL
+  partial progress lost when it can't smelt (faithful, no decay).
+- Lit block swap driven by the tick, exactly like updateEntity.
+
+### Container GUIs (same SurvivalInvScreen, new modes)
+Extended slot addressing grows: 0-35 inv, 36-44 craft, 45-71 open container
+(SURVIVAL_CONTAINER_BASE). GuiContainer click semantics work unchanged.
+- **Furnace** (gui/furnace.png 176x166): input (56,17), fuel (56,53), output
+  (116,35); flame overlay src(176,0) dest(56,36+12-h) h=burn*12/currentBurn;
+  arrow src(176,14) dest(79,34) w=cook*24/200. All era-faithful coords; the
+  furnace slots are plain slots (no fuel/output restrictions - genuine).
+- **Chest** (gui/container.png, 176x168 = 114+3*18): grid at (8,18), player
+  rows at 85/143 (one pixel lower than furnace's 84/142 - genuine quirk).
+  Panel composed of the two texture strips exactly like GuiChest (0,0)-(176,71)
+  + (0,126)-(176,222). Chest refuses to open with an opaque block above it
+  (faithful); right-click on any container is consumed even when it refuses.
+- Both GUIs verified rendering + interacting in the rig (store/retrieve,
+  smelt with live flame/arrow overlays).
+- Double chests: NOT implemented (single 27-slot chests only for now).
+
+### Resources
+gui/furnace.png + gui/container.png added to the beta-jar extraction
+(defaultZipEntries + SelectEntry + ProcessEntry). Growing the required-entry
+table makes an OLD default.zip fail the existence check, so the launcher
+re-downloads and rebuilds it automatically - no manual deletion needed.
+
+### Recipe fixes (user report: axe uncraftable)
+**Root cause**: the generated tool patterns stored ALL shapes 3-wide, but
+`Recipe_MatchesAt` reads `cells[ry*w + rx]` at the pattern's own width - so
+the 2-wide axe/hoe patterns were scrambled (axe read as XX/.X/S. garbage) and
+NEVER matched. Shovel/sword had an explicit repack; axe/hoe didn't. Fixed by
+tightly packing every pattern at its true width.
+**Missing recipes added** (vs the complete CraftingManager list):
+- bow (" #X/# X/ #X", stick+string), arrows x4 ("X/#/Y" iron/stick/feather)
+- gold block <-> 9 gold ingots, iron block <-> 9 iron ingots (RecipesIngots;
+  diamond pair omitted - no diamond block id in the classic set)
+- painting (planks ring around gray cloth)
+Verified with a 13-case matcher self-test battery in the live game - all
+PASS (axe at two grid offsets, hoe, stone pick, iron sword, shovel, bow,
+arrows, gold block both directions, painting, sticks, workbench).
+
+### Verification method
+Headless rig again (Xvfb + xdotool + real default.zip with the b1.7.3 GUI
+textures injected): placed containers via a temporary debug-menu harness
+(removed before commit), loaded coal+ore by real GUI clicks, watched the
+flame light, the arrow fill, 5 ingots accumulate, the TE survive lit-swap
+and close/reopen; stored sand in a chest, broke it (proper 2.5s mining -
+hardness fix confirmed live), saw the scatter drops.
+
+---
+
 ## SESSION LOG — workbench crafting table finally opens (root cause found) + E key
 
 The workbench right-click "not opening" bug that survived several sessions is

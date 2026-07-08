@@ -108,7 +108,8 @@ static cc_bool st_debugForceArmor;
 /* Full id space: 256 block ids + Item.itemsList[]'s shifted ids (id+256, */
 /*  sized so Indev's 1024-entry list fits). */
 #define ST_MAX_IDS           1024
-struct SurvivalSlot { cc_uint16 id; cc_int16 count; cc_int16 damage; };
+/* struct SurvivalSlot now lives in SurvivalTest.h (shared with IndevTest's
+    tile entity store for chest/furnace contents). */
 
 /* Runtime per-id max stack size. c0.30 stacks everything to 99; the Indev */
 /*  layer (or later a server) overrides per id (Item.maxStackSize: 64 for */
@@ -116,17 +117,26 @@ struct SurvivalSlot { cc_uint16 id; cc_int16 count; cc_int16 damage; };
 static cc_int16 st_maxStack[ST_MAX_IDS];
 static cc_bool  st_maxStackInited;
 
+static void ST_SeedMaxStack(void) {
+	int i;
+	if (st_maxStackInited) return;
+	for (i = 0; i < ST_MAX_IDS; i++) st_maxStack[i] = SURVIVAL_STACK_MAX;
+	st_maxStackInited = true;
+}
+
 void SurvivalTest_SetMaxStack(int id, int maxStack) {
 	if (id < 0 || id >= ST_MAX_IDS) return;
+	/* Seed BEFORE overriding - IndevItems_Seed calls this at component-init */
+	/*  time, and the old first-read lazy seed rewrote the WHOLE table */
+	/*  afterwards, silently clobbering Indev's 64-max / tools-stack-to-1 */
+	/*  limits back to the c0.30 default of 99. (Same bug family as the */
+	/*  st_hardness seed-order fix - see SurvivalTest_SetHardness.) */
+	ST_SeedMaxStack();
 	st_maxStack[id] = (cc_int16)maxStack;
 }
 
 static int ST_MaxStack(cc_uint16 id) {
-	int i;
-	if (!st_maxStackInited) {
-		for (i = 0; i < ST_MAX_IDS; i++) st_maxStack[i] = SURVIVAL_STACK_MAX;
-		st_maxStackInited = true;
-	}
+	ST_SeedMaxStack();
 	return id < ST_MAX_IDS ? st_maxStack[id] : 1;
 }
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
@@ -426,6 +436,12 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
 	d->active      = true;
+}
+
+/* Public wrapper so the Indev layer (chest scatter on break) can spawn */
+/*  drop entities at an exact world position. */
+void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count) {
+	SurvivalTest_SpawnDropAt(pos, (cc_uint16)id, count);
 }
 
 /* Spawns one physical item drop inside the given block. BlockUtils.dropItems */
@@ -3512,6 +3528,9 @@ int SurvivalTest_SlotDamage(int slot) { return st_inv[slot].damage; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
+/* Public bump so the Indev layer (furnace tick mutating container slots) */
+/*  can tell the open inventory screen to rebuild its mesh. */
+void    SurvivalTest_InvChanged(void)  { st_invVersion++; }
 
 cc_bool SurvivalTest_CanPlace(BlockID block) {
 	int slot = Inventory.SelectedIndex;
@@ -3549,9 +3568,12 @@ void SurvivalTest_SetCraftDim(int dim) {
 }
 
 /* Resolves an extended slot index to its backing SurvivalSlot: 0..35 = the */
-/*  real inventory, 36..39 = the crafting grid. (The result slot is virtual */
-/*  and handled by SurvivalTest_CraftTake, not this.) */
+/*  real inventory, 36..44 = the crafting grid, 45..71 = the open container */
+/*  (chest/furnace tile entity). (The result slot is virtual and handled by */
+/*  SurvivalTest_CraftTake, not this.) */
 static struct SurvivalSlot* SurvivalTest_SlotPtr(int idx) {
+	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_SLOTS)
+		return IndevTest_ContainerSlot(idx - SURVIVAL_CONTAINER_BASE);
 	if (idx >= SURVIVAL_CRAFT_BASE && idx < SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
 		return &st_craft[idx - SURVIVAL_CRAFT_BASE];
 	return &st_inv[idx];
@@ -3776,21 +3798,34 @@ void SurvivalTest_DebugGiveItem(int id) {
 	SurvivalTest_AddItem((cc_uint16)id);
 }
 
-/* Right-clicking a placed workbench opens the 3x3 crafting screen. Returns */
-/*  true (click consumed) so no block is placed. The regular E-inventory */
-/*  opens the pocket 2x2; both share the same screen, differing by CraftDim. */
+/* Right-clicking a placed workbench opens the 3x3 crafting screen; a chest */
+/*  or furnace opens its container screen. Returns true (click consumed) so */
+/*  no block is placed. The regular E-inventory opens the pocket 2x2; all */
+/*  variants share the same screen, differing by CraftDim / open container. */
 cc_bool SurvivalTest_TryUseBlock(void) {
 	IVec3 pos;
+	BlockID block;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled) return false;
 	if (!Game_SelectedPos.valid) return false;
 
 	pos = Game_SelectedPos.pos;
 	if (!World_Contains(pos.x, pos.y, pos.z)) return false;
-	if (!IndevTest_IsWorkbench(World_GetBlock(pos.x, pos.y, pos.z))) return false;
+	block = World_GetBlock(pos.x, pos.y, pos.z);
 
-	SurvivalTest_SetCraftDim(3);
-	SurvivalInvScreen_Show();
-	return true;
+	if (IndevTest_IsWorkbench(block)) {
+		SurvivalTest_SetCraftDim(3);
+		SurvivalInvScreen_Show();
+		return true;
+	}
+	/* BlockChest/BlockFurnace.blockActivated: open the container GUI backed */
+	/*  by the tile entity at this position (created lazily on first open). */
+	/*  The click is consumed for ANY container block - genuine blockActivated */
+	/*  returns true even when a blocked chest refuses to open. */
+	if (IndevTest_IsContainerBlock(block)) {
+		if (IndevTest_OpenContainer(pos)) SurvivalInvScreen_Show();
+		return true;
+	}
+	return false;
 }
 
 cc_bool SurvivalTest_TryEat(void) {
@@ -3865,8 +3900,16 @@ static void SurvivalTest_BlockChanged(void* obj,
 /*  hardness per block id without touching this code. 0 = instant break. */
 static cc_uint16 st_hardness[BLOCK_COUNT];
 static cc_bool   st_hardnessInited;
+static void SurvivalTest_SeedHardness(void);
 
 void SurvivalTest_SetHardness(BlockID block, int hardness) {
+	/* Seed BEFORE overriding: overrides can arrive at component-init time */
+	/*  (IndevTest defines its blocks before any mining happens), and the */
+	/*  first Hardness() call used to re-seed the WHOLE table afterwards, */
+	/*  wiping such early overrides back to the c0.30 default (0 for ids */
+	/*  the classic switch doesn't know) - which made the Indev blocks */
+	/*  (workbench/chest/furnace) break instantly. */
+	SurvivalTest_SeedHardness();
 	st_hardness[block] = (cc_uint16)hardness;
 }
 
@@ -3908,12 +3951,15 @@ static int SurvivalTest_DefaultHardness(BlockID block) {
 	}
 }
 
-static int SurvivalTest_Hardness(BlockID block) {
+static void SurvivalTest_SeedHardness(void) {
 	int i;
-	if (!st_hardnessInited) {
-		for (i = 0; i < BLOCK_COUNT; i++) st_hardness[i] = (cc_uint16)SurvivalTest_DefaultHardness((BlockID)i);
-		st_hardnessInited = true;
-	}
+	if (st_hardnessInited) return;
+	for (i = 0; i < BLOCK_COUNT; i++) st_hardness[i] = (cc_uint16)SurvivalTest_DefaultHardness((BlockID)i);
+	st_hardnessInited = true;
+}
+
+static int SurvivalTest_Hardness(BlockID block) {
+	SurvivalTest_SeedHardness();
 	return st_hardness[block];
 }
 

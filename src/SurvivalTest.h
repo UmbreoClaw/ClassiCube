@@ -52,6 +52,14 @@ extern int SurvivalTest_Health;
 /*  active is SurvivalTest_CraftDim (2 or 3). */
 #define SURVIVAL_CRAFT_SLOTS  9
 #define SURVIVAL_CRAFT_BASE   SURVIVAL_INV_SLOTS
+/* Open-container (chest/furnace tile entity) slots, addressed as extended */
+/*  slots 45..71 (chest all 27; furnace uses 0=input 1=fuel 2=output). */
+#define SURVIVAL_CONTAINER_SLOTS 27
+#define SURVIVAL_CONTAINER_BASE  (SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
+
+/* One ItemStack: block id 0-255 / item id 256+ (shiftedIndex), count, and */
+/*  accumulated damage (tool wear). Shared with the Indev tile entity store. */
+struct SurvivalSlot { cc_uint16 id; cc_int16 count; cc_int16 damage; };
 
 /* Applies damage to the player (respects invincibility frames). */
 /* hurtDir (for the hurt camera tilt) is randomised, matching the original's */
@@ -97,6 +105,10 @@ int SurvivalTest_HotbarCount(int slot);
 /* A counter that increments whenever inventory contents change. */
 /* Lets the HUD cheaply detect when it needs to redraw stack counts. */
 int SurvivalTest_InvVersion(void);
+/* Bumps the inventory version (for external mutators like the furnace tick). */
+void SurvivalTest_InvChanged(void);
+/* Spawns a physical item drop entity at an exact world position (chest scatter). */
+void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 
 /* Swaps two slots. Indices 0..SURVIVAL_INV_SLOTS-1 are the inventory, */
 /*  SURVIVAL_CRAFT_BASE..+3 are the 2x2 crafting grid (no-op when disabled). */

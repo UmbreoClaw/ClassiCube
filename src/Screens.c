@@ -2474,8 +2474,9 @@ void InventoryScreen_Hide(void) {
 /* Pixel padding (base, before scaling) around the panel's inner content. */
 #define SURVINV_PAD_BASE      8
 
-/* Displayed block-picture slots: storage + hotbar row + craft grid + result. */
-#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + 2) /* + result + cursor */
+/* Displayed block-picture slots: storage + hotbar row + craft grid + open */
+/*  container (chest 27/furnace 3) + result + cursor. */
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_SLOTS + 2)
 #define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
 #define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
@@ -2544,34 +2545,70 @@ static cc_bool SurvivalInv_InSlot(int mx, int my, int x, int y, int size) {
 	return mx >= x && mx < x + size && my >= y && my < y + size;
 }
 
-/* Active craft cells: dim*dim (pocket 4, workbench 9); none outside Indev. */
+/* Active craft cells: dim*dim (pocket 4, workbench 9); none outside Indev, */
+/*  and none while a container is open (chest/furnace GUIs have no grid). */
 static int SurvivalInv_CraftCells(void) {
 	int dim;
 	if (!IndevTest_Enabled) return 0;
+	if (IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return 0;
 	dim = SurvivalTest_CraftDim();
 	return dim * dim;
 }
 
-/* Slot under (mx,my): storage 9..35, craft 36.., the result sentinel, or -1. */
+/* Slots of the open container: chest 27, furnace 3 (input/fuel/output). */
+static int SurvivalInv_ContainerCells(void) {
+	switch (IndevTest_OpenKind()) {
+	case INDEV_CONTAINER_CHEST:   return SURVIVAL_CONTAINER_SLOTS;
+	case INDEV_CONTAINER_FURNACE: return 3;
+	default: return 0;
+	}
+}
+
+/* Pixel origin of open-container cell i. Genuine layouts: GuiChest grid at */
+/*  (8,18) 9 wide; GuiFurnace input (56,17), fuel (56,53), output (116,35). */
+static void SurvivalInv_ContainerSlotXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	float f = s->texF;
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_FURNACE) {
+		switch (i) {
+		case 0:  *ox = s->panelX + (int)( 56 * f); *oy = s->panelY + (int)(17 * f); return;
+		case 1:  *ox = s->panelX + (int)( 56 * f); *oy = s->panelY + (int)(53 * f); return;
+		default: *ox = s->panelX + (int)(116 * f); *oy = s->panelY + (int)(35 * f); return;
+		}
+	}
+	*ox = s->panelX + (int)((8  + (i % 9) * 18) * f);
+	*oy = s->panelY + (int)((18 + (i / 9) * 18) * f);
+}
+
+/* Slot under (mx,my): storage 9..35, craft 36.., container 45.., the result */
+/*  sentinel, or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
-	int i, x, y;
+	int i, x, y, craft = SurvivalInv_CraftCells();
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &x, &y);
 		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return i;
 	}
 	if (!IndevTest_Enabled) return -1; /* no crafting slots in plain c0.30-s */
-	for (i = 0; i < SurvivalInv_CraftCells(); i++) {
+	for (i = 0; i < craft; i++) {
 		SurvivalInv_CraftXY(s, i, &x, &y);
 		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CRAFT_BASE + i;
 	}
-	if (SurvivalInv_InSlot(mx, my, s->resultX, s->resultY, s->slotSize)) return SURVINV_RESULT_HIT;
+	for (i = 0; i < SurvivalInv_ContainerCells(); i++) {
+		SurvivalInv_ContainerSlotXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CONTAINER_BASE + i;
+	}
+	if (craft > 0 &&
+		SurvivalInv_InSlot(mx, my, s->resultX, s->resultY, s->slotSize)) return SURVINV_RESULT_HIT;
 	return -1;
 }
 
-/* Raw id + count for any displayed slot index (storage/craft/result sentinel). */
+/* Raw id + count for any displayed slot index (storage/craft/container/result). */
 static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
 	if (slot == SURVINV_RESULT_HIT) {
 		*id = SurvivalTest_CraftResult(count);
+	} else if (slot >= SURVIVAL_CONTAINER_BASE) {
+		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
+		*id    = p->id;
+		*count = p->count;
 	} else if (slot >= SURVIVAL_CRAFT_BASE) {
 		*id    = SurvivalTest_CraftSlotId(slot - SURVIVAL_CRAFT_BASE);
 		*count = SurvivalTest_CraftSlotCount(slot - SURVIVAL_CRAFT_BASE);
@@ -2581,11 +2618,12 @@ static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
 	}
 }
 
-/* Pixel origin of any displayed slot index (storage/craft/result). */
+/* Pixel origin of any displayed slot index (storage/craft/container/result). */
 static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x, int* y) {
-	if (slot == SURVINV_RESULT_HIT)          { *x = s->resultX; *y = s->resultY; }
-	else if (slot >= SURVIVAL_CRAFT_BASE)    SurvivalInv_CraftXY(s, slot - SURVIVAL_CRAFT_BASE, x, y);
-	else                                     SurvivalInv_SlotXY(s, slot, x, y);
+	if (slot == SURVINV_RESULT_HIT)            { *x = s->resultX; *y = s->resultY; }
+	else if (slot >= SURVIVAL_CONTAINER_BASE)  SurvivalInv_ContainerSlotXY(s, slot - SURVIVAL_CONTAINER_BASE, x, y);
+	else if (slot >= SURVIVAL_CRAFT_BASE)      SurvivalInv_CraftXY(s, slot - SURVIVAL_CRAFT_BASE, x, y);
+	else                                       SurvivalInv_SlotXY(s, slot, x, y);
 }
 
 /* Total displayed picture slots and a mapping from 0..N-1 to slot indices */
@@ -2594,17 +2632,21 @@ static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x,
 /* Crafting slots only exist in Indev mode; plain c0.30-s shows storage only */
 /*  (it never had crafting), so its screen is byte-for-byte the old layout. */
 static int SurvivalInv_DisplayCount(void) {
-	/* hotbar row + storage, plus (Indev) the active craft cells + result slot */
+	/* hotbar row + storage, plus (Indev) either the open container's slots */
+	/*  or the active craft cells + result slot */
 	int n = SURVIVAL_HOTBAR_SLOTS + SURVINV_STORAGE_SLOTS;
-	if (IndevTest_Enabled) n += SurvivalInv_CraftCells() + 1;
-	return n;
+	if (!IndevTest_Enabled) return n;
+	if (SurvivalInv_ContainerCells()) return n + SurvivalInv_ContainerCells();
+	return n + SurvivalInv_CraftCells() + 1;
 }
 static int SurvivalInv_DisplaySlot(int n) {
-	int cells = SurvivalInv_CraftCells();
+	int cells = SurvivalInv_CraftCells(), cont = SurvivalInv_ContainerCells();
 	if (n < SURVIVAL_HOTBAR_SLOTS) return n; /* hotbar row first */
 	n -= SURVIVAL_HOTBAR_SLOTS;
 	if (n < SURVINV_STORAGE_SLOTS)         return SURVIVAL_HOTBAR_SLOTS + n;
-	if (n < SURVINV_STORAGE_SLOTS + cells) return SURVIVAL_CRAFT_BASE + (n - SURVINV_STORAGE_SLOTS);
+	n -= SURVINV_STORAGE_SLOTS;
+	if (cont)                              return SURVIVAL_CONTAINER_BASE + n;
+	if (n < cells)                         return SURVIVAL_CRAFT_BASE + n;
 	return SURVINV_RESULT_HIT;
 }
 
@@ -2832,22 +2874,70 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
 
 	{
+	int  contKind = IndevTest_OpenKind();
 	cc_bool workbench = IndevTest_Enabled && SurvivalTest_CraftDim() == 3;
-	GfxResourceID guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
+	GfxResourceID guiTex;
+	if (contKind == INDEV_CONTAINER_CHEST)        guiTex = IndevTest_ContGuiTex();
+	else if (contKind == INDEV_CONTAINER_FURNACE) guiTex = IndevTest_FurnGuiTex();
+	else guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
 	if (IndevTest_Enabled && guiTex) {
-		/* Genuine look: the whole panel IS the 176x166 GUI texture (slot */
+		/* Genuine look: the whole panel IS the 176-wide GUI texture (slot */
 		/*  bevels, craft arrow, and - for the pocket inventory - the armor */
-		/*  boxes and doll window). crafting.png for the workbench, else */
+		/*  boxes and doll window). crafting.png for the workbench, */
+		/*  container.png for a chest, furnace.png for a furnace, else */
 		/*  inventory.png. */
 		struct Texture panel;
 		panel.ID     = guiTex;
 		panel.x      = (short)s->panelX;
 		panel.y      = (short)s->panelY;
-		panel.width  = (cc_uint16)s->panelW;
-		panel.height = (cc_uint16)s->panelH;
-		panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
-		panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
-		Texture_Render(&panel);
+		if (contKind == INDEV_CONTAINER_CHEST) {
+			/* GuiChest composes the panel from two strips of container.png: */
+			/*  rows strip (0,0)-(176, rows*18+17=71), then the player- */
+			/*  inventory strip (0,126)-(176,222) below it. */
+			int topH = (int)(71 * s->texF);
+			panel.width  = (cc_uint16)s->panelW;
+			panel.height = (cc_uint16)topH;
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 71.0f / 256.0f;
+			Texture_Render(&panel);
+			panel.y      = (short)(s->panelY + topH);
+			panel.height = (cc_uint16)(s->panelH - topH);
+			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
+			Texture_Render(&panel);
+		} else {
+			panel.width  = (cc_uint16)s->panelW;
+			panel.height = (cc_uint16)s->panelH;
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
+			Texture_Render(&panel);
+		}
+
+		if (contKind == INDEV_CONTAINER_FURNACE) {
+			/* GuiFurnace overlays. Flame while burning: dest (56, 36+12-h), */
+			/*  src (176, 12-h) 14 x (h+2), h = burnTime*12/currentBurn. */
+			/*  Progress arrow: dest (79,34), src (176,14) (w+1) x 16, */
+			/*  w = cookTime*24/200. */
+			struct Texture ovl;
+			int h = IndevTest_FurnaceBurnScaled();
+			int w = IndevTest_FurnaceCookScaled();
+			ovl.ID = guiTex;
+			if (h > 0) {
+				ovl.x      = (short)(s->panelX + (int)(56 * s->texF));
+				ovl.y      = (short)(s->panelY + (int)((36 + 12 - h) * s->texF));
+				ovl.width  = (cc_uint16)(int)(14 * s->texF);
+				ovl.height = (cc_uint16)(int)((h + 2) * s->texF);
+				ovl.uv.u1  = 176.0f / 256.0f;      ovl.uv.v1 = (12.0f - h) / 256.0f;
+				ovl.uv.u2  = 190.0f / 256.0f;      ovl.uv.v2 = 14.0f / 256.0f;
+				Texture_Render(&ovl);
+			}
+			ovl.x      = (short)(s->panelX + (int)(79 * s->texF));
+			ovl.y      = (short)(s->panelY + (int)(34 * s->texF));
+			ovl.width  = (cc_uint16)(int)((w + 1) * s->texF);
+			ovl.height = (cc_uint16)(int)(16 * s->texF);
+			ovl.uv.u1  = 176.0f / 256.0f;              ovl.uv.v1 = 14.0f / 256.0f;
+			ovl.uv.u2  = (176.0f + w + 1) / 256.0f;    ovl.uv.v2 = 30.0f / 256.0f;
+			Texture_Render(&ovl);
+		}
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 
 		/* GuiContainer's mouse-over highlight: translucent white over the */
@@ -2867,10 +2957,12 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
 	Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
 
-	/* Paperdoll preview box: recessed dark square */
-	b = s->dollBoxSize;
-	Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
-	Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+	/* Paperdoll preview box: recessed dark square (not in container GUIs) */
+	if (contKind == INDEV_CONTAINER_NONE) {
+		b = s->dollBoxSize;
+		Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
+		Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+	}
 
 	/* Slot backgrounds (storage + craft grid + result): recessed bevel */
 	for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
@@ -2955,8 +3047,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	}
 
 	/* 3D paperdoll (only the pocket inventory has a doll window; the */
-	/*  workbench's crafting.png has none). */
-	if (SurvivalTest_CraftDim() != 3) SurvivalInv_RenderDoll(s);
+	/*  workbench/chest/furnace GUIs have none). */
+	if (SurvivalTest_CraftDim() != 3 &&
+		IndevTest_OpenKind() == INDEV_CONTAINER_NONE) SurvivalInv_RenderDoll(s);
 }
 
 static void SurvivalInvScreen_Init(void* screen) {
@@ -2978,6 +3071,7 @@ static void SurvivalInvScreen_Free(void* screen) {
 	s->heldSlot = -1;
 	/* Safety net: any close path that bypassed the handlers still refunds. */
 	SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+	IndevTest_CloseContainer();
 }
 
 static void SurvivalInvScreen_ContextLost(void* screen) {
@@ -3019,16 +3113,20 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/* Genuine GuiInventory: a 176x166 texture panel, slots on its fixed */
 		/*  18px grid - craft 2x2 at (88,26), result (144,36), storage (8,84), */
 		/*  hotbar (8,142), doll window (26,8)-(74,78). texF scales it all. */
+		/* GuiChest is 176x168 (114 + 3 rows * 18) with the player rows one */
+		/*  pixel lower (85/143) - genuine to this version. GuiFurnace uses */
+		/*  the standard 176x166 layout. */
+		cc_bool chest = IndevTest_OpenKind() == INDEV_CONTAINER_CHEST;
 		float f = s->slotSize / 18.0f;
 		s->texF   = f;
 		s->panelW = (int)(176 * f);
-		s->panelH = (int)(166 * f);
+		s->panelH = (int)((chest ? 168 : 166) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
 		s->gridX   = s->panelX + (int)(8   * f);
-		s->gridY   = s->panelY + (int)(84  * f);
-		s->hotY    = s->panelY + (int)(142 * f);
+		s->gridY   = s->panelY + (int)((chest ? 85  : 84)  * f);
+		s->hotY    = s->panelY + (int)((chest ? 143 : 142) * f);
 		if (SurvivalTest_CraftDim() == 3) {
 			/* GuiCrafting (crafting.png): 3x3 grid at (30,17), result (124,35), */
 			/*  no paperdoll window. */
@@ -3109,6 +3207,7 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 		/* Clicked fully outside the window - refund cursor + grid and close */
 		SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
 		Gui_Remove((struct Screen*)s);
 		return;
 	}
@@ -3122,10 +3221,13 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 
 static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
+	/* E closes too, mirroring the survival E-to-open binding. */
+	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE ||
+		(SurvivalTest_Enabled && key == 'E')) {
 		s->heldSlot = -1;
 		SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
 		Gui_Remove((struct Screen*)s);
 	}
 	/* Right mouse arrives as a key event, not a pointer event - route it */

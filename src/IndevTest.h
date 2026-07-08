@@ -3,6 +3,8 @@
 #include "Core.h"
 #include "Graphics.h"
 #include "BlockID.h"
+#include "Vectors.h"
+#include "SurvivalTest.h" /* struct SurvivalSlot (shared container slot type) */
 CC_BEGIN_HEADER
 
 /* Indev (in-20100223) gamemode - version layer on top of the survival core.
@@ -47,6 +49,38 @@ cc_bool IndevTest_CanHarvest(int heldId, BlockID block);
 /* Matches a gw*gh crafting grid of full-space ids (0 = empty) against the */
 /*  in-20100223 recipe list. True + result id/count when a recipe fits. */
 cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId, int* outCount);
+
+/* The furnace gui/furnace.png and chest gui/container.png (0 until loaded). */
+GfxResourceID IndevTest_FurnGuiTex(void);
+GfxResourceID IndevTest_ContGuiTex(void);
+
+/* Container (chest/furnace) tile entities - per-position storage, ported */
+/*  from TileEntityChest/TileEntityFurnace (in-20100223). */
+enum IndevContainerKind {
+	INDEV_CONTAINER_NONE  = 0,
+	INDEV_CONTAINER_CHEST = 1, /* 27 slots */
+	INDEV_CONTAINER_FURNACE = 2 /* 3 slots: 0 input, 1 fuel, 2 output */
+};
+/* Whether the block is a container (chest/furnace) - right-clicking one is */
+/*  always consumed (blockActivated returns true even when a blocked chest */
+/*  refuses to open), so no block gets placed against it. */
+cc_bool IndevTest_IsContainerBlock(BlockID b);
+/* Opens the container at pos if that block is a chest/furnace: finds (or */
+/*  lazily creates) its tile entity and returns its kind, or NONE. Mirrors */
+/*  BlockChest.blockActivated's rule that a chest with a solid block directly */
+/*  above it refuses to open. */
+int  IndevTest_OpenContainer(IVec3 pos);
+/* Kind of the currently open container (NONE when no container screen). */
+int  IndevTest_OpenKind(void);
+/* Closes the open container (contents stay in the tile entity). */
+void IndevTest_CloseContainer(void);
+/* Slot i of the OPEN container (0..26 chest, 0..2 furnace). Never NULL - */
+/*  returns a discard slot when nothing is open, so clicks can't corrupt. */
+struct SurvivalSlot* IndevTest_ContainerSlot(int i);
+/* Furnace GUI overlays: flame height 0..12 (burnTime*12/currentItemBurnTime) */
+/*  and arrow width 0..24 (cookTime*24/200) of the OPEN furnace. */
+int  IndevTest_FurnaceBurnScaled(void);
+int  IndevTest_FurnaceCookScaled(void);
 
 CC_END_HEADER
 #endif
