@@ -2687,13 +2687,15 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_CalcPerspectiveMatrix(&proj, SURVINV_DOLL_FOV * MATH_DEG2RAD, aspect, 16.0f);
 
 	savedView   = Gfx.View;
-	Gfx.View    = Matrix_Identity;
+	Gfx.View    = Matrix_Identity; /* Model_Render composes the model transform with Gfx.View */
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Gfx_LoadMatrix(MATRIX_PROJ, &proj);
 
 	/* Matches the 1px-inset black square drawn in SurvivalInvScreen_Render, */
 	/*  so the 3D render area never overflows into the box's border pixels. */
-	Gfx_SetViewport(boxX + 1, Game.Height - boxY - boxH + 1, boxSize - 2, boxH - 2);
+	/* Viewport and scissor both take top-left-origin window coordinates */
+	/*  (they must describe the SAME region - see Graphics.h). */
+	Gfx_SetViewport(boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
 	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
 	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
 
@@ -2718,8 +2720,17 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_SetScissor (0, 0, Game.Width, Game.Height);
 
 	Gfx.View = savedView;
-	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
-	Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
+	/* Restore the 2D pass's matrices, NOT the world's (Gfx.Projection holds */
+	/*  the 3D perspective matrix - loading that mid-GUI-pass makes every 2D */
+	/*  quad drawn after the doll project through a perspective transform, */
+	/*  garbling the rest of the frame's GUI). Rebuild the exact ortho + */
+	/*  identity view that Gfx_Begin2D set up. */
+	{
+		struct Matrix ortho;
+		Gfx_CalcOrthoMatrix(&ortho, (float)Game.Width, (float)Game.Height, -100.0f, 1000.0f);
+		Gfx_LoadMatrix(MATRIX_PROJ, &ortho);
+		Gfx_LoadMatrix(MATRIX_VIEW, &Matrix_Identity);
+	}
 }
 
 static void SurvivalInvScreen_BuildMesh(void* screen) {

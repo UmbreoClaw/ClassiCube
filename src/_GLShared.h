@@ -439,7 +439,11 @@ void Gfx_OnWindowResize(void) {
 }
 
 void Gfx_SetViewport(int x, int y, int w, int h) {
-	_glViewport(x, y, w, h);
+	/* Gfx viewport coordinates use a top-left origin (matching the scissor */
+	/*  region - see Graphics.h - and the Direct3D backends), but glViewport */
+	/*  uses a bottom-left origin, so the Y coordinate must be flipped - the */
+	/*  same way Gfx_SetScissor below flips it for glScissor. */
+	_glViewport(x, Game.Height - h - y, w, h);
 }
 
 void Gfx_SetScissor(int x, int y, int w, int h) {

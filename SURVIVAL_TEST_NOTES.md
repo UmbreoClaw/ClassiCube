@@ -143,6 +143,61 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — paperdoll Direct3D fix (viewport origin) + GUI-corruption fix
+
+User: "work on the paper doll fixes and the d3dx fix as well, it seems like the
+geometry of the model was fucked up as well." Two real, backend-level bugs found
+in `SurvivalInv_RenderDoll` — the previous "3D-in-2D-pass depth-stencil state
+object" theory was a red herring (D3D11's `Gfx_SetDepthTest/Write` apply
+immediately via `OM_UpdateDepthState`; D3D9 uses plain SetRenderState). The
+actual culprits:
+
+### Bug 1 — viewport Y origin mismatch (the D3D "fucked-up geometry")
+`Gfx_SetScissor` takes **top-left**-origin window coords on every backend
+(it flips internally for GL's bottom-left `glScissor`). But GL's
+`Gfx_SetViewport` was passing its argument **straight** to `glViewport`
+(bottom-left) with no flip — so the doll code had to pre-flip the Y itself
+(`Game.Height - boxY - boxH + 1`) to make GL correct. That pre-flipped,
+bottom-left Y was then *also* handed to the Direct3D backends, whose
+`Gfx_SetViewport` treats Y as **top-left** → the D3D viewport landed in the
+wrong vertical half of the screen, so only a clipped sliver of the model fell
+inside the (correctly-placed, top-left) scissor rect = "geometry fucked up".
+
+Fix: make GL's `Gfx_SetViewport` flip Y internally
+(`_glViewport(x, Game.Height - h - y, w, h)`), exactly mirroring
+`Gfx_SetScissor` right above it, so **viewport and scissor now take the same
+top-left coords on all backends** (which Graphics.h already documents: "This
+region should normally be the same as the scissor region"). The doll then
+passes plain top-left `boxY+1` to both. GL output is byte-identical to before
+(the flip reproduces the old manual math); D3D now gets the correct region.
+- Safe globally: the only non-`(0,0,W,H)` viewport caller besides the doll is
+  console splitscreen (`Game.c`), and every splitscreen platform uses its own
+  console graphics backend — none include `_GLShared.h`. All the
+  `(0,0,Width,Height)` callers are flip-invariant.
+
+### Bug 2 — world projection matrix leaked into the rest of the 2D pass
+On exit the doll restored `Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection)` —
+but `Gfx.Projection` holds the **3D world perspective** matrix, not the 2D
+ortho that `Gfx_Begin2D` had set. Any GUI drawn *after* the doll in the same
+2D pass (other screens, Draw2D hooks, the pause/options overlay) then projected
+through perspective → garbled/invisible widgets. This matches earlier live
+reports of "hides buttons when hitting escape" and "blocks floating in the
+hotbar". Fix: rebuild the exact ortho (`Gfx_CalcOrthoMatrix(..-100,1000)`) +
+identity view that `Gfx_Begin2D` uses, instead of reloading the world matrix.
+
+Depth handling verified consistent per-backend: `Gfx_ClearBuffers(DEPTH)`
+clears to each backend's "far" value (GL 1.0 + LEQUAL + standard proj; D3D
+0.0 + GREATEREQUAL + reversed-Z proj), and `Gfx_CalcPerspectiveMatrix`
+emits the matching convention, so the cleared doll depth range is correct
+everywhere. Depth func is set once at init and never changed, so it stays
+right through the model draw.
+
+Linux/GL build clean. **User retest**: the doll should now render inside its
+box on Direct3D9/11 (not just OpenGL), and opening then Esc-ing the survival
+inventory should no longer corrupt other GUI.
+
+---
+
 ## SESSION LOG — single gamemode enum replaces the two mode booleans
 
 User asked for a better scheme than "a bunch of flags that can unfortunately
