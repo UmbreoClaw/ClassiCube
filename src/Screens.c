@@ -2738,7 +2738,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	/*  iso pictures - genuine renderBlockOnInventory blocks are big too), */
 	/*  centred on the cell centre (item origin + 8 texture units). */
 	{
-	float itemHalf = IndevTest_Enabled ? s->texF * 8.0f : halfSize;
+	float itemHalf = IndevTest_Enabled ? s->texF * 7.0f : halfSize;
 	int   ictr     = IndevTest_Enabled ? (int)(s->texF * 8.0f) : s->slotSize / 2;
 
 	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
@@ -2785,6 +2785,15 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 				s->countAtlas.curX  = slotX + 2;
 			}
 			TextAtlas_AddInt(&s->countAtlas, count, &cur);
+		}
+		/* Cursor-held stack count follows the mouse (blocks and items alike). */
+		if (SurvivalTest_CursorCount() > 1 && s->mouseX >= 0) {
+			int cc    = SurvivalTest_CursorCount();
+			int ndig  = cc >= 100 ? 3 : (cc >= 10 ? 2 : 1);
+			int half  = (int)(s->texF * 8.0f);
+			s->countAtlas.tex.y = s->mouseY + half - s->countAtlas.tex.height;
+			s->countAtlas.curX  = s->mouseX + half - ndig * s->countAtlas.offset;
+			TextAtlas_AddInt(&s->countAtlas, cc, &cur);
 		}
 		s->countAtlas.tex.y = savedY;
 	}
@@ -2886,7 +2895,8 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	/*  icons from items.png; blocks already drew via the ISO pass above. */
 	if (IndevTest_Enabled && IndevTest_ItemsTex()) {
 		struct Texture itex;
-		int isize = IndevTest_Enabled ? (int)(s->texF * 16.0f) : (int)(s->slotSize * 0.75f);
+		int isize = IndevTest_Enabled ? (int)(s->texF * 14.0f) : (int)(s->slotSize * 0.75f);
+		int inset = IndevTest_Enabled ? (int)(s->texF * 1.0f) : (s->slotSize - isize) / 2;
 		itex.ID = IndevTest_ItemsTex();
 		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
 			int slot = SurvivalInv_DisplaySlot(i), id, count;
@@ -2895,8 +2905,8 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
 
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
-			itex.x = (short)(IndevTest_Enabled ? slotX : slotX + (s->slotSize - isize) / 2);
-			itex.y = (short)(IndevTest_Enabled ? slotY : slotY + (s->slotSize - isize) / 2);
+			itex.x = (short)(slotX + inset);
+			itex.y = (short)(slotY + inset);
 			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
 			Texture_Render(&itex);
 		}
@@ -2916,7 +2926,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	if (IndevTest_Enabled && SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() >= 256
 		&& IndevTest_ItemsTex()) {
 		struct Texture ctex;
-		int isize = (int)(s->slotSize * 0.75f);
+		int isize = (int)(s->texF * 14.0f);
 		if (IndevTest_ItemSpriteUV(SurvivalTest_CursorId(),
 				&ctex.uv.u1, &ctex.uv.v1, &ctex.uv.u2, &ctex.uv.v2)) {
 			ctex.ID     = IndevTest_ItemsTex();
