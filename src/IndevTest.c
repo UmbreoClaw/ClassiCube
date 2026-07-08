@@ -13,6 +13,7 @@
 #include "World.h"
 #include "Event.h"
 #include "ExtMath.h"
+#include "Entity.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -391,6 +392,49 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_FURNACE     68
 #define INDEV_BLOCK_FURNACE_LIT 69
 #define INDEV_BLOCK_TORCH       70
+/* Directional variants: front face per Indev facing metadata 2/3/4/5 */
+/*  (north -Z / south +Z / west -X / east +X), id = base + (meta - 2). */
+/*  The canonical ids above stay the inventory/recipe/drop form (their */
+/*  front faces -Z, i.e. meta 2); placing converts to a variant. */
+#define INDEV_BLOCK_CHEST_V0    71 /* 71-74 */
+#define INDEV_BLOCK_FURN_V0     75 /* 75-78 idle */
+#define INDEV_BLOCK_FURNL_V0    79 /* 79-82 lit */
+
+static cc_bool Indev_IsChestBlock(BlockID b) {
+	return b == INDEV_BLOCK_CHEST || (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3);
+}
+static cc_bool Indev_IsFurnaceIdle(BlockID b) {
+	return b == INDEV_BLOCK_FURNACE || (b >= INDEV_BLOCK_FURN_V0 && b <= INDEV_BLOCK_FURN_V0 + 3);
+}
+static cc_bool Indev_IsFurnaceLit(BlockID b) {
+	return b == INDEV_BLOCK_FURNACE_LIT || (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3);
+}
+
+/* Inventory/drop form of a block (directional variants -> canonical id). */
+BlockID IndevTest_CanonicalBlock(BlockID b) {
+	if (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3) return INDEV_BLOCK_CHEST;
+	if (b >= INDEV_BLOCK_FURN_V0  && b <= INDEV_BLOCK_FURN_V0  + 3) return INDEV_BLOCK_FURNACE;
+	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return INDEV_BLOCK_FURNACE_LIT;
+	return b;
+}
+
+/* Indev facing metadata (2-5) of a container block; canonical ids face -Z. */
+int IndevTest_BlockFacingMeta(BlockID b) {
+	if (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3) return 2 + (b - INDEV_BLOCK_CHEST_V0);
+	if (b >= INDEV_BLOCK_FURN_V0  && b <= INDEV_BLOCK_FURN_V0  + 3) return 2 + (b - INDEV_BLOCK_FURN_V0);
+	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return 2 + (b - INDEV_BLOCK_FURNL_V0);
+	return 2;
+}
+
+/* Directional variant of a canonical container for facing metadata 2-5. */
+BlockID IndevTest_FacingVariant(BlockID canonical, int meta) {
+	int k = meta - 2;
+	if (k < 0 || k > 3) k = 0;
+	if (canonical == INDEV_BLOCK_CHEST)       return (BlockID)(INDEV_BLOCK_CHEST_V0 + k);
+	if (canonical == INDEV_BLOCK_FURNACE)     return (BlockID)(INDEV_BLOCK_FURN_V0  + k);
+	if (canonical == INDEV_BLOCK_FURNACE_LIT) return (BlockID)(INDEV_BLOCK_FURNL_V0 + k);
+	return canonical;
+}
 
 static void IndevBlock_Define(BlockID id, const char* name, int top, int side,
 							  int front, int bottom, cc_uint8 sound, int hardness) {
@@ -421,12 +465,35 @@ static void IndevBlock_Define(BlockID id, const char* name, int top, int side,
 static void IndevBlocks_Define(void) {
 	/* tiles: 96 wb top, 97 wb side, 98 wb front, 99 furn front, 100 furn lit, */
 	/*  101 furn side, 102 furn top, 103 chest front, 104 chest side, 105 top */
+	/* front texture rotated onto the face matching Indev metadata 2/3/4/5 */
+	static const cc_uint8 metaFace[4] = { FACE_ZMIN, FACE_ZMAX, FACE_XMIN, FACE_XMAX };
+	int k;
+
 	/* Hardness from Block.java registration: workbench/chest setHardness(2.5F), */
 	/*  furnace 3.5F, torch 0.0F - our units are 20 per hardness-second. */
 	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  50);
 	IndevBlock_Define(INDEV_BLOCK_CHEST,       "Chest",     105, 104, 103, 105, SOUND_WOOD, 50);
 	IndevBlock_Define(INDEV_BLOCK_FURNACE,     "Furnace",   102, 101,  99, 102, SOUND_STONE, 70);
 	IndevBlock_Define(INDEV_BLOCK_FURNACE_LIT, "Furnace (lit)", 102, 101, 100, 102, SOUND_STONE, 70);
+
+	/* Directional variants (placement rotates the canonical block so the */
+	/*  front faces the player, like BlockFurnace.setDefaultDirection) */
+	for (k = 0; k < 4; k++) {
+		IndevBlock_Define((BlockID)(INDEV_BLOCK_CHEST_V0 + k), "Chest",
+						  105, 104, 104, 105, SOUND_WOOD, 50);
+		Block_Tex((BlockID)(INDEV_BLOCK_CHEST_V0 + k), metaFace[k]) = 103;
+		Block_DefineCustom((BlockID)(INDEV_BLOCK_CHEST_V0 + k), false);
+
+		IndevBlock_Define((BlockID)(INDEV_BLOCK_FURN_V0 + k),  "Furnace",
+						  102, 101, 101, 102, SOUND_STONE, 70);
+		Block_Tex((BlockID)(INDEV_BLOCK_FURN_V0 + k), metaFace[k]) = 99;
+		Block_DefineCustom((BlockID)(INDEV_BLOCK_FURN_V0 + k), false);
+
+		IndevBlock_Define((BlockID)(INDEV_BLOCK_FURNL_V0 + k), "Furnace (lit)",
+						  102, 101, 101, 102, SOUND_STONE, 70);
+		Block_Tex((BlockID)(INDEV_BLOCK_FURNL_V0 + k), metaFace[k]) = 100;
+		Block_DefineCustom((BlockID)(INDEV_BLOCK_FURNL_V0 + k), false);
+	}
 
 	/* Torch: a fullbright sprite, walk-through, instant to break */
 	IndevBlock_Define(INDEV_BLOCK_TORCH, "Torch", 106, 106, 106, 106, SOUND_WOOD, 0);
@@ -462,8 +529,8 @@ static struct SurvivalSlot indev_discardSlot; /* safe target when nothing is ope
 static RNGState indev_teRng;
 
 static int IndevTest_ContainerKindOf(BlockID b) {
-	if (b == INDEV_BLOCK_CHEST) return INDEV_CONTAINER_CHEST;
-	if (b == INDEV_BLOCK_FURNACE || b == INDEV_BLOCK_FURNACE_LIT) return INDEV_CONTAINER_FURNACE;
+	if (Indev_IsChestBlock(b)) return INDEV_CONTAINER_CHEST;
+	if (Indev_IsFurnaceIdle(b) || Indev_IsFurnaceLit(b)) return INDEV_CONTAINER_FURNACE;
 	return INDEV_CONTAINER_NONE;
 }
 
@@ -635,8 +702,11 @@ static void Furnace_Tick(struct IndevTE* te) {
 
 	burning = te->burnTime > 0;
 	if (burning != wasBurning) {
+		/* Preserve the facing across the lit/unlit swap */
+		BlockID curBlock = World_GetBlock(te->pos.x, te->pos.y, te->pos.z);
+		int meta = IndevTest_BlockFacingMeta(curBlock);
 		Game_ChangeBlock(te->pos.x, te->pos.y, te->pos.z,
-			burning ? INDEV_BLOCK_FURNACE_LIT : INDEV_BLOCK_FURNACE);
+			IndevTest_FacingVariant(burning ? INDEV_BLOCK_FURNACE_LIT : INDEV_BLOCK_FURNACE, meta));
 	}
 	if (slotsChanged) SurvivalTest_InvChanged();
 }
@@ -666,26 +736,55 @@ static void IndevTest_Tick(struct ScheduledTask* task) {
 	}
 }
 
-/* Tile entity lifecycle, driven off block changes: a chest scatters its
-    contents when broken (BlockChest.onBlockRemoval); a furnace's contents
-    are silently destroyed (faithful - BlockContainer.onBlockRemoval only
-    removes the tile entity); the lit<->unlit furnace swap keeps its state. */
-static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, BlockID block) {
-	cc_bool oldFurn, nowFurn;
+/* Container-block removal: a chest scatters its contents (BlockChest.
+    onBlockRemoval); a furnace's contents are silently destroyed (faithful -
+    BlockContainer.onBlockRemoval only removes the tile entity). PUBLIC so
+    the explosion path (which removes blocks without raising BlockChanged)
+    can drive the same lifecycle - otherwise TNT/creeper blasts leaked the
+    tile entity and ate chest contents without the scatter. */
+void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock) {
 	int i;
 	if (!IndevTest_Enabled) return;
+	if (IndevTest_ContainerKindOf(oldBlock) == INDEV_CONTAINER_NONE) return;
 
-	oldFurn = oldBlock == INDEV_BLOCK_FURNACE || oldBlock == INDEV_BLOCK_FURNACE_LIT;
-	nowFurn = block    == INDEV_BLOCK_FURNACE || block    == INDEV_BLOCK_FURNACE_LIT;
+	i = IndevTE_Find(coords);
+	if (i < 0) return;
+	if (Indev_IsChestBlock(oldBlock)) IndevTE_Scatter(&indev_tes[i]);
+	if (indev_openTE == i) indev_openTE = -1; /* screen falls back to the discard slot */
+	indev_tes[i].used = false;
+}
+
+/* Tile entity lifecycle + placement rotation, driven off block changes. */
+static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, BlockID block) {
+	cc_bool oldFurn, nowFurn;
+	struct Entity* p;
+	int q, meta;
+	if (!IndevTest_Enabled) return;
+
+	oldFurn = Indev_IsFurnaceIdle(oldBlock) || Indev_IsFurnaceLit(oldBlock);
+	nowFurn = Indev_IsFurnaceIdle(block)    || Indev_IsFurnaceLit(block);
 	if (oldFurn && nowFurn) return; /* lit/unlit swap - state survives */
 
-	if (oldBlock == INDEV_BLOCK_CHEST || oldFurn) {
-		i = IndevTE_Find(coords);
-		if (i < 0) return;
-		if (oldBlock == INDEV_BLOCK_CHEST) IndevTE_Scatter(&indev_tes[i]);
-		if (indev_openTE == i) indev_openTE = -1; /* screen falls back to the discard slot */
-		indev_tes[i].used = false;
+	IndevTest_NotifyBlockRemoved(coords, oldBlock);
+
+	/* Player placed a canonical chest/furnace: rotate it so the front faces */
+	/*  the player (BlockFurnace.setDefaultDirection / Beta onBlockPlacedBy: */
+	/*  quadrant of the placer's yaw picks metadata 2/5/3/4). */
+	if (block == INDEV_BLOCK_CHEST || block == INDEV_BLOCK_FURNACE) {
+		p = &Entities.CurPlayer->Base;
+		q = (int)Math_Floor(p->Yaw * 4.0f / 360.0f + 0.5f) & 3;
+		meta = q == 0 ? 2 : (q == 1 ? 5 : (q == 2 ? 3 : 4));
+		Game_UpdateBlock(coords.x, coords.y, coords.z,
+			IndevTest_FacingVariant(block, meta)); /* no event - avoids recursion */
 	}
+}
+
+/* Map loading runs Game_Reset, which wipes ALL custom block definitions - */
+/*  the Indev block ids survive in the map data but rendered as undefined */
+/*  (the reported "green blocks"). Re-define them once the map is in. */
+static void OnNewMapLoaded(void) {
+	if (!IndevTest_Enabled) return;
+	IndevBlocks_Define();
 }
 
 static void OnInit(void) {
@@ -739,7 +838,14 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 	case 68: return 61; /* furnace idle (exact) */
 	case 69: return 62; /* furnace lit (exact) */
 	case 70: return 50; /* torch (exact) */
-	default: return b <= 49 ? b : 1; /* classic identity; anything else -> stone */
+	default:
+		if (b <= 49) return b; /* classic identity */
+		/* directional variants: same Indev block, facing carried by the */
+		/*  Data array metadata nibble (IndevTest_BlockFacingMeta) */
+		if (Indev_IsChestBlock(b))   return 54;
+		if (Indev_IsFurnaceIdle(b))  return 61;
+		if (Indev_IsFurnaceLit(b))   return 62;
+		return 1; /* anything else -> stone */
 	}
 }
 
@@ -760,6 +866,15 @@ BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	case 62: return 69; /* furnace lit */
 	default: return b <= 49 ? b : 0;
 	}
+}
+
+/* Whether a tile entity exists at the position (for .mclevel save: every */
+/*  container block must get a TileEntity entry, even never-opened ones - */
+/*  genuine Indev NPE-crashes opening a chest with no tile entity). */
+cc_bool IndevTest_HasTE(int x, int y, int z) {
+	IVec3 pos;
+	pos.x = x; pos.y = y; pos.z = z;
+	return IndevTE_Find(pos) >= 0;
 }
 
 int IndevTest_TENext(int prev) {
@@ -819,5 +934,6 @@ struct IGameComponent IndevTest_Component = {
 	OnInit,   /* Init  */
 	NULL,     /* Free  */
 	OnNewMap, /* Reset (reconnect) - same invalidation applies */
-	OnNewMap  /* OnNewMap */
+	OnNewMap, /* OnNewMap */
+	OnNewMapLoaded /* re-define the Indev blocks Game_Reset wiped */
 };

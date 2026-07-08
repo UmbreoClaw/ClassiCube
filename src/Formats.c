@@ -1400,6 +1400,8 @@ COMPOUND "MinecraftLevel" {
 	}
 }*/
 static int mcl_edgeHeight, mcl_sidesHeight;
+static BlockRaw* mcl_dataArr; /* Data array: light low nibble, metadata high */
+static cc_uint32 mcl_dataSize;
 
 static void MCLevel_ParseMap(struct NbtTag* tag) {
 	if (IsTag(tag, "width"))  { World.Width  = NbtTag_U16(tag); return; }
@@ -1409,6 +1411,11 @@ static void MCLevel_ParseMap(struct NbtTag* tag) {
 	if (IsTag(tag, "blocks")) {
 		World.Volume = tag->dataSize;
 		World.Blocks = Nbt_TakeArray(tag, ".mclevel map blocks");
+	}
+	if (IsTag(tag, "data") && IndevTest_Enabled) {
+		/* kept only for the facing metadata of chests/furnaces */
+		mcl_dataSize = tag->dataSize;
+		mcl_dataArr  = Nbt_TakeArray(tag, ".mclevel map data");
 	}
 }
 
@@ -1509,6 +1516,10 @@ static void MCLevel_ParseItemField(struct NbtTag* tag) {
 
 static void MCLevel_CommitItem(cc_bool toEntity) {
 	int slot = mcl_item.slot;
+	/* Block ids inside item stacks live in the genuine Indev id space too */
+	if (mcl_item.id > 0 && mcl_item.id < 256 && IndevTest_Enabled) {
+		mcl_item.id = IndevTest_BlockFromIndev((BlockRaw)mcl_item.id);
+	}
 	if (toEntity) {
 		/* armor slots are saved as 100-103; no armor system yet - skipped */
 		if (slot >= 0 && slot < SURVIVAL_INV_SLOTS) {
@@ -1656,12 +1667,23 @@ static cc_result MCLevel_Load(struct Stream* stream) {
 
 	/* Genuine Indev block ids 50-62 (torch/chest/workbench/furnaces/...) */
 	/*  collide with CPE ids - remap them onto the Indev-mode blocks. Only */
-	/*  done in Indev mode, where those blocks are actually defined. */
+	/*  done in Indev mode, where those blocks are actually defined. The */
+	/*  Data array's metadata nibble picks the directional chest/furnace */
+	/*  variant so the facing survives the round trip. */
 	if (!res && World.Blocks && IndevTest_Enabled) {
 		for (i = 0; i < World.Volume; i++) {
-			if (World.Blocks[i] >= 50) World.Blocks[i] = IndevTest_BlockFromIndev(World.Blocks[i]);
+			BlockRaw b;
+			if (World.Blocks[i] < 50) continue;
+			b = IndevTest_BlockFromIndev(World.Blocks[i]);
+			if (mcl_dataArr && i < mcl_dataSize && IndevTest_IsContainerBlock(b)) {
+				b = (BlockRaw)IndevTest_FacingVariant(b, (mcl_dataArr[i] >> 4) & 15);
+			}
+			World.Blocks[i] = b;
 		}
 	}
+	Mem_Free(mcl_dataArr);
+	mcl_dataArr  = NULL;
+	mcl_dataSize = 0;
 	return res;
 }
 
@@ -1688,8 +1710,11 @@ static int MCLevel_PackRGB(PackedCol c) {
 }
 
 /* One item compound inside a list (list elements are unnamed - fields only, */
-/*  then the compound terminator). */
+/*  then the compound terminator). Block ids are converted to the genuine */
+/*  Indev id space - stacks holding our custom ids (workbench 66 etc) would */
+/*  be null entries in real Indev's item table and CRASH its GUI rendering. */
 static cc_uint8* MCLevel_WriteItem(cc_uint8* cur, int slot, int id, int count, int damage) {
+	if (id > 0 && id < 256) id = IndevTest_BlockToIndev((BlockRaw)id);
 	cur = Nbt_WriteUInt8 (cur, "Slot",  (cc_uint8)slot);
 	cur = Nbt_WriteUInt16(cur, "id",    (cc_uint16)id);
 	cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)count);
@@ -1774,13 +1799,20 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		if ((res = Stream_Write(stream, chunk, n))) return res;
 	}
 
-	/* Data array: metadata high nibble (none) | light low nibble (full) */
+	/* Data array: metadata high nibble | light low nibble (full light). */
+	/*  Containers carry their facing metadata (2-5); torches standing (5). */
 	cur = buffer;
 	cur = Nbt_WriteArray(cur, "Data", World.Volume);
 	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
-	Mem_Set(chunk, 0x0F, sizeof(chunk));
 	for (i = 0; i < World.Volume; i += n) {
 		n = min(World.Volume - i, sizeof(chunk));
+		for (blk = 0; blk < (cc_uint32)n; blk++) {
+			BlockRaw b = World.Blocks[i + blk];
+			cc_uint8  d = 0x0F;
+			if (IndevTest_IsContainerBlock(b))    d |= (cc_uint8)(IndevTest_BlockFacingMeta(b) << 4);
+			else if (IndevTest_Enabled && b == 70) d |= 5 << 4; /* torch: standing */
+			chunk[blk] = d;
+		}
 		if ((res = Stream_Write(stream, chunk, n))) return res;
 	}
 	cur = buffer;
@@ -1822,10 +1854,18 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		*cur++ = NBT_END; /* close player compound */
 	}
 
-	/* TileEntities: chests + furnaces with their contents */
+	/* TileEntities: chests + furnaces with their contents. EVERY container */
+	/*  block needs an entry - even never-opened ones (whose tile entity is */
+	/*  created lazily and so isn't in the pool): genuine Indev NPE-crashes */
+	/*  when opening a chest block that has no tile entity behind it. */
 	count = 0;
 	if (IndevTest_Enabled) {
 		for (te = IndevTest_TENext(-1); te >= 0; te = IndevTest_TENext(te)) count++;
+		for (i = 0; i < World.Volume; i++) {
+			if (!IndevTest_IsContainerBlock(World.Blocks[i])) continue;
+			World_Unpack(i, blk, n, id); /* x=blk (unused vars reused) */
+			if (!IndevTest_HasTE(blk, n, id)) count++;
+		}
 	}
 	cur = Nbt_WriteList(cur, "TileEntities", NBT_DICT, count);
 	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
@@ -1859,6 +1899,28 @@ cc_result MCLevel_Save(struct Stream* stream) {
 				if (cnt <= 0) continue;
 				cur = MCLevel_WriteItem(cur, n, id, cnt, dmg);
 			}
+			*cur++ = NBT_END; /* close tile entity compound */
+			if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+		}
+
+		/* Empty tile entities for container blocks never opened in-game */
+		for (i = 0; i < World.Volume; i++) {
+			int tx, ty, tz;
+			BlockRaw b = World.Blocks[i];
+			if (!IndevTest_IsContainerBlock(b)) continue;
+			World_Unpack(i, tx, ty, tz);
+			if (IndevTest_HasTE(tx, ty, tz)) continue;
+
+			cur = buffer;
+			cur = Nbt_WriteInt32(cur, "Pos", tx + (ty << 10) + (tz << 20));
+			if (IndevTest_CanonicalBlock(b) == 67) { /* chest */
+				cur = Nbt_WriteString(cur, "id", &chestId);
+			} else {
+				cur = Nbt_WriteString(cur, "id", &furnId);
+				cur = Nbt_WriteUInt16(cur, "BurnTime", 0);
+				cur = Nbt_WriteUInt16(cur, "CookTime", 0);
+			}
+			cur = Nbt_WriteList(cur, "Items", NBT_DICT, 0);
 			*cur++ = NBT_END; /* close tile entity compound */
 			if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
 		}

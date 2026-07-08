@@ -87,6 +87,18 @@ int  IndevTest_FurnaceCookScaled(void);
 /*  and ours (66-70 custom ids; lossy fallbacks for the rest - see tables). */
 BlockRaw IndevTest_BlockToIndev(BlockRaw b);
 BlockRaw IndevTest_BlockFromIndev(BlockRaw b);
+/* Directional container support: the inventory/drop (canonical) form of a */
+/*  block, its Indev facing metadata (2-5), and the directional variant of */
+/*  a canonical container for a given metadata. */
+BlockID IndevTest_CanonicalBlock(BlockID b);
+int     IndevTest_BlockFacingMeta(BlockID b);
+BlockID IndevTest_FacingVariant(BlockID canonical, int meta);
+/* Runs the container-removal lifecycle (chest scatter + tile entity */
+/*  destruction) - for removal paths that don't raise BlockChanged, like */
+/*  explosions. Safe to call for any block id. */
+void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock);
+/* Whether a tile entity exists at a position (save-side world scan). */
+cc_bool IndevTest_HasTE(int x, int y, int z);
 /* Tile entity iteration for .mclevel save: next used pool index after prev */
 /*  (start with -1), or -1 when done; then info + per-slot reads. */
 int  IndevTest_TENext(int prev);

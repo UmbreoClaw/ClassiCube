@@ -462,6 +462,8 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, cc_uint16 block) {
 /*  blocks that never drop a plain item at all (water/lava/bookshelf/TNT - */
 /*  TNT instead arms a fuse, handled separately by each caller). */
 static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, int* count) {
+	/* Directional chest/furnace variants drop their canonical block */
+	oldBlock   = IndevTest_CanonicalBlock(oldBlock);
 	*dropBlock = oldBlock;
 	*count     = 1;
 
@@ -536,8 +538,12 @@ static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, i
 /*  and rock/iron blocks yield nothing without a suitable pickaxe. */
 static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	int heldId = st_inv[Inventory.SelectedIndex].id;
-	cc_uint16 dropId = oldBlock; /* most blocks drop themselves */
+	cc_uint16 dropId;
 	int count = 1, i;
+
+	/* Directional chest/furnace variants drop their canonical block */
+	oldBlock = IndevTest_CanonicalBlock(oldBlock);
+	dropId   = oldBlock; /* most blocks drop themselves */
 
 	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); return; }
 	/* canHarvestBlock: rock/iron needs a pickaxe (see IndevTest_CanHarvest) */
@@ -2147,6 +2153,11 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 		} else {
 			SurvivalTest_ExplodeDropsForBlock(coords, block);
 			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+			/* Explosions remove blocks without raising BlockChanged, so */
+			/*  drive the container lifecycle (chest scatter, tile entity */
+			/*  destruction) explicitly - else blasted chests silently ate */
+			/*  their contents and leaked their tile entity. */
+			IndevTest_NotifyBlockRemoved(coords, block);
 		}
 	}}}
 

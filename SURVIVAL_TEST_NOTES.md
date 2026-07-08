@@ -143,6 +143,51 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — real-Indev interop fixes + directional chests/furnaces
+
+User LIVE-TESTED our .mclevel files in genuine Indev: terrain loads, tools
+keep durability - but clicking chests/crafting tables crashed Indev, and
+reloading in ClassiCube showed containers as undefined "green blocks".
+All root-caused and fixed, plus the review-confirmed explosion bug:
+
+1. **Indev crash on chest click**: tile entities are created lazily on first
+   open, so never-opened chests saved as a chest BLOCK with no TileEntity -
+   genuine BlockChest.blockActivated casts getBlockTileEntity() and NPEs.
+   Fix: MCLevel_Save scans the world and emits an empty TileEntity entry for
+   every container block not in the pool.
+2. **Indev crash on crafting table click** (and chest GUI): item stacks were
+   saved with OUR raw block ids - a workbench (66) or chest (67) in the
+   inventory is a null entry in Indev's item table, crashing GUI rendering
+   the moment any container screen draws the player inventory. Fix: item ids
+   < 256 are remapped to the Indev id space on save and back on load
+   (MCLevel_WriteItem / MCLevel_CommitItem).
+3. **"Green blocks" after ClassiCube reload**: Map_LoadFrom runs Game_Reset,
+   which wipes ALL custom block definitions; ids 66+ survive in the map but
+   render undefined (the ids still FUNCTIONED - container logic is id-based).
+   Fix: IndevTest registers OnNewMapLoaded -> IndevBlocks_Define() again.
+4. **Explosions bypassed the TE lifecycle** (adversarial review, CONFIRMED):
+   SurvivalTest_Explode removes blocks via bare Game_UpdateBlock (no
+   BlockChanged event), so TNT/creeper-blasted chests lost contents with no
+   scatter and leaked their TE (contents resurrected by placing a chest at
+   the crater coords; wrong-kind GUI possible). Fix: the removal lifecycle
+   is now public (IndevTest_NotifyBlockRemoved) and the explosion path calls
+   it explicitly. (Review's other critical - map-change TE leak - was
+   already fixed in 65e1ff7; furnace blocks are explosion-immune SOUND_STONE
+   so the furnace-conjuring scenario was refuted.)
+
+### Directional chests + furnaces (user request)
+Block ids 71-82: chest/furnace-idle/furnace-lit x 4 facings, front texture
+on the face matching Indev metadata 2/3/4/5 (-Z/+Z/-X/+X). Canonical 66-70
+remain the inventory/recipe/drop form. Placing a canonical chest/furnace
+rotates it to face the player (Beta onBlockPlacedBy yaw-quadrant formula -
+NEEDS LIVE RETEST, the yaw convention may be 180 degrees off). The furnace
+lit/unlit tick swap preserves facing. Drops canonicalise (variants drop the
+canonical block, both mining and explosion paths). .mclevel round-trips
+facing through the Data array metadata nibble both ways (torches write
+meta 5 = standing); genuine Indev now sees properly-faced furnaces/chests.
+
+---
+
 ## SESSION LOG — world persistence via genuine Indev .mclevel format
 
 User request: save inventory + chest/furnace contents with worlds, using the
