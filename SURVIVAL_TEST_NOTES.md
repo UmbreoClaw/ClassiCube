@@ -1,5 +1,33 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - GUI item handling fixes + workbench notes (latest)
+
+### Fixed (user report on the crafting GUI)
+- Cursor-held stack showed NO count - now drawn (right-aligned at the mouse,
+  blocks and items alike) via the count mesh (PointerMove already dirties it).
+- Items/blocks were edge-to-edge in slots ("too big") - iso blocks shrank
+  texF*8 -> texF*7, item sprites texF*16 -> texF*14 with a ~1px inset, cursor
+  sprite now matches slot items (was slotSize*0.75).
+
+### Workbench right-click - logic verified correct; likely-caused-by items
+The TryUseBlock hook is correct end to end: block 66 is defined/placeable/
+picked as solid, TryUseBlock runs before placement, opens the 3x3. The
+broken item GUI (above) made crafting+placing a workbench nearly impossible,
+so "doesn't open" was most likely "never had one placed". Re-test with the
+fixed GUI.
+IMPORTANT interaction: IndevTest_Enabled is now
+`OPT_INDEV_MODE && !OPT_SURVIVAL_MODE`. A stale options.txt with BOTH set now
+resolves to Survival Test (no Indev features). If Indev "stops working",
+re-pick "Indev (WIP)" from the launcher (it clears survival-mode).
+Also: delete default.zip once so crafting.png is fetched, else the 3x3 opens
+with the flat fallback panel.
+
+### Paperdoll: still the deferred D3D issue
+The 2x2 doll box is set correctly; the blank/garbled doll on the user's build
+is the known Direct3D 3D-in-2D-pass problem (renders on GL, not D3D). Real
+fix = render the doll in the 3D frame, still deferred.
+
+
 ## SESSION LOG - Workbench 3x3 crafting + mode-exclusivity fix (latest)
 
 ### Mode leak fix (user: string/feathers in survival test)
