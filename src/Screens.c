@@ -2749,7 +2749,11 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	/*  behind the doll looking down -Z, so RotY must be 180 to turn the body to */
 	/*  face +Z (towards the camera) instead of showing its back. Yaw is offset by */
 	/*  the same 180 so head tracking (Yaw - RotY) keeps the same relative motion. */
-	s->doll.Yaw   = 180.0f + headYaw;
+	/* SUBTRACT headYaw: ClassiCube's yaw runs the opposite way round to the */
+	/*  Beta convention the tracking maths assumed (same 180-flip family as */
+	/*  the container placement fix), which mirrored the head horizontally - */
+	/*  moving the mouse left made the doll look right. */
+	s->doll.Yaw   = 180.0f - headYaw;
 	s->doll.Pitch = headPitch;
 	s->doll.RotY  = 180.0f;
 	s->doll.RotX  = 0.0f;
