@@ -252,7 +252,23 @@ static struct DropItem st_drops[DROP_MAX];
 
 /* Vertex buffer for the textured item cubes */
 #define ITEM_VERTICES_PER_DROP 24
-#define ITEM_MAX_VERTICES (DROP_MAX * ITEM_VERTICES_PER_DROP)
+/* Indev draws up to 4 jumbled mini-block copies per stack (RenderItem's */
+/*  stackSize > 1/5/20 thresholds), so the budget is 4x a single cube. */
+#define ITEM_MAX_VERTICES (DROP_MAX * ITEM_VERTICES_PER_DROP * 4)
+
+/* RenderItem.doRender's deterministic stack jumble (Random seed 187): the */
+/*  same offsets every frame; copy count from the stack size thresholds. */
+static const Vec3 drop_jumble[4] = {
+	{  0.00f,  0.00f,  0.00f }, {  0.16f, -0.10f,  0.22f },
+	{ -0.20f,  0.12f, -0.14f }, {  0.08f, -0.18f, -0.24f }
+};
+static int Drop_Copies(int count) {
+	return count > 20 ? 4 : (count > 5 ? 3 : (count > 1 ? 2 : 1));
+}
+/* Face iteration order for the Indev mini-block builder */
+static const cc_uint8 drop_faces[6] = {
+	FACE_YMIN, FACE_YMAX, FACE_ZMIN, FACE_ZMAX, FACE_XMIN, FACE_XMAX
+};
 static GfxResourceID st_itemVB;
 static cc_uint16 item_1DCount[ATLAS1D_MAX_ATLASES];
 static cc_uint16 item_1DIndices[ATLAS1D_MAX_ATLASES];
@@ -366,6 +382,48 @@ static void DropItem_BuildItemCube(struct DropItem* d, Vec3 pos, float age, Text
 	ITEM_V(b,yLo, u1,v1) ITEM_V(b,yHi, u2,v1) ITEM_V(c,yHi, u2,v2) ITEM_V(c,yLo, u1,v2) /* side BC */
 	#undef ITEM_V
 	*vertices = v;
+}
+
+/* Appends one drop copy as an Indev miniature block: the same 0.25-cube
+    geometry, but each face textured with the block's OWN tile for that face
+    (renderBlockOnInventory style - so logs get bark sides + ring tops, grass
+    gets its top, no more side edges on every face). Faces can land in
+    different 1D atlases, so each writes at its own atlas' running index. */
+static void DropItem_BuildMiniBlock(struct DropItem* d, Vec3 pos, float age, PackedCol col,
+									struct VertexTextured* data, cc_uint16* indices) {
+	struct VertexTextured* v;
+	TextureRec r;
+	TextureLoc loc;
+	float yLo, yHi;
+	Vec3 a, b, c, e;
+	int f, idx, texIndex;
+
+	DropItem_ComputeGeometry(d, pos, age, &yLo, &yHi, &a, &b, &c, &e);
+
+	for (f = 0; f < 6; f++) {
+		loc = Block_Tex((BlockID)d->block, drop_faces[f]);
+		idx = Atlas1D_Index(loc);
+		r   = Atlas1D_TexRec(loc, 1, &texIndex);
+		v   = data + indices[idx];
+
+		#define MINI_V(p, py, uu, vv) v->x = (p).x; v->y = (py); v->z = (p).z; v->Col = col; v->U = (uu); v->V = (vv); v++;
+		switch (drop_faces[f]) {
+		case FACE_YMIN:
+			MINI_V(a,yLo, r.u1,r.v1) MINI_V(b,yLo, r.u2,r.v1) MINI_V(c,yLo, r.u2,r.v2) MINI_V(e,yLo, r.u1,r.v2) break;
+		case FACE_YMAX:
+			MINI_V(a,yHi, r.u1,r.v1) MINI_V(e,yHi, r.u2,r.v1) MINI_V(c,yHi, r.u2,r.v2) MINI_V(b,yHi, r.u1,r.v2) break;
+		case FACE_ZMIN: /* side A-B */
+			MINI_V(a,yLo, r.u1,r.v2) MINI_V(b,yLo, r.u2,r.v2) MINI_V(b,yHi, r.u2,r.v1) MINI_V(a,yHi, r.u1,r.v1) break;
+		case FACE_ZMAX: /* side D-C */
+			MINI_V(e,yLo, r.u1,r.v2) MINI_V(c,yLo, r.u2,r.v2) MINI_V(c,yHi, r.u2,r.v1) MINI_V(e,yHi, r.u1,r.v1) break;
+		case FACE_XMIN: /* side A-D */
+			MINI_V(a,yLo, r.u1,r.v2) MINI_V(e,yLo, r.u2,r.v2) MINI_V(e,yHi, r.u2,r.v1) MINI_V(a,yHi, r.u1,r.v1) break;
+		default:        /* side B-C */
+			MINI_V(b,yLo, r.u1,r.v2) MINI_V(c,yLo, r.u2,r.v2) MINI_V(c,yHi, r.u2,r.v1) MINI_V(b,yHi, r.u1,r.v1) break;
+		}
+		#undef MINI_V
+		indices[idx] += 4;
+	}
 }
 
 /* Appends the 24-vertex untextured glow shell for one drop - identical */
@@ -722,16 +780,28 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 }
 
 /* Updates how many vertices belong to each 1D atlas, for batching draws */
-/*  (each drop's tile can land in a different 1D atlas / GL texture). */
+/*  (each drop's tile can land in a different 1D atlas / GL texture). Indev */
+/*  mini-blocks count per FACE (each face has its own tile) and per stack */
+/*  copy; classic counts one whole cube in the FACE_XMIN tile's atlas. */
 static void SurvivalTest_UpdateItem1DCounts(void) {
-	int i, index;
+	int i, f, index, copies;
 	for (i = 0; i < Atlas1D.Count; i++) { item_1DCount[i] = 0; item_1DIndices[i] = 0; }
 
 	for (i = 0; i < DROP_MAX; i++) {
 		if (!st_drops[i].active) continue;
-		if (!ST_ID_IS_BLOCK(st_drops[i].block)) continue; /* sprite pass instead */
-		index = Atlas1D_Index(Block_Tex((BlockID)st_drops[i].block, FACE_XMIN));
-		item_1DCount[index] += ITEM_VERTICES_PER_DROP;
+		if (!ST_ID_IS_BLOCK(st_drops[i].block)) continue;          /* sprite pass instead */
+		if (IndevTest_DropIsSprite(st_drops[i].block)) continue;   /* flowers/torches too */
+
+		if (IndevTest_Enabled) {
+			copies = Drop_Copies(st_drops[i].count);
+			for (f = 0; f < 6; f++) {
+				index = Atlas1D_Index(Block_Tex((BlockID)st_drops[i].block, drop_faces[f]));
+				item_1DCount[index] += 4 * copies;
+			}
+		} else {
+			index = Atlas1D_Index(Block_Tex((BlockID)st_drops[i].block, FACE_XMIN));
+			item_1DCount[index] += ITEM_VERTICES_PER_DROP;
+		}
 	}
 	for (i = 1; i < Atlas1D.Count; i++) {
 		item_1DIndices[i] = item_1DIndices[i - 1] + item_1DCount[i - 1];
@@ -788,30 +858,39 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 		/*  batch counts, so building them here would spill into (and corrupt) */
 		/*  the other drops' vertex ranges. */
 		if (!ST_ID_IS_BLOCK(d->block)) continue;
+		if (IndevTest_DropIsSprite(d->block)) continue; /* flowers/torches: sprite pass */
+
+		/* Blend prevPos->position and prevAge->age by the partial-tick t - see */
+		/*  DropItem.prevPos/prevAge - so both motion and spin/bob are smooth. */
+		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
+		renderAge = d->prevAge + (d->age - d->prevAge) * t;
+		col = DropItem_WorldColor(&renderPos);
+
+		if (IndevTest_Enabled) {
+			/* Indev RenderItem: miniature FULL blocks with per-face tiles, */
+			/*  drawn as 1-4 jumbled copies by stack size. */
+			int copies = Drop_Copies(d->count), c;
+			Vec3 cpos;
+			for (c = 0; c < copies; c++) {
+				cpos = renderPos;
+				Vec3_AddBy(&cpos, &drop_jumble[c]);
+				DropItem_BuildMiniBlock(d, cpos, renderAge, col, data, item_1DIndices);
+			}
+			continue;
+		}
 
 		loc   = Block_Tex((BlockID)d->block, FACE_XMIN);
 		index = Atlas1D_Index(loc);
 		ptr   = data + item_1DIndices[index];
 
 		base = Atlas1D_TexRec(loc, 1, &texIndex);
-		if (IndevTest_Enabled) {
-			/* Indev RenderItem: block drops are miniature FULL blocks */
-			/*  (renderBlockOnInventory at 0.25 scale) - whole tile per face, */
-			/*  not classic's cropped ItemModel. */
-			rec = base;
-		} else {
-			/* Crop to the middle 50% (texels 4..12 of 16) of the tile, on */
-			/*  every face - classic ItemModel's look. */
-			du = (base.u2 - base.u1) * 0.25f;
-			dv = (base.v2 - base.v1) * 0.25f;
-			rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
-			rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
-		}
+		/* Crop to the middle 50% (texels 4..12 of 16) of the tile, on */
+		/*  every face - classic ItemModel's look. */
+		du = (base.u2 - base.u1) * 0.25f;
+		dv = (base.v2 - base.v1) * 0.25f;
+		rec.u1 = base.u1 + du; rec.u2 = base.u2 - du;
+		rec.v1 = base.v1 + dv; rec.v2 = base.v2 - dv;
 
-		/* Blend prevPos->position and prevAge->age by the partial-tick t - see */
-		/*  DropItem.prevPos/prevAge - so both motion and spin/bob are smooth. */
-		Vec3_Lerp(&renderPos, &d->prevPos, &d->position, t);
-		renderAge = d->prevAge + (d->age - d->prevAge) * t;
 		col = DropItem_WorldColor(&renderPos);
 		DropItem_BuildItemCube(d, renderPos, renderAge, rec, col, &ptr);
 		item_1DIndices[index] += ITEM_VERTICES_PER_DROP;
@@ -839,6 +918,9 @@ static void SurvivalTest_RenderDropBlocks(float t) {
 	glowCount = 0;
 	for (i = 0; i < DROP_MAX; i++) {
 		d = &st_drops[i];
+		/* Indev drops don't glow at all - the white glint is Survival Test's */
+		/*  Item.render second pass, dropped by RenderItem. */
+		if (IndevTest_Enabled) break;
 		if (!d->active) continue;
 		if (!ST_ID_IS_BLOCK(d->block)) continue; /* sprites have no glow shell */
 
@@ -1504,7 +1586,28 @@ static cc_bool SurvivalTest_HeldSpriteState(int* id, Vec3* pos) {
 	return true;
 }
 
+/* An upright sprite quad that only turns around Y to face the camera
+    (RenderItem's glRotatef(180 - playerViewY, 0,1,0)) - full camera-facing
+    billboards tilt with the view pitch, which Indev item sprites never do. */
+static void Drop_BuildUprightSprite(Vec3 pos, float half, TextureRec* rec, PackedCol col,
+									struct VertexTextured** vertices) {
+	struct VertexTextured* v = *vertices;
+	float dx = Camera.CurrentPos.x - pos.x, dz = Camera.CurrentPos.z - pos.z;
+	float len = Math_SqrtF(dx * dx + dz * dz), rx, rz;
+	if (len < 0.001f) { rx = half; rz = 0.0f; }
+	else              { rx = -dz / len * half; rz = dx / len * half; }
+
+	#define SPR_V(px, py, pz, uu, vv) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v->U = (uu); v->V = (vv); v++;
+	SPR_V(pos.x - rx, pos.y - half, pos.z - rz, rec->u1, rec->v2)
+	SPR_V(pos.x + rx, pos.y - half, pos.z + rz, rec->u2, rec->v2)
+	SPR_V(pos.x + rx, pos.y + half, pos.z + rz, rec->u2, rec->v1)
+	SPR_V(pos.x - rx, pos.y + half, pos.z - rz, rec->u1, rec->v1)
+	#undef SPR_V
+	*vertices = v;
+}
+
 static void SurvivalTest_RenderItemDropSprites(float t) {
+	static cc_uint8 blockSpriteAtlas[DROP_MAX * 4];
 	struct VertexTextured* data;
 	struct VertexTextured* ptr;
 	struct DropItem* d;
@@ -1513,13 +1616,15 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 	Vec3 pos;
 	Vec2 size;
 	float renderAge, bob;
-	int i, count = 0, heldId;
+	int i, count = 0, heldId, blockSpriteStart = 0, blockSpriteEnd = 0;
 	cc_bool any = false, held;
 
-	if (!tex) return;
-	held = SurvivalTest_HeldSpriteState(&heldId, &pos);
+	held = tex && SurvivalTest_HeldSpriteState(&heldId, &pos);
 	for (i = 0; i < DROP_MAX; i++) {
-		if (st_drops[i].active && !ST_ID_IS_BLOCK(st_drops[i].block)) { any = true; break; }
+		if (!st_drops[i].active) continue;
+		if (!ST_ID_IS_BLOCK(st_drops[i].block)) { if (tex) any = true; }
+		else if (IndevTest_DropIsSprite(st_drops[i].block)) any = true;
+		if (any) break;
 	}
 	if (!any && !held) return;
 
@@ -1530,7 +1635,8 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_itemDropVB, VERTEX_FORMAT_TEXTURED, ITEMDROP_MAX_VERTICES);
 	ptr  = data;
 
-	for (i = 0; i < DROP_MAX; i++) {
+	for (i = 0; i < DROP_MAX && tex; i++) {
+		int copies, c;
 		d = &st_drops[i];
 		if (!d->active || ST_ID_IS_BLOCK(d->block)) continue;
 		if (!IndevTest_ItemSpriteUV(d->block, &rec.u1, &rec.v1, &rec.u2, &rec.v2)) continue;
@@ -1541,30 +1647,49 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
 		pos.y += bob + 0.125f;
 
-		/* RenderItem.doRender: sprites are 0.5 world units, and a stack draws */
-		/*  jumbled copies - 1, 2 (count>1), 3 (count>5), 4 (count>20) - offset */
-		/*  by (rand*2-1)*0.3 per axis from a FIXED seed (187), i.e. the same */
-		/*  deterministic jumble every frame. Precomputed equivalents below. */
-		{
-			static const Vec3 jumble[4] = {
-				{  0.00f,  0.00f,  0.00f }, {  0.16f, -0.10f,  0.22f },
-				{ -0.20f,  0.12f, -0.14f }, {  0.08f, -0.18f, -0.24f }
-			};
-			int copies = 1, c;
-			if (d->count > 1)  copies = 2;
-			if (d->count > 5)  copies = 3;
-			if (d->count > 20) copies = 4;
-
-			size.x = 0.5f; size.y = 0.5f;
-			for (c = 0; c < copies; c++) {
-				Vec3 cpos = pos;
-				Vec3_AddBy(&cpos, &jumble[c]);
-				Particle_DoRender(&size, &cpos, &rec, DropItem_WorldColor(&cpos), ptr);
-				ptr   += 4;
-				count += 4;
-			}
+		/* RenderItem.doRender: 0.5-unit UPRIGHT quads (yaw-only billboard), */
+		/*  a stack drawing 1/2/3/4 jumbled copies (fixed seed 187). */
+		copies = Drop_Copies(d->count);
+		for (c = 0; c < copies; c++) {
+			Vec3 cpos = pos;
+			Vec3_AddBy(&cpos, &drop_jumble[c]);
+			Drop_BuildUprightSprite(cpos, 0.25f, &rec, DropItem_WorldColor(&cpos), &ptr);
+			count += 4;
 		}
 	}
+
+	/* Indev sprite-type BLOCK drops (flowers/saplings/mushrooms/torches): */
+	/*  the same upright sprite, but textured with the block's terrain tile. */
+	/*  Batched after the item sprites so per-1D-atlas draw runs stay whole. */
+	blockSpriteStart = count;
+	for (i = 0; i < DROP_MAX && IndevTest_Enabled; i++) {
+		int copies, c;
+		TextureLoc loc;
+		int texIndex;
+		d = &st_drops[i];
+		if (!d->active || !ST_ID_IS_BLOCK(d->block)) continue;
+		if (!IndevTest_DropIsSprite(d->block)) continue;
+
+		loc = Block_Tex((BlockID)d->block, FACE_XMIN);
+		rec = Atlas1D_TexRec(loc, 1, &texIndex);
+
+		Vec3_Lerp(&pos, &d->prevPos, &d->position, t);
+		renderAge = Math_Lerp(d->prevAge, d->age, t);
+		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
+		pos.y += bob + 0.125f;
+
+		copies = Drop_Copies(d->count);
+		for (c = 0; c < copies; c++) {
+			Vec3 cpos = pos;
+			Vec3_AddBy(&cpos, &drop_jumble[c]);
+			if ((count - blockSpriteStart) / 4 >= DROP_MAX * 4) break;
+			blockSpriteAtlas[(count - blockSpriteStart) / 4] = Atlas1D_Index(loc);
+			Drop_BuildUprightSprite(cpos, 0.25f, &rec, DropItem_WorldColor(&cpos), &ptr);
+			count += 4;
+		}
+	}
+	blockSpriteEnd = count;
+
 	/* First-person held item - same pipeline as the drop sprites (which is */
 	/*  known-good), just anchored to the camera instead of a drop entity. */
 	if (held && IndevTest_ItemSpriteUV(heldId, &rec.u1, &rec.v1, &rec.u2, &rec.v2)) {
@@ -1575,12 +1700,30 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 		count += 4;
 	}
 
-	Gfx_BindTexture(tex);
 	Gfx_UnlockDynamicVb(st_itemDropVB);
 	if (!count) return;
 
 	Gfx_SetAlphaTest(true);
-	Gfx_DrawVb_IndexedTris(count);
+	/* range 1: item-id sprites (items.png) */
+	if (blockSpriteStart > 0 && tex) {
+		Gfx_BindTexture(tex);
+		Gfx_DrawVb_IndexedTris_Range(blockSpriteStart, 0, DRAW_HINT_NONE);
+	}
+	/* range 2: sprite-block drops (terrain tiles), in per-1D-atlas runs */
+	{
+		int off = blockSpriteStart, quad = 0, runStart, runAtlas;
+		while (off < blockSpriteEnd) {
+			runStart = off; runAtlas = blockSpriteAtlas[quad];
+			while (off < blockSpriteEnd && blockSpriteAtlas[quad] == runAtlas) { off += 4; quad++; }
+			Atlas1D_Bind(runAtlas);
+			Gfx_DrawVb_IndexedTris_Range(off - runStart, runStart, DRAW_HINT_NONE);
+		}
+	}
+	/* range 3: the held-item sprite (items.png again) */
+	if (count > blockSpriteEnd && tex) {
+		Gfx_BindTexture(tex);
+		Gfx_DrawVb_IndexedTris_Range(count - blockSpriteEnd, blockSpriteEnd, DRAW_HINT_NONE);
+	}
 	Gfx_SetAlphaTest(false);
 }
 

@@ -61,6 +61,10 @@ enum IndevContainerKind {
 	INDEV_CONTAINER_CHEST = 1, /* 27 slots */
 	INDEV_CONTAINER_FURNACE = 2 /* 3 slots: 0 input, 1 fuel, 2 output */
 };
+/* Whether a dropped id renders as an upright sprite instead of a miniature */
+/*  block: item ids, sprite-draw blocks (flowers etc) and torches. False */
+/*  outside Indev mode (c0.30 renders every block drop as its cropped cube). */
+cc_bool IndevTest_DropIsSprite(int id);
 /* Whether the block is a container (chest/furnace) - right-clicking one is */
 /*  always consumed (blockActivated returns true even when a blocked chest */
 /*  refuses to open), so no block gets placed against it. */

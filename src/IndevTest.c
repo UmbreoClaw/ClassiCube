@@ -608,6 +608,15 @@ cc_bool IndevTest_IsContainerBlock(BlockID b) {
 	return IndevTest_Enabled && IndevTest_ContainerKindOf(b) != INDEV_CONTAINER_NONE;
 }
 
+/* RenderItem.doRender: only blocks with renderType 0 (standard cubes) drop */
+/*  as miniature 3D blocks - everything else (flowers/saplings/mushrooms, */
+/*  torches, and all item ids) renders as an upright sprite quad. */
+cc_bool IndevTest_DropIsSprite(int id) {
+	if (!IndevTest_Enabled) return false;
+	if (id >= 256) return true;
+	return Blocks.Draw[id] == DRAW_SPRITE || id == INDEV_BLOCK_TORCH;
+}
+
 int IndevTest_OpenContainer(IVec3 pos) {
 	BlockID b, above;
 	int kind, i;
