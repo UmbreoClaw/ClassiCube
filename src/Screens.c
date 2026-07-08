@@ -1746,7 +1746,11 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 		ChatScreen_OpenInput(&String_Empty);
 	} else if (key == CCKEY_SLASH) {
 		ChatScreen_OpenInput(&slash);
-	} else if (InputBind_Claims(BIND_INVENTORY, key, device)) {
+	} else if (InputBind_Claims(BIND_INVENTORY, key, device) ||
+			(SurvivalTest_Enabled && key == 'E')) {
+		/* Survival/Indev also opens the inventory with E (modern Minecraft's
+		    inventory key); E is BIND_FLY_DOWN by default, which is inert in
+		    survival since flying is disabled, so there's no conflict. */
 		SurvivalInvScreen_Show();
 	} else {
 		return false;
@@ -3093,7 +3097,16 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 	int hit = SurvivalInv_HitSlot(s, mx, my);
 
 	if (hit < 0) {
-		/* Clicked outside - refund cursor + grid and close */
+		/* Not on a slot. Genuine Minecraft only closes when the click lands */
+		/*  OUTSIDE the GUI window; clicking the panel background does nothing */
+		/*  (so it never eats slots). This also stops the very right-click that */
+		/*  opened a workbench - delivered as a CCMOUSE_R key event to the just- */
+		/*  opened screen at the crosshair/centre, i.e. on the panel - from */
+		/*  instantly closing it again. */
+		cc_bool insidePanel = mx >= s->panelX && mx < s->panelX + s->panelW &&
+		                      my >= s->panelY && my < s->panelY + s->panelH;
+		if (insidePanel) return;
+		/* Clicked fully outside the window - refund cursor + grid and close */
 		SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
 		Gui_Remove((struct Screen*)s);

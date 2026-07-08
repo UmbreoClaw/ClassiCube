@@ -143,6 +143,62 @@ unlock the deferred recipes + the 3x3 grid; then day/night + lighting.
 
 ---
 
+## SESSION LOG — workbench crafting table finally opens (root cause found) + E key
+
+The workbench right-click "not opening" bug that survived several sessions is
+FIXED, and the root cause was found by reproducing it live (headless Xvfb +
+xdotool, driving the real game and reading stderr diagnostics), not by static
+review — because on paper every link was already correct.
+
+### The real bug (not what we thought)
+Prior guesses (both-flags state, stale crafting.png) were all wrong. Live trace
+of a genuine right-click on a placed workbench:
+
+    [WB] tryuse valid=1
+    [WB] pos=64,34,61 block=66      <- aiming at the workbench
+    [WB] Show: Gui_Add done         <- screen DID open
+    [WB] Click mx=400 my=300 hit=-1 <- the SAME right-click hit the new screen
+    [WB] Click: hit<0 -> CLOSING    <- and closed it instantly
+
+Right mouse is delivered as a `CCMOUSE_R` key event. When you right-click a
+workbench with no screen open, the event falls through to BIND_PLACE_BLOCK →
+`SurvivalTest_TryUseBlock` → `SurvivalInvScreen_Show()`. The screen opens and
+grabs input, the cursor re-centres (a PointerMove to screen centre), and then
+that *same* `CCMOUSE_R` reaches the freshly-opened screen's KeyDown, which
+routed it into `SurvivalInv_Click` at the crosshair/centre. That point is the
+panel background (`hit == -1`), and the old code closed the screen on ANY
+`hit < 0`. So it opened and shut in one input tick — invisible to the player.
+(The E/B pocket inventory never hit this because it opens from a KEY event, not
+a mouse button that also lands on the panel.)
+
+### The fix (also more faithful)
+`SurvivalInv_Click`, on `hit < 0`, now distinguishes clicking the panel
+BACKGROUND (inside panelX/Y/W/H → do nothing, as genuine Minecraft does) from
+clicking fully OUTSIDE the window (→ refund cursor + grid and close). The stray
+opening click lands on the panel centre = inside → no-op → screen stays open.
+Verified live: the 3×3 workbench grid opens and stays up.
+
+### Bonus confirmations from the same live session
+- The **paperdoll renders correctly** now (default Steve skin, upright, framed
+  in its box) on OpenGL — the viewport-origin + ortho-restore fixes from the
+  previous session work. (Direct3D still needs a real Windows/GPU retest.)
+- The pocket inventory (2×2 craft + storage + doll) and workbench (3×3) both
+  open and stay open.
+
+### E key opens the survival inventory (user request)
+BIND_INVENTORY defaults to **B** in ClassiCube; the user wanted **E** (modern
+Minecraft muscle memory). `ChatScreen_KeyDown` now also opens the survival
+inventory on `E` when `SurvivalTest_Enabled`. E is `BIND_FLY_DOWN` by default,
+which is inert in survival (flying disabled), so there's no conflict; B still
+works too.
+
+Testing method note: headless repro rig lives in the scratchpad — Xvfb :99 +
+the linux GL build with `survival-gamemode=2`, driven by xdotool, screenshots
+via `import -window root`. Invaluable for GUI/input bugs that read as correct
+on paper.
+
+---
+
 ## SESSION LOG — paperdoll Direct3D fix (viewport origin) + GUI-corruption fix
 
 User: "work on the paper doll fixes and the d3dx fix as well, it seems like the
