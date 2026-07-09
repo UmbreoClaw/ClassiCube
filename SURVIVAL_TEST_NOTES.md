@@ -1,5 +1,48 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Entity rewrite phase 2: Indev A* pathfinding (latest)
+
+### Pathfinder.java port (level/path/, in-20100223)
+- `PF_*` block in SurvivalTest.c: A* over walkable columns, binary heap +
+  open-point hash (900 node cap like the genuine 4096-region working sets,
+  scaled to our 64-waypoint paths), 4 horizontal neighbours per node with
+  step-up (+1) and drop-down (up to 3, matching getSafePoint's 4-deep scan)
+  handling, nodes capped at 16 blocks from the target, best-effort partial
+  path (closest-to-target node) when the goal is unreachable.
+- Faithfully preserves the genuine passability BUG: getVerticalOffset's
+  box scan reads the LOOP START coordinates, so only the corner block is
+  tested regardless of entity size (decompile-visible in Pathfinder.java).
+  Mobs therefore path like 1x1 entities - spiders squeeze, exactly like
+  genuine Indev.
+- Vertical offset classes: solid -> 0 (blocked), liquid -> -1 (rejected
+  below feet: mobs won't path onto water), else 1 (walkable air).
+
+### EntityCreature.updatePlayerActionState port
+- `Mob_IndevCreatureUpdate` drives every non-sheep mob in Indev mode:
+  target acquire when the player is < 16 blocks (distSq < 256), re-path
+  every rand(20) ticks toward the target, otherwise a 200-point weighted
+  wander scan (monsters weight by 0.5 - brightness, so they wander toward
+  dark spots) picking a random nearby ground column.
+- Waypoint follow: advance when within width*2 of the waypoint, yaw =
+  atan2(-dz, dx) toward it, moveForward = runSpeed, jump when the next
+  waypoint is higher (or randomly when in liquid, 0.8 chance).
+- No path / path exhausted -> falls back to Mob_BasicAIUpdate (the c0.30
+  wander), matching EntityLiving's default action state.
+- Path storage lives on struct Mob (64 waypoints, pathIndex cursor);
+  c0.30 mode is untouched - dispatch is `IndevTest_Enabled` gated, sheep
+  keep Mob_SheepUpdate everywhere.
+
+### Rig-verified
+Spawned zombies via F9 acquire the player, face them and close in over
+terrain/water; several minutes without crash, clean log. Full behaviour
+testing (step-up paths, dark-seeking wander, creeper approach+swell)
+still on the user checklist.
+
+### Phase 2 remainder (backlog)
+- Creeper swell timing vs ours (verify against EntityCreeper).
+- Body/head yaw separation on the models (renderer refinement).
+
+
 ## SESSION LOG - GUI item handling fixes + workbench notes (latest)
 
 ### Fixed (user report on the crafting GUI)

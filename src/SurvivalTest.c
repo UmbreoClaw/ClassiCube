@@ -1852,6 +1852,11 @@ struct Mob {
 	/*  tick and refreshed at random, exactly as in the decompiled source. */
 	float moveStrafe, moveForward, turnRate;
 
+	/* Indev EntityCreature: the current A* path being followed (Pathfinder */
+	/*  port below). count 0 = no path. */
+	cc_uint8 pathCount, pathIndex;
+	cc_int16 pathX[64], pathY[64], pathZ[64];
+
 	/* Fall damage tracking (Mob.causeFallDamage), mirrors the player's */
 	/*  st_falling/st_fallPeakY pair but per-mob since several can be */
 	/*  airborne at once. Reads e->Position straight after Mob_Travel each */
@@ -2292,6 +2297,301 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 	}
 }
 
+/*########################################################################################################################*
+*----------------------------------------------Indev pathfinding (Pathfinder)---------------------------------------------*
+*#########################################################################################################################*/
+/* A port of level/path/Pathfinder.java: A* over walkable columns, expanding
+    the four horizontal neighbours with step-up (1) and drop-down (up to 3)
+    handling, capped at 16 blocks from the target. Faithfully preserves the
+    genuine passability quirk: getVerticalOffset's box scan reads the LOOP
+    START coordinates (a decompile-visible Java bug), so only the corner
+    block is actually tested regardless of entity size. */
+#define PF_MAX_NODES 900
+#define PF_HASH_SIZE 2048
+#define PF_PATH_MAX  64
+
+static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava);
+
+struct PathNode {
+	cc_int16 x, y, z;
+	float g, h, f;
+	cc_int16 prev, heapIdx;
+	cc_uint8 visited, assigned;
+};
+static struct PathNode pf_nodes[PF_MAX_NODES];
+static int      pf_nodeCount;
+static cc_int16 pf_heap[PF_MAX_NODES];
+static int      pf_heapCount;
+static int      pf_hashKey[PF_HASH_SIZE];
+static cc_int16 pf_hashVal[PF_HASH_SIZE];
+
+static float PF_Dist(int a, int b) {
+	float dx = (float)(pf_nodes[b].x - pf_nodes[a].x);
+	float dy = (float)(pf_nodes[b].y - pf_nodes[a].y);
+	float dz = (float)(pf_nodes[b].z - pf_nodes[a].z);
+	return Math_SqrtF(dx * dx + dy * dy + dz * dz);
+}
+
+static int PF_OpenPoint(int x, int y, int z) {
+	int key = x | (y << 10) | (z << 20), slot, idx;
+	slot = (key * 2654435761u) & (PF_HASH_SIZE - 1);
+	for (;;) {
+		idx = pf_hashVal[slot];
+		if (idx < 0) break;
+		if (pf_hashKey[slot] == key) return idx;
+		slot = (slot + 1) & (PF_HASH_SIZE - 1);
+	}
+	if (pf_nodeCount >= PF_MAX_NODES) return -1;
+
+	idx = pf_nodeCount++;
+	pf_nodes[idx].x = (cc_int16)x; pf_nodes[idx].y = (cc_int16)y; pf_nodes[idx].z = (cc_int16)z;
+	pf_nodes[idx].g = 0.0f; pf_nodes[idx].h = 0.0f; pf_nodes[idx].f = 0.0f;
+	pf_nodes[idx].prev = -1; pf_nodes[idx].heapIdx = -1;
+	pf_nodes[idx].visited = 0; pf_nodes[idx].assigned = 0;
+	pf_hashKey[slot] = key; pf_hashVal[slot] = (cc_int16)idx;
+	return idx;
+}
+
+static void PF_HeapSiftUp(int i) {
+	cc_int16 n = pf_heap[i];
+	while (i > 0) {
+		int parent = (i - 1) >> 1;
+		if (pf_nodes[pf_heap[parent]].f <= pf_nodes[n].f) break;
+		pf_heap[i] = pf_heap[parent]; pf_nodes[pf_heap[i]].heapIdx = (cc_int16)i;
+		i = parent;
+	}
+	pf_heap[i] = n; pf_nodes[n].heapIdx = (cc_int16)i;
+}
+
+static void PF_HeapSiftDown(int i) {
+	cc_int16 n = pf_heap[i];
+	for (;;) {
+		int child = i * 2 + 1;
+		if (child >= pf_heapCount) break;
+		if (child + 1 < pf_heapCount && pf_nodes[pf_heap[child + 1]].f < pf_nodes[pf_heap[child]].f) child++;
+		if (pf_nodes[pf_heap[child]].f >= pf_nodes[n].f) break;
+		pf_heap[i] = pf_heap[child]; pf_nodes[pf_heap[i]].heapIdx = (cc_int16)i;
+		i = child;
+	}
+	pf_heap[i] = n; pf_nodes[n].heapIdx = (cc_int16)i;
+}
+
+static void PF_HeapPush(int idx) {
+	pf_heap[pf_heapCount] = (cc_int16)idx;
+	pf_nodes[idx].heapIdx = (cc_int16)pf_heapCount;
+	pf_heapCount++;
+	PF_HeapSiftUp(pf_heapCount - 1);
+}
+
+static int PF_HeapPop(void) {
+	int top = pf_heap[0];
+	pf_nodes[top].heapIdx = -1;
+	pf_heapCount--;
+	if (pf_heapCount > 0) {
+		pf_heap[0] = pf_heap[pf_heapCount];
+		pf_nodes[pf_heap[0]].heapIdx = 0;
+		PF_HeapSiftDown(0);
+	}
+	return top;
+}
+
+/* getVerticalOffset (single-block, per the genuine quirk): 1 = passable, */
+/*  0 = solid/out of bounds, -1 = liquid */
+static int PF_VerticalOffset(int x, int y, int z) {
+	BlockID b;
+	if (!World_Contains(x, y, z)) return 0;
+	b = World_GetBlock(x, y, z);
+	if (Blocks.Collide[b] == COLLIDE_SOLID)  return 0;
+	if (Blocks.Collide[b] == COLLIDE_LIQUID) return -1;
+	return 1;
+}
+
+/* getSafePoint: passable here (or one step up), then drop down onto solid */
+/*  ground (at most 3 blocks; landing next to water/lava is rejected). */
+static int PF_GetSafePoint(int x, int y, int z, int stepUp) {
+	int idx = -1, fall = 0, off;
+	BlockID below;
+
+	if (PF_VerticalOffset(x, y, z) > 0) {
+		idx = PF_OpenPoint(x, y, z);
+	} else if (stepUp && PF_VerticalOffset(x, y + 1, z) > 0) {
+		y++; idx = PF_OpenPoint(x, y, z);
+	}
+	if (idx < 0) return -1;
+
+	while (y > 0) {
+		off = PF_VerticalOffset(x, y - 1, z);
+		if (off <= 0) break;
+		fall++;
+		if (fall >= 4) return -1;
+		y--;
+		idx = PF_OpenPoint(x, y, z);
+		if (idx < 0) return -1;
+	}
+	below = (y > 0 && World_Contains(x, y - 1, z)) ? World_GetBlock(x, y - 1, z) : BLOCK_AIR;
+	if (Blocks.Collide[below] == COLLIDE_LIQUID) return -1;
+	return idx;
+}
+
+/* Pathfinder.addToPath: A* from the mob to (tx,ty,tz), 16-block range cap. */
+/*  Falls back to the best-effort nearest node when the target is */
+/*  unreachable (genuine returns the closest-explored partial path). */
+static cc_bool Mob_FindPath(struct Mob* m, float tx, float ty, float tz) {
+	struct AABB bb;
+	int start, target, node, best, count, i, stepUp;
+	int nb[4], nbCount;
+	float ng;
+
+	Mem_Set(pf_hashVal, 0xFF, sizeof(pf_hashVal)); /* -1 fill */
+	pf_nodeCount = 0; pf_heapCount = 0;
+	m->pathCount = 0; m->pathIndex = 0;
+
+	Entity_GetBounds(&m->Base, &bb);
+	start  = PF_OpenPoint(Math_Floor(bb.Min.x), Math_Floor(bb.Min.y), Math_Floor(bb.Min.z));
+	target = PF_OpenPoint(Math_Floor(tx - m->Base.Size.x / 2.0f), Math_Floor(ty),
+						  Math_Floor(tz - m->Base.Size.x / 2.0f));
+	if (start < 0 || target < 0) return false;
+
+	pf_nodes[start].g = 0.0f;
+	pf_nodes[start].h = PF_Dist(start, target);
+	pf_nodes[start].f = pf_nodes[start].h;
+	pf_nodes[start].assigned = 1;
+	PF_HeapPush(start);
+	best = start;
+
+	while (pf_heapCount > 0) {
+		node = PF_HeapPop();
+		if (node == target) { best = target; break; }
+		if (PF_Dist(node, target) < PF_Dist(best, target)) best = node;
+		pf_nodes[node].visited = 1;
+
+		stepUp = PF_VerticalOffset(pf_nodes[node].x, pf_nodes[node].y + 1, pf_nodes[node].z) > 0 ? 1 : 0;
+		{
+			int nx = pf_nodes[node].x, ny = pf_nodes[node].y, nz = pf_nodes[node].z;
+			nbCount = 0;
+			nb[nbCount++] = PF_GetSafePoint(nx,     ny, nz + 1, stepUp);
+			nb[nbCount++] = PF_GetSafePoint(nx - 1, ny, nz,     stepUp);
+			nb[nbCount++] = PF_GetSafePoint(nx + 1, ny, nz,     stepUp);
+			nb[nbCount++] = PF_GetSafePoint(nx,     ny, nz - 1, stepUp);
+		}
+
+		for (i = 0; i < nbCount; i++) {
+			int n2 = nb[i];
+			if (n2 < 0 || pf_nodes[n2].visited) continue;
+			if (PF_Dist(n2, target) >= 16.0f)   continue; /* range cap */
+
+			ng = pf_nodes[node].g + PF_Dist(node, n2);
+			if (pf_nodes[n2].assigned && ng >= pf_nodes[n2].g) continue;
+
+			pf_nodes[n2].prev = (cc_int16)node;
+			pf_nodes[n2].g = ng;
+			pf_nodes[n2].h = PF_Dist(n2, target);
+			pf_nodes[n2].f = ng + pf_nodes[n2].h;
+			if (pf_nodes[n2].assigned) {
+				if (pf_nodes[n2].heapIdx >= 0) PF_HeapSiftUp(pf_nodes[n2].heapIdx);
+			} else {
+				pf_nodes[n2].assigned = 1;
+				PF_HeapPush(n2);
+			}
+		}
+	}
+
+	if (best == start) return false;
+
+	/* walk the prev chain and reverse it into the mob's waypoint list */
+	count = 0;
+	for (node = best; node >= 0; node = pf_nodes[node].prev) count++;
+	if (count > PF_PATH_MAX) return false;
+
+	m->pathCount = (cc_uint8)count;
+	i = count - 1;
+	for (node = best; node >= 0; node = pf_nodes[node].prev, i--) {
+		m->pathX[i] = pf_nodes[node].x;
+		m->pathY[i] = pf_nodes[node].y;
+		m->pathZ[i] = pf_nodes[node].z;
+	}
+	return true;
+}
+
+/* EntityCreature.updatePlayerActionState: acquire the player as a target
+    within 16 blocks, path to them (re-pathing at 1-in-20 per tick), wander
+    to the best of 200 weighted random points otherwise (monsters prefer
+    darkness: weight 0.5 - brightness), and steer along the waypoints. */
+static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	struct Entity* e = &m->Base;
+	struct LocalPlayer* p = Entities.CurPlayer;
+	float dx, dy, dz, distSq;
+	cc_bool wantWander;
+
+	/* EntityMob.findPlayerToAttack: aggro within 16 blocks */
+	if (!m->hasTarget && p && SurvivalTest_Health > 0) {
+		dx = p->Base.Position.x - e->Position.x;
+		dy = p->Base.Position.y - e->Position.y;
+		dz = p->Base.Position.z - e->Position.z;
+		if (dx * dx + dy * dy + dz * dz < 256.0f) {
+			m->hasTarget  = true;
+			m->targetSlot = -1;
+			if (Mob_FindPath(m, p->Base.Position.x, p->Base.Position.y, p->Base.Position.z)) {}
+		}
+	}
+
+	wantWander = !m->hasTarget || (m->pathCount > 0 && Random_Next(&st_mobRng, 20) != 0);
+	if (wantWander) {
+		if (m->pathCount == 0 || Random_Next(&st_mobRng, 100) == 0) {
+			/* best of 200 random points by getBlockPathWeight */
+			int bx = -1, by = -1, bz = -1, t, cx, cy, cz;
+			float bestW = -99999.0f, w;
+			for (t = 0; t < 200; t++) {
+				cx = (int)(e->Position.x + (float)(Random_Next(&st_mobRng, 21) - 10));
+				cy = (int)(e->Position.y + (float)(Random_Next(&st_mobRng, 9)  - 4));
+				cz = (int)(e->Position.z + (float)(Random_Next(&st_mobRng, 21) - 10));
+				/* monsters: 0.5 - brightness (prefer the dark); passives: 0 */
+				w = mobTypeInfo[m->type].ai == MOB_AI_PASSIVE ? 0.0f :
+					0.5f - (float)IndevTest_LightLevel(cx, cy, cz) / 15.0f;
+				if (w > bestW) { bestW = w; bx = cx; by = cy; bz = cz; }
+			}
+			if (bx > 0) Mob_FindPath(m, bx + 0.5f, by + 0.5f, bz + 0.5f);
+		}
+	} else if (m->hasTarget && m->targetSlot == -1 && p) {
+		Mob_FindPath(m, p->Base.Position.x, p->Base.Position.y, p->Base.Position.z);
+	}
+
+	if (m->pathCount > 0 && Random_Next(&st_mobRng, 100) != 0) {
+		float half = e->Size.x + 1.0f, wx, wy, wz;
+		cc_bool hasPoint = true;
+
+		/* advance past waypoints we're standing on (within width*2) */
+		for (;;) {
+			if (m->pathIndex >= m->pathCount) { hasPoint = false; m->pathCount = 0; break; }
+			wx = m->pathX[m->pathIndex] + (float)((int)half) * 0.5f;
+			wy = (float)m->pathY[m->pathIndex];
+			wz = m->pathZ[m->pathIndex] + (float)((int)half) * 0.5f;
+
+			dx = e->Position.x - wx; dy = e->Position.y - wy; dz = e->Position.z - wz;
+			distSq = dx * dx + dy * dy + dz * dz;
+			if (distSq >= e->Size.x * 2.0f * e->Size.x * 2.0f || wy > e->Position.y) break;
+			m->pathIndex++;
+		}
+
+		m->jumping = false;
+		if (hasPoint) {
+			dx = wx - e->Position.x;
+			dz = wz - e->Position.z;
+			dy = wy - e->Position.y;
+			/* face the waypoint (same yaw convention as Mob_DoAttack) */
+			e->Yaw = Math_Atan2f(-dz, dx) * MATH_RAD2DEG;
+			m->moveForward = mobTypeInfo[m->type].runSpeed;
+			if (dy > 0.0f) m->jumping = true;
+		}
+		if ((inWater || inLava) && Random_Float(&st_mobRng) < 0.8f) m->jumping = true;
+		m->moveStrafe = 0.0f;
+	} else {
+		/* no path: EntityLiving's random wandering (our BasicAI) */
+		m->pathCount = 0;
+		Mob_BasicAIUpdate(m, inWater, inLava);
+	}
+}
+
 /* BasicAI.update() - the shared wander/turn logic used by every mob, plus */
 /*  the chase override applied once a mob has acquired a target (only ever */
 /*  true for attack-type mobs - BasicAttackAI is what actually sets hasTarget). */
@@ -2714,6 +3014,9 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 
 		if (m->type == MOB_TYPE_SHEEP) {
 			Mob_SheepUpdate(m, inWater, inLava);
+		} else if (IndevTest_Enabled) {
+			/* Indev: EntityCreature A* pathfinding drives the movement */
+			Mob_IndevCreatureUpdate(m, inWater, inLava);
 		} else {
 			Mob_BasicAIUpdate(m, inWater, inLava);
 		}
