@@ -2683,6 +2683,14 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		m->hasTarget   = false;
 	} else {
 		m->noActionTime++;
+		/* EntityMob.onLivingUpdate: monsters in bright light (> 0.5 entity */
+		/*  brightness ~ light level 9+) age twice as fast toward the despawn */
+		/*  roll - Indev's daylight answer (in-20100223 monsters do NOT burn; */
+		/*  that arrived in Alpha). */
+		if (IndevTest_Enabled && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE &&
+			IndevTest_LightLevel((int)e->Position.x, (int)e->Position.y, (int)e->Position.z) > 8) {
+			m->noActionTime += 2;
+		}
 		/* BasicAI.tick's despawn roll: once a mob has gone 600+ ticks without */
 		/*  being hurt or landing a hit, each tick has a 1/800 chance to check */
 		/*  whether the player is still nearby (32 blocks) - if so the timer is */
@@ -2989,12 +2997,116 @@ static void Mob_SpawnerRun(int count, Vec3* avoidPos) {
 	}
 }
 
+/* Indev MobSpawner.performSpawning: runs EVERY tick. Monsters spawn only
+    in darkness (light <= rand(8)), at least 32 blocks from the player, up
+    to a difficulty-scaled cap; animals need light > 8 up to their own cap.
+    The genuine type roll is nextInt(5) with index 4 spawning NOTHING, and
+    Y is biased toward the depths (min of two uniforms). */
+static cc_bool Mob_IndevIsMonster(cc_uint8 type) {
+	return type == MOB_TYPE_ZOMBIE || type == MOB_TYPE_SKELETON ||
+	       type == MOB_TYPE_CREEPER || type == MOB_TYPE_SPIDER;
+}
+
+static void Mob_IndevCountKinds(int* monsters, int* animals) {
+	int i;
+	*monsters = 0; *animals = 0;
+	for (i = 0; i < MOB_MAX; i++) {
+		if (!st_mobs[i].active) continue;
+		if (Mob_IndevIsMonster(st_mobs[i].type)) (*monsters)++;
+		else (*animals)++;
+	}
+}
+
+static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
+	/* the monster type table for nextInt(5): 4 = no spawn (genuine) */
+	static const cc_int8 monsterRoll[5] = {
+		MOB_TYPE_SKELETON, MOB_TYPE_CREEPER, MOB_TYPE_SPIDER, MOB_TYPE_ZOMBIE, -1
+	};
+	struct LocalPlayer* p = Entities.CurPlayer;
+	int attempt, outer, inner, roll;
+	int x, y, z, cx, cy, cz, light;
+	cc_int8 type;
+	Vec3 candidate;
+	float r1, r2, dx, dy, dz;
+
+	for (attempt = 0; attempt < 4; attempt++) {
+		if (current >= cap) return;
+
+		if (monsters) {
+			roll = Random_Next(&st_mobRng, 5);
+			type = monsterRoll[roll];
+			if (type < 0) continue;
+		} else {
+			type = Random_Next(&st_mobRng, 2) ? MOB_TYPE_PIG : MOB_TYPE_SHEEP;
+		}
+
+		r1 = Random_Float(&st_mobRng); r2 = Random_Float(&st_mobRng);
+		x  = Random_Next(&st_mobRng, World.Width);
+		y  = (int)((r1 < r2 ? r1 : r2) * World.Height);
+		z  = Random_Next(&st_mobRng, World.Length);
+
+		for (outer = 0; outer < 2; outer++) {
+			cx = x; cy = y; cz = z;
+			for (inner = 0; inner < 3; inner++) {
+				cx += Random_Next(&st_mobRng, 6) - Random_Next(&st_mobRng, 6);
+				cz += Random_Next(&st_mobRng, 6) - Random_Next(&st_mobRng, 6);
+				/* genuine vertical jitter is nextInt(1)-nextInt(1) = always 0 */
+
+				if (cx < 0 || cz < 1 || cy < 0 || cy >= World.Height - 2 ||
+					cx >= World.Width || cz >= World.Length) continue;
+				if (!Mob_BlockIsSolid(cx, cy - 1, cz)) continue;
+				if (Mob_BlockIsSolid(cx, cy, cz))      continue;
+				if (Mob_BlockIsSolid(cx, cy + 1, cz))  continue;
+				if (Blocks.Collide[World_GetBlock(cx, cy, cz)] == COLLIDE_LIQUID) continue;
+
+				/* EntityMob/EntityAnimal.getCanSpawnHere light rules */
+				light = IndevTest_LightLevel(cx, cy, cz);
+				if (monsters) {
+					if (light > Random_Next(&st_mobRng, 8)) continue;
+				} else {
+					if (light <= 8) continue;
+				}
+
+				candidate.x = cx + 0.5f;
+				candidate.y = (float)(cy + 1);
+				candidate.z = cz + 0.5f;
+
+				/* must be at least 32 blocks from the player */
+				if (p) {
+					dx = candidate.x - p->Base.Position.x;
+					dy = candidate.y - p->Base.Position.y;
+					dz = candidate.z - p->Base.Position.z;
+					if (dx * dx + dy * dy + dz * dz < 1024.0f) continue;
+				}
+
+				if (SurvivalTest_SpawnMobAt((cc_uint8)type, candidate)) current++;
+			}
+		}
+	}
+}
+
+static void Mob_IndevSpawnerRun(void) {
+	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
+	/* difficulty Normal (2): cap = vol*20/64^3 / 2 (the <<2)/4 is identity) */
+	int monsterCap = (int)(volume * 20 / 64 / 64 / 64) / 2;
+	int animalCap  = World.Width * World.Length / 4000;
+	int monsters, animals;
+
+	Mob_IndevCountKinds(&monsters, &animals);
+	Mob_IndevSpawnPass(true,  monsterCap, monsters);
+	Mob_IndevSpawnPass(false, animalCap,  animals);
+}
+
 /* SurvivalGameMode.spawnMob() - the periodic per-tick spawn gate. */
 static void SurvivalTest_TrySpawnMobs(void) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
 	int area = (int)(volume / 64 / 64 / 64);
 	struct LocalPlayer* p = Entities.CurPlayer;
 	if (!p || area <= 0) return;
+
+	/* Indev replaces the classic spawn gate with MobSpawner's per-tick,
+	    light-ruled, capped passes. */
+	if (IndevTest_Enabled) { Mob_IndevSpawnerRun(); return; }
 
 	if (Random_Next(&st_mobRng, 100) < area && SurvivalTest_CountMobs() < area * 20) {
 		Mob_SpawnerRun(area, &p->Base.Position);
@@ -3007,6 +3119,10 @@ static void SurvivalTest_TrySpawnMobs(void) {
 static void SurvivalTest_SpawnInitialMobs(void) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
 	int area = (int)(volume / 800);
+	/* Indev has no prepareLevel population - MobSpawner fills the world */
+	/*  gradually under the darkness/distance rules instead (this is also */
+	/*  what stops mobs from camping the spawn point on day one). */
+	if (IndevTest_Enabled) return;
 	if (area > 0) Mob_SpawnerRun(area, NULL);
 }
 

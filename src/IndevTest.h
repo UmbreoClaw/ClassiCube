@@ -123,6 +123,8 @@ int  IndevTest_WorldTime(void);
 void IndevTest_SetWorldTime(int t);
 void IndevTest_SetSkyBrightness(int b);
 int  IndevTest_SkyBrightness(void);
+/* World.getBlockLightValue: combined sky+block light level (0-15). */
+int  IndevTest_LightLevel(int x, int y, int z);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);

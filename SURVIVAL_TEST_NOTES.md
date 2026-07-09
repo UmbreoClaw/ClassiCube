@@ -105,6 +105,42 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - Indev entity/spawn rewrite (phase 1) + third-person finding
+
+### Third-person held items (user question) - SOURCE VERDICT
+in-20100223 does NOT render held items or blocks on the third-person
+player model AT ALL: RenderLiving has zero item code, RenderPlayer's
+render passes are armor-only (equipped-item rendering arrived in Alpha).
+So F5 with empty-looking hands is FAITHFUL. Engine quirk: ClassiCube
+natively shows held BLOCKS in third person (kept - a nicety beyond
+genuine); items show nothing (faithful). User decides after testing:
+add items for consistency, or suppress blocks for strict parity.
+
+### Indev mob spawning (MobSpawner.performSpawning port, Indev-only)
+- Runs EVERY tick (replaces the classic c0.30 spawn gate in Indev mode).
+- Monster pass: cap = volume*20/64^3 / 2 (difficulty Normal), 4 attempts,
+  type = nextInt(5) with index 4 spawning NOTHING (genuine quirk: 0 skel,
+  1 creeper, 2 spider, 3 zombie), Y biased to the depths (min of two
+  uniforms), 2 clusters x 3 jitter steps (+-6 xz, y jitter is genuinely
+  always 0), needs solid-below + 2 air, no liquid, >= 32 blocks from the
+  player, and the DARKNESS rule: light <= nextInt(8).
+- Animal pass: pigs/sheep, cap = width*length/4000, light > 8.
+- Light source for both rules = IndevTest_LightLevel (sky-lit day/night
+  level vs fancy-lighting block light) - so torches near a dark cave
+  mouth genuinely suppress monster spawns.
+- Initial-population flood REMOVED in Indev mode (genuine prepareLevel
+  doesn't exist there; the spawner fills gradually - this also fixes the
+  spawn-camping deaths seen in rig testing).
+- Monsters in bright light (level > 8) age +2 per tick toward the
+  despawn roll (EntityMob.onLivingUpdate) - in-20100223 monsters DO NOT
+  burn in sunlight (Alpha behaviour); they just despawn faster by day.
+
+### Entity rewrite phase 2 (NEXT): EntityCreature pathfinding (the
+level/path Pathfinder + path-following movement), spider day-neutrality,
+creeper swell timing vs ours, mob body/head yaw separation.
+
+---
+
 ## SESSION LOG - .mclevel entity parity + Indev block hardness overrides
 
 ### .mclevel format parity (the remaining Entities-list gap)

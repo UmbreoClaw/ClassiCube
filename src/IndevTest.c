@@ -953,18 +953,22 @@ static void Indev_TickDayNight(void) {
 /*########################################################################################################################*
 *-------------------------------------------------Farming (random ticks)--------------------------------------------------*
 *#########################################################################################################################*/
-/* World.getBlockLightValue: the combined light above the plant must be
-    >= 9. Sky contribution = the day/night sky level when the column is
-    sky-lit; block contribution = the fancy-lighting lamp/lava level (so
-    torch-lit farms keep growing at night, like genuine). */
-static cc_bool Indev_GrowLightOk(int x, int y, int z) {
+/* World.getBlockLightValue: combined light at a position - sky contribution
+    (the day/night sky level when the column is sky-lit) vs the fancy-
+    lighting lamp/lava block level. Drives crop growth, the monster
+    darkness-spawn rule, and light-accelerated monster aging. */
+int IndevTest_LightLevel(int x, int y, int z) {
 	int light = 0;
 	if (Lighting.IsLit(x, y, z)) light = Indev_SkyLight();
 	if (Lighting_Mode == LIGHTING_MODE_FANCY) {
 		int block = FancyLighting_BlockLightLevel(x, y, z);
 		if (block > light) light = block;
 	}
-	return light >= 9;
+	return light;
+}
+
+static cc_bool Indev_GrowLightOk(int x, int y, int z) {
+	return IndevTest_LightLevel(x, y, z) >= 9;
 }
 
 static cc_bool Indev_WaterNear(int x, int y, int z) {
