@@ -555,7 +555,18 @@ static struct SoundAsset {
 	{ "step_stone1.wav",  "4e094ed8dfa98656d8fec52a7d20c5ee6098b6ad" }, { "step_stone2.wav",  "9c92f697142ae320584bf64c0d54381d59703528" },
 	{ "step_stone3.wav",  "8f23c02475d388b23e5faa680eafe6b991d7a9d4" }, { "step_stone4.wav",  "363545a76277e5e47538b2dd3a0d6aa4f7a87d34" },
 	{ "step_wood1.wav",   "9bc2a84d0aa98113fc52609976fae8fc88ea6333" }, { "step_wood2.wav",   "98102533e6085617a2962157b4f3658f59aea018" },
-	{ "step_wood3.wav",   "45b2aef7b5049e81b39b58f8d631563fadcc778b" }, { "step_wood4.wav",   "dc66978374a46ab2b87db6472804185824868095" }
+	{ "step_wood3.wav",   "45b2aef7b5049e81b39b58f8d631563fadcc778b" }, { "step_wood4.wav",   "dc66978374a46ab2b87db6472804185824868095" },
+
+	/* Indev (SurvivalTest layer) mob/entity sounds - the genuine classic-era
+	    assets, still served by mojang's asset host. mob_<group><n>.wav names
+	    feed Audio.c's mob soundboard (see MobSounds_Load). */
+	{ "mob_pig1.wav",     "a99bf88163bcb576e31e6e2275145afba6d1b4c7" }, { "mob_pig2.wav",     "ab615a912fb8ea06648836e0ec1cbeeefe117da6" },
+	{ "mob_pig3.wav",     "58efedf302e0203a6ff9e59a6535d300286c5594" }, { "mob_pigdeath1.wav","4bc87ab869e17732a20c7518a327136baf5b2c26" },
+	{ "mob_sheep1.wav",   "a3ffeaa0a75b8d2bdc949c181a6f8db78f8976ca" }, { "mob_sheep2.wav",   "1cfd864cbda555477ed9523e640de0d234c18858" },
+	{ "mob_sheep3.wav",   "c9ac72409cbe6093e84d72a2a5c719d9e4a0e6b2" }, { "mob_hurt1.wav",    "9d485556b89bf776042080774679c37300bc744b" },
+	{ "mob_bow1.wav",     "87edc11141fb5a045f2ed830b545aaa73f96ee99" }, { "mob_fuse1.wav",    "a92ba2b8f6abc41aa8d679ad808a81d0aafa04b2" },
+	{ "mob_drr1.wav",     "40a5a4307c1a2a5a1b9f71254275689845374104" }, { "mob_pop1.wav",     "8f45b5faf6dfae2065846d26612f7552b73640dd" },
+	{ "mob_explode1.wav", "9e22b5aeec31de99410b682cc161a6096a1cd00a" }, { "mob_fizz1.wav",    "c649e60ea9a99c97501a50d2dc4e579343e91ea8" }
 };
 static cc_bool allSoundsExist;
 
@@ -609,7 +620,7 @@ static void SoundAssets_CountMissing(void) {
 	if (allSoundsExist) return;
 
 	Resources_MissingCount += Array_Elems(soundAssets);
-	Resources_MissingSize  += 417;
+	Resources_MissingSize  += 571; /* 417 dig/step + ~154 mob/entity oggs */
 }
 
 

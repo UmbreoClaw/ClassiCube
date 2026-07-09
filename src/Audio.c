@@ -53,11 +53,20 @@ static void Sounds_Start(void) {
 
 void Audio_PlayDigSound(cc_uint8 type)  { }
 void Audio_PlayStepSound(cc_uint8 type) { }
+void Audio_PlayMobSound(int type, float volume, float pitch, float dist) { }
 
 void Sounds_LoadDefault(void) { }
 #else
 struct Soundboard digBoard, stepBoard;
 static RNGState sounds_rnd;
+
+/* Indev mob/entity sound groups - their own name table (not Sound_Names,
+    which is the block dig/step material list). Loaded from mob_* files. */
+static const char* const mobSnd_names[MOBSND_COUNT] = {
+	"pig", "pigdeath", "sheep", "hurt", "bow",
+	"fuse", "drr", "pop", "explode", "fizz"
+};
+static struct SoundGroup mobSnd_groups[MOBSND_COUNT];
 
 #define WAV_FourCC(a, b, c, d) (((cc_uint32)a << 24) | ((cc_uint32)b << 16) | ((cc_uint32)c << 8) | (cc_uint32)d)
 #define WAV_FMT_SIZE 16
@@ -156,6 +165,40 @@ static void Soundboard_Load(struct Soundboard* board, const cc_string* boardName
 	} else { group->count++; }
 }
 
+/* Mirrors Soundboard_Load for the mob/entity groups: mob_pig1.wav -> pig */
+static void MobSounds_Load(const cc_string* file, struct Stream* stream) {
+	static const cc_string prefix = String_FromConst("mob_");
+	struct SoundGroup* group = NULL;
+	struct Sound* snd;
+	cc_string name = *file;
+	cc_result res;
+	int i, dotIndex;
+	Utils_UNSAFE_TrimFirstDirectory(&name);
+
+	dotIndex = String_LastIndexOf(&name, '.');
+	if (dotIndex >= 0) name.length = dotIndex;
+	if (!String_CaselessStarts(&name, &prefix)) return;
+
+	name = String_UNSAFE_SubstringAt(&name, prefix.length);
+	name = String_UNSAFE_Substring(&name, 0, name.length - 1);
+
+	for (i = 0; i < MOBSND_COUNT; i++)
+	{
+		if (String_CaselessEqualsConst(&name, mobSnd_names[i])) group = &mobSnd_groups[i];
+	}
+	if (!group || group->count == Array_Elems(group->sounds)) return;
+
+	snd = &group->sounds[group->count];
+	res = Sound_ReadWaveData(stream, snd);
+
+	if (res) {
+		Logger_SysWarn2(res, "decoding", file);
+		Audio_FreeChunks(&snd->chunk, 1);
+		snd->chunk.data = NULL;
+		snd->chunk.size = 0;
+	} else { group->count++; }
+}
+
 static const struct Sound* Soundboard_PickRandom(struct Soundboard* board, cc_uint8 type) {
 	struct SoundGroup* group;
 	int idx;
@@ -233,6 +276,7 @@ static cc_result ProcessZipEntry(const cc_string* path, struct Stream* stream, s
 	
 	Soundboard_Load(&digBoard,  &dig,  path, stream);
 	Soundboard_Load(&stepBoard, &step, path, stream);
+	MobSounds_Load(path, stream);
 	return 0;
 }
 
@@ -285,6 +329,41 @@ static void Sounds_Free(void) { Sounds_Stop(); }
 
 void Audio_PlayDigSound(cc_uint8 type)  { Sounds_Play(type, &digBoard); }
 void Audio_PlayStepSound(cc_uint8 type) { Sounds_Play(type, &stepBoard); }
+
+/* World.playSoundAtEntity: the sound is only audible to the player within
+    16 blocks (16*volume when volume > 1). The genuine client then hands the
+    source position to a positional audio engine; this engine is non-
+    positional, so a linear distance falloff approximates that rolloff. */
+void Audio_PlayMobSound(int type, float volume, float pitch, float dist) {
+	struct SoundGroup* group;
+	const struct Sound* snd;
+	struct AudioData data;
+	float range, vol;
+	cc_result res;
+
+	if (!Audio_SoundsVolume) return;
+	if (type < 0 || type >= MOBSND_COUNT) return;
+	range = volume > 1.0f ? 16.0f * volume : 16.0f;
+	if (dist >= range) return;
+
+	group = &mobSnd_groups[type];
+	if (!group->count) return;
+	snd = &group->sounds[Random_Next(&sounds_rnd, group->count)];
+
+	vol = volume > 1.0f ? 1.0f : volume;
+	vol = vol * (1.0f - dist / range);
+
+	data.chunk      = snd->chunk;
+	data.channels   = snd->channels;
+	data.sampleRate = snd->sampleRate;
+	data.rate       = (int)(100.0f * pitch);
+	data.volume     = (int)(Audio_SoundsVolume * vol);
+	if (data.rate < 25) data.rate = 25;
+	if (data.volume <= 0) return;
+
+	res = AudioPool_Play(&data);
+	if (res) Sounds_Fail(res);
+}
 #endif
 
 

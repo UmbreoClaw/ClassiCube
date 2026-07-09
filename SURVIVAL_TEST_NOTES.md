@@ -1,5 +1,70 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Phase 2 finish: per-mob attack AI, fire, mob sounds (latest)
+
+### Per-mob attackEntity ports (all Indev-gated, c0.30 AI untouched)
+`Mob_IndevCreatureUpdate` now runs the genuine `updatePlayerActionState`
+order: resolve/drop target -> LOS raytrace -> `Mob_IndevAttackEntity` ->
+if `hasAttacked` halt movement, else path/wander. Per-type attacks:
+- **Creeper**: fuse state machine (EntityCreeper). Ignites within 3 blocks
+  (7 once lit), `random.fuse` at 0.5 pitch on ignition, blows at 30 ticks
+  via `Mob_IndevCreeperBlast` (radius-3 explosion + instant removal, NO
+  gunpowder - drops only come from killing it first). `creeperState`
+  idles at -1, winds down while not-attacking, re-armed to 1 each tick it
+  attacks. Swell rendered in `SurvivalTest_RenderMobs` via `ModelScale`
+  (RenderCreeper.preRenderCallback: s^4 fattens x/z up to 40%, y +10%,
+  sin(s*100) shiver), interpolated by `fuseLast`->`fuseTicks`.
+- **Skeleton**: bow fire < 10 blocks, 30-tick `attackDelay` cooldown,
+  faces victim + stands still. `Mob_IndevShootArrow`: lob += horiz*0.2,
+  speed 0.6, damage 4, `random.bow` at genuine pitch. (The old c0.30
+  1/30 arrow roll + melee are now skipped in Indev mode.)
+- **Spider**: darkness-only aggro (brightness < 0.5 to acquire, 1/100 to
+  give up in light), 1/10 pounce from 2-6 blocks (grounded lunge), else
+  shared melee.
+- **Zombie/melee**: dist < 2.5 + vertical bbox overlap, flat strength
+  (zombie 5, else EntityMob default 2), no attacker cooldown.
+- **Sheep** (Indev) is a plain EntityAnimal wanderer (no c0.30 grass-eat);
+  ANY living attacker shears **gray** cloth (block 35, 1+rand(3)) and the
+  hit still lands (falls through to super), unlike the c0.30 white-wool
+  player-only shear which is preserved on its own branch.
+
+### Fire / daylight burning (corrects an earlier wrong assumption)
+in-20100223 zombies AND skeletons **do** catch fire in daylight (this was
+mis-noted before as "monsters don't burn until Alpha"). Ported from
+Entity/EntityZombie/EntitySkeleton.onLivingUpdate: sky light > 7 + entity
+brightness > 0.5 + open sky + `rand*30 < (bright-0.4)*2` roll -> `fire=300`;
+fire deals 1 HP / 20 ticks; water extinguishes with a `random.fizz`; lava
+sets `fire=600`. New `struct Mob.fire`. The visual flame billboard is a
+known gap (mobs take damage/die but no fire sprite yet).
+Also fixed the light-aging threshold: was `light > 8`, genuine is entity
+brightness > 0.5 which the `lightBrightnessTable` curve only reaches at
+light 12+ (`Indev_LightBrightness` helper + `IndevTest_CurSkyLight`).
+
+### Mob / entity sounds (new Audio mob soundboard)
+- Resources.c: 14 genuine classic-era oggs added to the asset fetcher
+  (mob_pig/pigdeath/sheep, mob_hurt/bow/fuse/drr/pop/explode/fizz), SHA1s
+  verified live on mojang's asset host, +154 KB to the download.
+- Audio.c/h: `MobSoundType` enum + `mobSnd_groups` board loaded from
+  `mob_*` zip entries (`MobSounds_Load`), and `Audio_PlayMobSound(type,
+  vol, pitch, dist)` mirroring World.playSoundAtEntity's 16-block cutoff
+  (16*vol when louder) with linear distance falloff (non-positional engine).
+- SurvivalTest.c funnels every entity sound through `Indev_PlaySoundAt`
+  (no-op in c0.30 mode): hurt/death (pig/pigdeath, sheep, else random.hurt
+  - monsters were still voiceless in Indev), pig/sheep ambient livingSound
+  roll (rand(1000) < livingSoundTime++), player random.hurt, skeleton
+  random.bow, creeper random.fuse, arrow random.drr on block hit,
+  random.pop on item + arrow pickup, random.explode on any blast,
+  random.fizz on extinguish. Existing installs: delete audio/default*.zip
+  once to refetch with the mob sounds.
+
+### Rig-verified
+Build clean. Headless run at noon: 47 mobs pathing at 80-90 fps, skeleton
+arrows seen in flight, invincibility + kill-all + spawn all work, no crash,
+clean log across every new attack/fire/sound path. (Headless has no audio
+device so sounds are silent - Audio_SoundsVolume gates them off safely.)
+Creeper swell + burning visuals best confirmed on the user's audio build.
+
+
 ## SESSION LOG - Entity rewrite phase 2: Indev A* pathfinding (latest)
 
 ### Pathfinder.java port (level/path/, in-20100223)

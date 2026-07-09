@@ -125,6 +125,9 @@ void IndevTest_SetSkyBrightness(int b);
 int  IndevTest_SkyBrightness(void);
 /* World.getBlockLightValue: combined sky+block light level (0-15). */
 int  IndevTest_LightLevel(int x, int y, int z);
+/* The current day/night sky light level (4..15) - what the deobfuscated
+    source misnames World.skylightSubtracted. 15 outside Indev mode. */
+int  IndevTest_CurSkyLight(void);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);

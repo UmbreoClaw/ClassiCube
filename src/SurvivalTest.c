@@ -160,6 +160,11 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
 /*  section below (skeletons firing/death-bursting arrows) can spawn them. */
 static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float force,
 									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot);
+/* Defined later, in the Mobs section - the Indev entity-sound funnel (a no-op
+    in c0.30 mode) and the standard living-sound pitch jitter, forward declared
+    for the player damage / drops / arrows / explosion code that plays them. */
+static void  Indev_PlaySoundAt(Vec3 pos, int type, float vol, float pitch);
+static float Mob_SndPitch(void);
 /* Defined later, in the TNT section - forward declared so the Drops section */
 /*  above (which decides what mining a TNT block does) can ignite its fuse. */
 /*  fuseTicks lets callers other than mining (the explosion chain-reaction) */
@@ -755,6 +760,9 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	while (d->count > 0 && SurvivalTest_AddBlock(d->block)) d->count--;
 	if (d->count > 0) return;
 
+	/* Indev EntityItem.playerTouch plays the pickup pop (c0.30 was silent) */
+	Indev_PlaySoundAt(d->position, MOBSND_POP, 0.2f,
+		((Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.7f + 1.0f) * 2.0f);
 	d->pickingUp  = true;
 	d->pickupTime = 0.0f;
 	d->pickupFrom = d->position;
@@ -1042,6 +1050,10 @@ static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 
 	st_hurtDir = SurvivalTest_CalcHurtDir(attackerPos);
 	if (attackerPos) SurvivalTest_Knockback(&p->Base, attackerPos);
+
+	/* EntityLiving.attackEntityFrom: the player is a living entity too, so a
+	    landed hit (and the killing blow) plays random.hurt in Indev mode */
+	Indev_PlaySoundAt(p->Base.Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
 
 	if (SurvivalTest_Health <= 0) {
 		SurvivalTest_Health = 0;
@@ -1857,6 +1869,13 @@ struct Mob {
 	cc_uint8 pathCount, pathIndex;
 	cc_int16 pathX[64], pathY[64], pathZ[64];
 
+	/* Indev layer state (unused in c0.30 mode) */
+	cc_int16 fire;      /* Entity.fire burn ticks - 300 from sunlight, 600 from lava */
+	cc_int16 livingSnd; /* EntityLiving.livingSoundTime - the ambient-sound roll counter */
+	cc_int16 fuseTicks; /* EntityCreeper.timeSinceIgnited - swell/fuse progress */
+	cc_int16 fuseLast;  /* EntityCreeper.lastActiveTime - previous tick's fuse, for render interp */
+	cc_int8  fuseState; /* EntityCreeper.creeperState: -1 idle, 1 swelling, 2 winding down */
+
 	/* Fall damage tracking (Mob.causeFallDamage), mirrors the player's */
 	/*  st_falling/st_fallPeakY pair but per-mob since several can be */
 	/*  airborne at once. Reads e->Position straight after Mob_Travel each */
@@ -1897,6 +1916,44 @@ static struct Mob st_mobs[MOB_MAX];
     environment). Set by attack/arrow code right before Mob_Hurt so BasicAttack-
     AI.hurt's attackTarget=cause aggro can identify a mob attacker. */
 static int st_hurtCauseSlot = -1;
+
+/* World.lightBrightnessTable[light]: the float brightness curve every
+    "getEntityBrightness > 0.5" style check reads. (1-v)/(v*3+1)*0.95+0.05
+    with v = 1 - light/15, so > 0.5 needs a light level of 12+. */
+static float Indev_LightBrightness(int x, int y, int z) {
+	float v = 1.0f - (float)IndevTest_LightLevel(x, y, z) / 15.0f;
+	return (1.0f - v) / (v * 3.0f + 1.0f) * 0.95f + 0.05f;
+}
+
+static float Mob_Brightness(struct Mob* m) {
+	struct Entity* e = &m->Base;
+	return Indev_LightBrightness(Math_Floor(e->Position.x),
+								 Math_Floor(e->Position.y),
+								 Math_Floor(e->Position.z));
+}
+
+/* The (rand - rand)*0.2 + 1 pitch jitter every living-entity sound uses */
+static float Mob_SndPitch(void) {
+	return (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f + 1.0f;
+}
+
+/* World.playSoundAtEntity for a sound sourced at an arbitrary position - the
+    distance to the local player feeds the 16-block cutoff + falloff. All the
+    Indev entity sounds funnel through here, so nothing plays in c0.30 mode. */
+static void Indev_PlaySoundAt(Vec3 pos, int type, float vol, float pitch) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	float dx, dy, dz;
+	if (!IndevTest_Enabled || !p) return;
+
+	dx = p->Base.Position.x - pos.x;
+	dy = p->Base.Position.y - pos.y;
+	dz = p->Base.Position.z - pos.z;
+	Audio_PlayMobSound(type, vol, pitch, Math_SqrtF(dx * dx + dy * dy + dz * dz));
+}
+
+static void Mob_PlaySound(struct Mob* m, int type, float vol, float pitch) {
+	Indev_PlaySoundAt(m->Base.Position, type, vol, pitch);
+}
 
 static int SurvivalTest_CountMobs(void) {
 	int i, n = 0;
@@ -2126,6 +2183,49 @@ static void Mob_CreeperExplode(struct Mob* m) {
 	Particles_BreakBlockEffect(coords, BLOCK_LEAVES, BLOCK_AIR);
 }
 
+/* Indev EntitySkeleton.attackEntity's bow shot: the arrow arcs up by
+    horizontal-distance * 0.2, flies at speed 0.6 with inaccuracy 12
+    (gaussian * 0.0075 * 12 per velocity axis ~ roughly +-5 degrees,
+    approximated uniformly), and plays random.bow at the genuine pitch. */
+static void Mob_IndevShootArrow(struct Mob* m, struct Entity* te) {
+	struct Entity* e = &m->Base;
+	Vec3 from = Entity_GetEyePosition(e);
+	float dx, dy, dz, hor, yaw, pitch, spread;
+	int slot = (int)(m - st_mobs);
+
+	from.y += 1.0f; /* shootArrow: ++arrow.posY above the (eye-anchored) spawn */
+	dx  = te->Position.x - e->Position.x;
+	dz  = te->Position.z - e->Position.z;
+	dy  = (te->Position.y - 0.2f) - from.y;
+	hor = Math_SqrtF(dx * dx + dz * dz);
+	dy += hor * 0.2f; /* the lob that lets skeleton shots clear mid-range dips */
+
+	spread = 12.0f * 0.0075f * MATH_RAD2DEG; /* ~5.2 degrees */
+	yaw    = Math_Atan2f(-dz, dx) * MATH_RAD2DEG
+	         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * spread;
+	pitch  = -Math_Atan2f(hor, dy) * MATH_RAD2DEG
+	         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * spread;
+
+	Mob_PlaySound(m, MOBSND_BOW, 1.0f, 1.0f / (Random_Float(&st_mobRng) * 0.4f + 0.8f));
+	/* damage 4 = Indev EntityArrow's flat attackEntityFrom(this, 4) */
+	SurvivalTest_SpawnArrow(from, yaw, pitch, 0.6f, 4, 1, false, slot);
+}
+
+/* Indev EntityCreeper.attackEntity's fuse expiry: createExplosion(radius 3)
+    then setEntityDead - the creeper vanishes instantly, with NO death
+    animation and NO gunpowder (drops only come from killing it first). */
+static void Mob_IndevCreeperBlast(struct Mob* m) {
+	Vec3 center = m->Base.Position;
+	IVec3 coords;
+	center.y += mobTypeInfo[m->type].heightOff;
+	SurvivalTest_Explode(center, 3);
+
+	IVec3_Floor(&coords, &center);
+	Particles_BreakBlockEffect(coords, BLOCK_LEAVES, BLOCK_AIR);
+	m->health = 0;
+	m->active = false;
+}
+
 /* hurt(Entity attacker, int damage) - implements Mob.java's dual-threshold */
 /*  invulnerableTime mechanic: inside the first half of the 20-tick window all */
 /*  damage is absorbed; inside the second half only the excess over the hit */
@@ -2152,7 +2252,20 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	/*  damage, no invincibility window, no knockback). Only a genuine player */
 	/*  punch counts (Entities.CurPlayer is singleplayer's only Player), not */
 	/*  arrows or other sources - matches `attacker instanceof Player`. */
-	if (m->type == MOB_TYPE_SHEEP && m->hasFur &&
+	if (m->type == MOB_TYPE_SHEEP && m->hasFur && IndevTest_Enabled && attacker) {
+		/* Indev EntitySheep.attackEntityFrom: ANY living attacker (player, mob,
+		    or an arrow resolving to its owner) shears 1 + rand(3) GRAY cloth,
+		    and - unlike c0.30 - the code falls through to super.attackEntityFrom,
+		    so the hit still deals its damage after shearing. */
+		m->hasFur = false;
+		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); }
+		woolCount = 1 + Random_Next(&st_mobRng, 3);
+
+		coords.x = Math_Floor(e->Position.x);
+		coords.y = Math_Floor(e->Position.y);
+		coords.z = Math_Floor(e->Position.z);
+		for (i = 0; i < woolCount; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_GRAY); }
+	} else if (m->type == MOB_TYPE_SHEEP && m->hasFur &&
 		Entities.CurPlayer && attacker == &Entities.CurPlayer->Base) {
 		m->hasFur = false;
 		/* Sheep.renderModel only draws the fur layer while hasFur - swap to */
@@ -2213,6 +2326,17 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 		if (e->Velocity.y > 0.4f) e->Velocity.y = 0.4f;
 	}
 
+	/* EntityLiving.attackEntityFrom plays the death/hurt sound once a hit has
+	    actually landed (absorbed hits above returned before this). Only pig
+	    and sheep override the defaults - every monster is just "random.hurt"
+	    in in-20100223 (their voices arrived in Alpha). */
+	if (IndevTest_Enabled) {
+		int snd = MOBSND_HURT;
+		if (m->type == MOB_TYPE_SHEEP) snd = MOBSND_SHEEP;
+		if (m->type == MOB_TYPE_PIG)   snd = m->health <= 0 ? MOBSND_PIGDEATH : MOBSND_PIG;
+		Mob_PlaySound(m, snd, 1.0f, Mob_SndPitch());
+	}
+
 	if (m->health <= 0) {
 		m->health = 0;
 		Mob_Die(m, playerCredit);
@@ -2253,6 +2377,11 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 	BlockID block;
 	IVec3 coords;
 	float inv = 1.0f / (float)radius;
+
+	/* Indev World.createExplosion opens with random.explode at volume 4 -
+	    audible out to 64 blocks - before any block is touched. */
+	Indev_PlaySoundAt(center, MOBSND_EXPLODE, 4.0f,
+		(1.0f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f) * 0.7f);
 
 	for (yy = y0; yy < y1; yy++) {
 	for (zz = z0; zz < z1; zz++) {
@@ -2513,26 +2642,153 @@ static cc_bool Mob_FindPath(struct Mob* m, float tx, float ty, float tz) {
 	return true;
 }
 
-/* EntityCreature.updatePlayerActionState: acquire the player as a target
-    within 16 blocks, path to them (re-pathing at 1-in-20 per tick), wander
-    to the best of 200 weighted random points otherwise (monsters prefer
-    darkness: weight 0.5 - brightness), and steer along the waypoints. */
-static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+static cc_bool Mob_SightBlocked(Vec3 from, Vec3 to);
+
+/* EntityMob.attackEntity and its per-type overrides. Returns hasAttacked -
+    which only the skeleton's bow shot and the creeper's swelling set, so
+    melee mobs keep running at their victim mid-swing, exactly like the
+    original. te is the target entity, tm its mob struct (NULL = player). */
+static cc_bool Mob_IndevAttackEntity(struct Mob* m, struct Entity* te, struct Mob* tm, float dist) {
+	struct Entity* e = &m->Base;
+	struct AABB mb, tb;
+	float dx, dz, hor;
+	int damage;
+
+	if (mobTypeInfo[m->type].isCreeper) {
+		/* EntityCreeper.attackEntity: the fuse. Starts within 3 blocks, keeps
+		    burning within 7 once lit, blows at 30 ticks. */
+		if ((m->fuseState <= 0 && dist < 3.0f) || (m->fuseState > 0 && dist < 7.0f)) {
+			if (m->fuseTicks == 0)
+				Mob_PlaySound(m, MOBSND_FUSE, 1.0f, 0.5f);
+			m->fuseState = 1;
+			m->fuseTicks++;
+			if (m->fuseTicks >= 30) Mob_IndevCreeperBlast(m);
+			return true;
+		}
+		return false;
+	}
+
+	if (m->type == MOB_TYPE_SKELETON) {
+		/* EntitySkeleton.attackEntity: bow fire within 10 blocks, 30-tick
+		    cooldown, always turning to face the victim and standing still. */
+		if (dist >= 10.0f) return false;
+		if (m->attackDelay == 0) {
+			Mob_IndevShootArrow(m, te);
+			m->attackDelay = 30;
+		}
+		dx = te->Position.x - e->Position.x;
+		dz = te->Position.z - e->Position.z;
+		e->Yaw = Math_Atan2f(-dz, dx) * MATH_RAD2DEG;
+		return true;
+	}
+
+	if (m->type == MOB_TYPE_SPIDER) {
+		/* EntitySpider.attackEntity: standing in light gives a 1-in-100 per
+		    tick chance to lose interest entirely; from 2-6 blocks out a
+		    1-in-10 roll pounces instead of closing (grounded only). */
+		if (Mob_Brightness(m) > 0.5f && Random_Next(&st_mobRng, 100) == 0) {
+			m->hasTarget = false; m->targetSlot = -1;
+			m->pathCount = 0;
+			return false;
+		}
+		if (dist > 2.0f && dist < 6.0f && Random_Next(&st_mobRng, 10) == 0) {
+			if (e->OnGround) {
+				dx  = te->Position.x - e->Position.x;
+				dz  = te->Position.z - e->Position.z;
+				hor = Math_SqrtF(dx * dx + dz * dz);
+				e->Velocity.x = dx / hor * 0.5f * 0.8f + e->Velocity.x * 0.2f;
+				e->Velocity.z = dz / hor * 0.5f * 0.8f + e->Velocity.z * 0.2f;
+				e->Velocity.y = 0.4f;
+			}
+			return false;
+		}
+		/* otherwise the shared melee below */
+	}
+
+	/* EntityMob.attackEntity: melee lands within 2.5 blocks when the bounding
+	    boxes overlap vertically. No attacker-side cooldown - the victim's own
+	    invulnerability window is the rate limiter. Flat per-type strength
+	    (zombie 5, everything else the EntityMob default 2), no damage roll. */
+	if (dist >= 2.5f) return false;
+	Entity_GetBounds(e,  &mb);
+	Entity_GetBounds(te, &tb);
+	if (tb.Max.y <= mb.Min.y || tb.Min.y >= mb.Max.y) return false;
+
+	m->attackTime   = 5; /* the render-side arm-swing timer */
+	m->noActionTime = 0;
+	damage = m->type == MOB_TYPE_ZOMBIE ? 5 : 2;
+	if (tm) {
+		st_hurtCauseSlot = (int)(m - st_mobs);
+		Mob_Hurt(tm, e, damage, false);
+	} else {
+		SurvivalTest_HurtFrom(damage, e->Position);
+	}
+	return false;
+}
+
+/* EntityCreature.updatePlayerActionState: resolve/acquire a target, attack it
+    when in sight, then path toward it (re-pathing at 1-in-20 per tick) or
+    wander to the best of 200 weighted random points (monsters prefer darkness,
+    animals grass), steering along the A* waypoints. */
+static void Mob_IndevCreatureAI(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	struct Entity* e = &m->Base;
 	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Entity* te = NULL; /* current target entity (player or mob) */
+	struct Mob*    tm = NULL;
 	float dx, dy, dz, distSq;
-	cc_bool wantWander;
+	cc_bool wantWander, hasAttacked = false;
 
-	/* EntityMob.findPlayerToAttack: aggro within 16 blocks */
-	if (!m->hasTarget && p && SurvivalTest_Health > 0) {
-		dx = p->Base.Position.x - e->Position.x;
-		dy = p->Base.Position.y - e->Position.y;
-		dz = p->Base.Position.z - e->Position.z;
-		if (dx * dx + dy * dy + dz * dz < 256.0f) {
-			m->hasTarget  = true;
-			m->targetSlot = -1;
-			if (Mob_FindPath(m, p->Base.Position.x, p->Base.Position.y, p->Base.Position.z)) {}
+	/* resolve the existing target, dropping dead/removed ones */
+	if (m->hasTarget) {
+		if (m->targetSlot >= 0) {
+			tm = &st_mobs[(int)m->targetSlot];
+			if (!tm->active || tm->health <= 0) {
+				m->hasTarget = false; m->targetSlot = -1; tm = NULL;
+			} else {
+				te = &tm->Base;
+			}
+		} else if (p && SurvivalTest_Health > 0) {
+			te = &p->Base;
+		} else {
+			m->hasTarget = false;
 		}
+	}
+
+	if (!m->hasTarget) {
+		/* findPlayerToAttack: monsters aggro on the player within 16 blocks;
+		    EntitySpider's override only hunts while ITS OWN spot is dark
+		    (brightness < 0.5). Passives never acquire by proximity. */
+		cc_bool canHunt = mobTypeInfo[m->type].ai != MOB_AI_PASSIVE &&
+			!(m->type == MOB_TYPE_SPIDER && Mob_Brightness(m) >= 0.5f);
+		if (canHunt && p && SurvivalTest_Health > 0) {
+			dx = p->Base.Position.x - e->Position.x;
+			dy = p->Base.Position.y - e->Position.y;
+			dz = p->Base.Position.z - e->Position.z;
+			if (dx * dx + dy * dy + dz * dz < 256.0f) {
+				m->hasTarget  = true;
+				m->targetSlot = -1;
+				te = &p->Base;
+				Mob_FindPath(m, te->Position.x, te->Position.y, te->Position.z);
+			}
+		}
+	} else if (te) {
+		/* attack whenever nothing solid sits between the two eye points */
+		Vec3 me = Entity_GetEyePosition(e);
+		Vec3 pe = Entity_GetEyePosition(te);
+		dx = te->Position.x - e->Position.x;
+		dy = te->Position.y - e->Position.y;
+		dz = te->Position.z - e->Position.z;
+		distSq = dx * dx + dy * dy + dz * dz;
+		if (!Mob_SightBlocked(me, pe))
+			hasAttacked = Mob_IndevAttackEntity(m, te, tm, Math_SqrtF(distSq));
+	}
+
+	if (hasAttacked) {
+		/* a shooting/swelling mob stands its ground this tick */
+		m->moveStrafe  = 0.0f;
+		m->moveForward = 0.0f;
+		m->jumping     = false;
+		return;
 	}
 
 	wantWander = !m->hasTarget || (m->pathCount > 0 && Random_Next(&st_mobRng, 20) != 0);
@@ -2545,15 +2801,22 @@ static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLa
 				cx = (int)(e->Position.x + (float)(Random_Next(&st_mobRng, 21) - 10));
 				cy = (int)(e->Position.y + (float)(Random_Next(&st_mobRng, 9)  - 4));
 				cz = (int)(e->Position.z + (float)(Random_Next(&st_mobRng, 21) - 10));
-				/* monsters: 0.5 - brightness (prefer the dark); passives: 0 */
-				w = mobTypeInfo[m->type].ai == MOB_AI_PASSIVE ? 0.0f :
-					0.5f - (float)IndevTest_LightLevel(cx, cy, cz) / 15.0f;
+				if (mobTypeInfo[m->type].ai == MOB_AI_PASSIVE) {
+					/* EntityAnimal.getBlockPathWeight: a grass block below is
+					    worth 10, anything else its brightness - 0.5 */
+					w = World_Contains(cx, cy - 1, cz) &&
+						World_GetBlock(cx, cy - 1, cz) == BLOCK_GRASS
+						? 10.0f : Indev_LightBrightness(cx, cy, cz) - 0.5f;
+				} else {
+					/* EntityMob: 0.5 - brightness (prefer the dark) */
+					w = 0.5f - Indev_LightBrightness(cx, cy, cz);
+				}
 				if (w > bestW) { bestW = w; bx = cx; by = cy; bz = cz; }
 			}
 			if (bx > 0) Mob_FindPath(m, bx + 0.5f, by + 0.5f, bz + 0.5f);
 		}
-	} else if (m->hasTarget && m->targetSlot == -1 && p) {
-		Mob_FindPath(m, p->Base.Position.x, p->Base.Position.y, p->Base.Position.z);
+	} else if (te) {
+		Mob_FindPath(m, te->Position.x, te->Position.y, te->Position.z);
 	}
 
 	if (m->pathCount > 0 && Random_Next(&st_mobRng, 100) != 0) {
@@ -2590,6 +2853,20 @@ static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLa
 		m->pathCount = 0;
 		Mob_BasicAIUpdate(m, inWater, inLava);
 	}
+}
+
+/* The Indev per-tick AI entry point. EntityCreeper.updatePlayerActionState
+    wraps the shared creature logic in fuse bookkeeping: the swell winds down
+    while idle (timeSinceIgnited--), and creeperState falls back to -1 unless
+    attackEntity re-armed it to 1 this very tick. */
+static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
+	if (mobTypeInfo[m->type].isCreeper) {
+		m->fuseLast = m->fuseTicks;
+		if (m->fuseTicks > 0 && m->fuseState < 0) m->fuseTicks--;
+		if (m->fuseState >= 0) m->fuseState = 2;
+	}
+	Mob_IndevCreatureAI(m, inWater, inLava);
+	if (mobTypeInfo[m->type].isCreeper && m->fuseState != 1) m->fuseState = -1;
 }
 
 /* BasicAI.update() - the shared wander/turn logic used by every mob, plus */
@@ -2940,8 +3217,12 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	if (m->health <= 0) {
 		m->deathTicks++;
 		if (m->deathTicks > 20) {
-			if (info->isCreeper)              Mob_CreeperExplode(m);
-			if (m->type == MOB_TYPE_SKELETON) Mob_SkeletonDeathBurst(m);
+			/* Both are c0.30 behaviours: the Indev creeper only explodes from
+			    its own fuse (a killed one just drops gunpowder), and the Indev
+			    skeleton drops 0-2 arrow ITEMS via onDeath instead of the c0.30
+			    pickupable-arrow burst. */
+			if (info->isCreeper && !IndevTest_Enabled)              Mob_CreeperExplode(m);
+			if (m->type == MOB_TYPE_SKELETON && !IndevTest_Enabled) Mob_SkeletonDeathBurst(m);
 			m->active = false;
 			return;
 		}
@@ -2961,6 +3242,31 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		m->airTicks = MOB_AIR_TICKS;
 	}
 	if (inLava) Mob_Hurt(m, NULL, 10, false);
+
+	/* Entity.onEntityUpdate's fire handling (Indev layer): water puts a
+	    burning mob out with a fizz, otherwise fire deals 1 HP every 20 ticks
+	    while counting down, and lava contact re-arms it to 600. */
+	if (IndevTest_Enabled) {
+		if (inWater && m->fire > 0) {
+			Mob_PlaySound(m, MOBSND_FIZZ, 0.7f,
+				1.6f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.4f);
+			m->fire = 0;
+		}
+		if (m->fire > 0) {
+			if (m->fire % 20 == 0) Mob_Hurt(m, NULL, 1, false);
+			m->fire--;
+		}
+		if (inLava) m->fire = 600;
+
+		/* EntityLiving.onEntityUpdate's ambient-sound roll. Every living
+		    entity runs it, but in in-20100223 only the pig and sheep actually
+		    return a living sound - monsters were still silent. */
+		if (m->health > 0 && Random_Next(&st_mobRng, 1000) < m->livingSnd++) {
+			m->livingSnd = -80;
+			if (m->type == MOB_TYPE_PIG)   Mob_PlaySound(m, MOBSND_PIG,   1.0f, Mob_SndPitch());
+			if (m->type == MOB_TYPE_SHEEP) Mob_PlaySound(m, MOBSND_SHEEP, 1.0f, Mob_SndPitch());
+		}
+	}
 
 	if (m->attackDelay > 0) m->attackDelay--;
 
@@ -2983,13 +3289,25 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		m->hasTarget   = false;
 	} else {
 		m->noActionTime++;
-		/* EntityMob.onLivingUpdate: monsters in bright light (> 0.5 entity */
-		/*  brightness ~ light level 9+) age twice as fast toward the despawn */
-		/*  roll - Indev's daylight answer (in-20100223 monsters do NOT burn; */
-		/*  that arrived in Alpha). */
+		/* EntityMob.onLivingUpdate: monsters in bright light (entity brightness */
+		/*  over 0.5, which the genuine curve only reaches at light level 12+) */
+		/*  age twice as fast toward the despawn roll. */
 		if (IndevTest_Enabled && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE &&
-			IndevTest_LightLevel((int)e->Position.x, (int)e->Position.y, (int)e->Position.z) > 8) {
+			Mob_Brightness(m) > 0.5f) {
 			m->noActionTime += 2;
+		}
+		/* EntityZombie/EntitySkeleton.onLivingUpdate: daylight sets them on
+		    fire - sky light over 7 (daytime), bright spot, open sky overhead,
+		    then a rand*30 < (brightness-0.4)*2 roll (~4%/tick in full sun). */
+		if (IndevTest_Enabled &&
+			(m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON) &&
+			IndevTest_CurSkyLight() > 7) {
+			float mb = Mob_Brightness(m);
+			if (mb > 0.5f &&
+				Lighting.IsLit(Math_Floor(e->Position.x), Math_Floor(e->Position.y), Math_Floor(e->Position.z)) &&
+				Random_Float(&st_mobRng) * 30.0f < (mb - 0.4f) * 2.0f) {
+				m->fire = 300;
+			}
 		}
 		/* BasicAI.tick's despawn roll: once a mob has gone 600+ ticks without */
 		/*  being hurt or landing a hit, each tick has a 1/800 chance to check */
@@ -3012,20 +3330,24 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 			}
 		}
 
-		if (m->type == MOB_TYPE_SHEEP) {
-			Mob_SheepUpdate(m, inWater, inLava);
-		} else if (IndevTest_Enabled) {
-			/* Indev: EntityCreature A* pathfinding drives the movement */
+		if (IndevTest_Enabled) {
+			/* Indev: EntityCreature pathfinding + per-type attackEntity, all
+			    inside updatePlayerActionState. Sheep included - the Indev sheep
+			    is a plain EntityAnimal wanderer (no c0.30 grass-eating). */
 			Mob_IndevCreatureUpdate(m, inWater, inLava);
 		} else {
-			Mob_BasicAIUpdate(m, inWater, inLava);
-		}
-		if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
+			if (m->type == MOB_TYPE_SHEEP) {
+				Mob_SheepUpdate(m, inWater, inLava);
+			} else {
+				Mob_BasicAIUpdate(m, inWater, inLava);
+			}
+			if (info->ai != MOB_AI_PASSIVE) Mob_DoAttack(m);
 
-		/* SkeletonAI.tick(): on top of (not instead of) the melee attack above, */
-		/*  a skeleton with a target has a 1/30 per-tick chance to loose an arrow. */
-		if (m->type == MOB_TYPE_SKELETON && m->hasTarget && Random_Next(&st_mobRng, 30) == 0) {
-			Mob_ShootArrow(m);
+			/* SkeletonAI.tick(): on top of (not instead of) the melee attack above, */
+			/*  a skeleton with a target has a 1/30 per-tick chance to loose an arrow. */
+			if (m->type == MOB_TYPE_SKELETON && m->hasTarget && Random_Next(&st_mobRng, 30) == 0) {
+				Mob_ShootArrow(m);
+			}
 		}
 	}
 
@@ -3192,6 +3514,7 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	Mem_Set(m, 0, sizeof(struct Mob));
 	Entity_Init(&m->Base);
 	m->Base.VTABLE = &mob_VTABLE;
+	m->fuseState   = -1; /* EntityCreeper.creeperState idles at -1, not 0 */
 
 	model = String_FromReadonly(mobTypeInfo[type].model);
 	Entity_SetModel(&m->Base, &model);
@@ -3474,6 +3797,22 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 			e->Anim.HasHelmet   = m->hasHelmet;
 			e->Anim.HasArmor    = m->hasArmor;
 		}
+		/* Indev RenderCreeper.preRenderCallback: the fuse swell. s is the
+		    interpolated timeSinceIgnited / (fuseTime - 2), a sin(s*100)*s*0.01
+		    shiver modulates it, then s^4 fattens x/z by up to 40% and
+		    stretches y by 10% (divided by the shiver so volume ~ conserved). */
+		if (IndevTest_Enabled && mobTypeInfo[m->type].isCreeper) {
+			float s = ((float)m->fuseLast + ((float)m->fuseTicks - (float)m->fuseLast) * t) / 28.0f;
+			float shiver = 1.0f + Math_SinF(s * 100.0f) * s * 0.01f;
+			float sxz, sy;
+			if (s < 0.0f) s = 0.0f;
+			if (s > 1.0f) s = 1.0f;
+			s = s * s; s = s * s;
+			sxz = (1.0f + s * 0.4f) * shiver;
+			sy  = (1.0f + s * 0.1f) / shiver;
+			e->ModelScale.x = sxz; e->ModelScale.y = sy; e->ModelScale.z = sxz;
+		}
+
 		e->ShouldRender = Model_ShouldRender(e);
 		if (!e->ShouldRender) continue;
 
@@ -3812,6 +4151,9 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 	if (collided) {
 		a->hasHit = true;
 		a->velocity.x = a->velocity.y = a->velocity.z = 0.0f;
+		/* Indev EntityArrow: sticking into a block plays random.drr */
+		Indev_PlaySoundAt(a->pos, MOBSND_DRR,
+			1.0f, 1.2f / (Random_Float(&st_arrowRng) * 0.2f + 0.9f));
 	} else if (len > 0.0001f) {
 		a->facing.x = a->velocity.x / len;
 		a->facing.y = a->velocity.y / len;
@@ -3840,6 +4182,9 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 	st_playerArrows++;
 	/* Arrow.playerTouch: arrows++ happens immediately, then a TakeEntityAnim */
 	/*  zips the arrow into the player before the entity is removed. */
+	/* Indev EntityArrow.playerTouch also plays the pickup pop. */
+	Indev_PlaySoundAt(a->pos, MOBSND_POP, 0.2f,
+		((Random_Float(&st_arrowRng) - Random_Float(&st_arrowRng)) * 0.7f + 1.0f) * 2.0f);
 	a->pickingUp  = true;
 	a->pickupTime = 0.0f;
 	a->pickupFrom = a->pos;

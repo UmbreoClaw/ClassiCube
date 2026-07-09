@@ -967,6 +967,15 @@ int IndevTest_LightLevel(int x, int y, int z) {
 	return light;
 }
 
+/* The live sky light level - what zombie/skeleton daylight burning tests as
+    "worldObj.skylightSubtracted > 7" (the deobf name is a misnomer: World.tick
+    eases that field toward getSkyBrightness every tick, so it IS the sky
+    light, 15 at noon / 4 at night). */
+int IndevTest_CurSkyLight(void) {
+	if (!IndevTest_Enabled) return 15;
+	return Indev_SkyLight();
+}
+
 static cc_bool Indev_GrowLightOk(int x, int y, int z) {
 	return IndevTest_LightLevel(x, y, z) >= 9;
 }
