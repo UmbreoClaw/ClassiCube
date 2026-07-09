@@ -1932,6 +1932,16 @@ static float Mob_Brightness(struct Mob* m) {
 								 Math_Floor(e->Position.z));
 }
 
+/* Indev EntityLiving.moveSpeed: 0.7 default, zombie 0.5, spider 0.8. The
+    c0.30 runSpeed table (zombie 1.0, skeleton 0.3) is a different tuning for
+    a different mover - feeding those into the 20Hz waypoint steering made
+    mobs overshoot the waypoint every tick and flip 180 degrees back. */
+static float Mob_IndevMoveSpeed(int type) {
+	if (type == MOB_TYPE_ZOMBIE) return 0.5f;
+	if (type == MOB_TYPE_SPIDER) return 0.8f;
+	return 0.7f;
+}
+
 /* The (rand - rand)*0.2 + 1 pitch jitter every living-entity sound uses */
 static float Mob_SndPitch(void) {
 	return (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f + 1.0f;
@@ -2843,7 +2853,7 @@ static void Mob_IndevCreatureAI(struct Mob* m, cc_bool inWater, cc_bool inLava) 
 			dy = wy - e->Position.y;
 			/* face the waypoint (same yaw convention as Mob_DoAttack) */
 			e->Yaw = Math_Atan2f(-dz, dx) * MATH_RAD2DEG;
-			m->moveForward = mobTypeInfo[m->type].runSpeed;
+			m->moveForward = Mob_IndevMoveSpeed(m->type);
 			if (dy > 0.0f) m->jumping = true;
 		}
 		if ((inWater || inLava) && Random_Float(&st_mobRng) < 0.8f) m->jumping = true;
@@ -2875,10 +2885,14 @@ static void Mob_IndevCreatureUpdate(struct Mob* m, cc_bool inWater, cc_bool inLa
 static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
 	struct Entity* e = &m->Base;
+	/* In Indev mode this only ever runs as EntityLiving's default action
+	    state (the pathless fallback), whose random impulses scale by the
+	    Indev moveSpeed - not by c0.30's differently-tuned runSpeed. */
+	float speed = IndevTest_Enabled ? Mob_IndevMoveSpeed(m->type) : info->runSpeed;
 
 	if (Random_Next(&st_mobRng, 100) < 7) {
-		m->moveStrafe  = (Random_Float(&st_mobRng) - 0.5f) * info->runSpeed;
-		m->moveForward =  Random_Float(&st_mobRng)         * info->runSpeed;
+		m->moveStrafe  = (Random_Float(&st_mobRng) - 0.5f) * speed;
+		m->moveForward =  Random_Float(&st_mobRng)         * speed;
 	}
 	m->jumping = Random_Next(&st_mobRng, 100) < 1;
 
@@ -2889,7 +2903,7 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	e->Pitch = info->defaultLookAngle;
 
 	if (m->hasTarget) {
-		m->moveForward = info->runSpeed;
+		m->moveForward = speed;
 		m->jumping = Random_Next(&st_mobRng, 100) < 4;
 	}
 

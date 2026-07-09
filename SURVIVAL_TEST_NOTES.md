@@ -2,6 +2,16 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Mob movement jitter / constant 180 flips (user report)
+The Indev waypoint steering was fed c0.30's runSpeed table (zombie 1.0,
+skeleton 0.3) instead of the genuine Indev EntityLiving.moveSpeed values
+(0.7 default, zombie 0.5, spider 0.8 - EntityZombie/EntitySpider are the
+only overrides). At double speed the 20Hz steering overshot the current
+waypoint every tick and snapped yaw 180 degrees back, reading as jittery
+"front/back" indecision. New `Mob_IndevMoveSpeed()` feeds both the
+pathfollow and the pathless BasicAI fallback (Indev-gated - c0.30 keeps
+its own runSpeed everywhere). Needs a feel pass by the user.
+
 ### Menu dim losing its top while holding an item (user report)
 Symptom: pause-menu background dim only covered the lower ~60% of the
 screen, triggered by holding any ITEM id (mining with a pickaxe, "Give
