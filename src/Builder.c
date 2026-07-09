@@ -13,6 +13,7 @@
 #include "TexturePack.h"
 #include "Game.h"
 #include "Options.h"
+#include "IndevTest.h"
 
 int Builder_SidesLevel, Builder_EdgeLevel;
 /* Packs an index into the 16x16x16 count array. Coordinates range from 0 to 15. */
@@ -92,7 +93,9 @@ static int Builder_TotalVerticesCount(void) {
 static void AddSpriteVertices(BlockID block) {
 	int i = Atlas1D_Index(Block_Tex(block, FACE_XMAX));
 	struct Builder1DPart* part = &Builder_Parts[i];
-	part->sCount += 4 * 4;
+	/* Indev crops draw 8 quads (4 double-sided "#" rows), not the 4 of */
+	/*  the diagonal cross - see Builder_DrawCrops. */
+	part->sCount += IndevTest_IsCropBlock(block) ? 8 * 4 : 4 * 4;
 }
 
 static void AddVertices(BlockID block, Face face) {
@@ -493,7 +496,65 @@ static void DefaultPostStretchChunk(void) {
 }
 
 static RNGState spriteRng;
+/* Indev BlockCrops (render type 6, RenderBlocks.renderBlockCrops): four
+    double-sided planes at +-0.25 from the block centre - two spanning the
+    full Z extent, two spanning the full X - sunk 1/16 into the farmland
+    below. Emitted as TWO of the engine's banked 4-quad sprite units, so
+    the vertex layout stays exactly what the sprite counting expects. */
+static void Builder_DrawCrops(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float v1, v2, u1, u2;
+	float X, Y, Z, y1, y2, lo, hi;
+	int stride;
+
+	X  = (float)x; Y = (float)y; Z = (float)z;
+	y1 = Y - 1.0f/16.0f; y2 = y1 + 1.0f;
+	lo = 0.25f; hi = 0.75f;
+
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	v2  = v1 + Atlas1D.InvTileSize * UV2_Scale;
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+
+	#define CROP_V(vx, vy, vz, uu, vv) v->x = (vx); v->y = (vy); v->z = (vz); v->Col = color; v->U = (uu); v->V = (vv); v++;
+	/* unit 1: the two planes perpendicular to X, one side per bank */
+	v = &Builder_Vertices[part->sOffset];
+	CROP_V(X+lo, y2, Z,      u1, v1) CROP_V(X+lo, y1, Z,      u1, v2) CROP_V(X+lo, y1, Z+1.0f, u2, v2) CROP_V(X+lo, y2, Z+1.0f, u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X+lo, y2, Z+1.0f, u1, v1) CROP_V(X+lo, y1, Z+1.0f, u1, v2) CROP_V(X+lo, y1, Z,      u2, v2) CROP_V(X+lo, y2, Z,      u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X+hi, y2, Z+1.0f, u1, v1) CROP_V(X+hi, y1, Z+1.0f, u1, v2) CROP_V(X+hi, y1, Z,      u2, v2) CROP_V(X+hi, y2, Z,      u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X+hi, y2, Z,      u1, v1) CROP_V(X+hi, y1, Z,      u1, v2) CROP_V(X+hi, y1, Z+1.0f, u2, v2) CROP_V(X+hi, y2, Z+1.0f, u2, v1)
+	part->sOffset += 4;
+
+	/* unit 2: the two planes perpendicular to Z */
+	v = &Builder_Vertices[part->sOffset];
+	CROP_V(X,      y2, Z+lo, u1, v1) CROP_V(X,      y1, Z+lo, u1, v2) CROP_V(X+1.0f, y1, Z+lo, u2, v2) CROP_V(X+1.0f, y2, Z+lo, u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X+1.0f, y2, Z+lo, u1, v1) CROP_V(X+1.0f, y1, Z+lo, u1, v2) CROP_V(X,      y1, Z+lo, u2, v2) CROP_V(X,      y2, Z+lo, u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X+1.0f, y2, Z+hi, u1, v1) CROP_V(X+1.0f, y1, Z+hi, u1, v2) CROP_V(X,      y1, Z+hi, u2, v2) CROP_V(X,      y2, Z+hi, u2, v1)
+	v -= 4; v += stride;
+	CROP_V(X,      y2, Z+hi, u1, v1) CROP_V(X,      y1, Z+hi, u1, v2) CROP_V(X+1.0f, y1, Z+hi, u2, v2) CROP_V(X+1.0f, y2, Z+hi, u2, v1)
+	part->sOffset += 4;
+	#undef CROP_V
+}
+
 static void Builder_DrawSprite(int x, int y, int z) {
+	if (IndevTest_IsCropBlock(Builder_Block)) { Builder_DrawCrops(x, y, z); return; }
+	{
 	struct Builder1DPart* part;
 	struct VertexTextured* v;
 	cc_uint8 offsetType;
@@ -562,6 +623,7 @@ static void Builder_DrawSprite(int x, int y, int z) {
 	v->x = x1; v->y = y1; v->z = z2; v->Col = color; v->U = s_u1; v->V = v2; v++;
 
 	part->sOffset += 4;
+	}
 }
 
 

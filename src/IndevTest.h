@@ -85,6 +85,10 @@ cc_bool IndevTest_BindHeldTexture(int id, TextureRec* rec);
 /*  block: item ids, sprite-draw blocks (flowers etc) and torches. False */
 /*  outside Indev mode (c0.30 renders every block drop as its cropped cube). */
 cc_bool IndevTest_DropIsSprite(int id);
+/* Whether the block is an Indev crop stage (85-92) - the chunk builder */
+/*  renders those as BlockCrops' "#" row pattern instead of the X-cross */
+/*  sprite. Always false outside Indev mode. */
+cc_bool IndevTest_IsCropBlock(BlockID b);
 /* Whether the block is a container (chest/furnace) - right-clicking one is */
 /*  always consumed (blockActivated returns true even when a blocked chest */
 /*  refuses to open), so no block gets placed against it. */

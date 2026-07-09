@@ -2,6 +2,21 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Crops render as the genuine "#" row pattern (user report)
+Crops were engine DRAW_SPRITE (a single diagonal X-cross clustered at the
+block centre); genuine BlockCrops is render type 6 - four double-sided
+planes at +-0.25 from centre (two spanning the full Z extent, two the
+full X), sunk 1/16 into the farmland, so sprouts spread across the whole
+tilled block. Ported as `Builder_DrawCrops` in Builder.c, emitted as two
+of the engine's banked 4-quad sprite units so the sprite vertex layout/
+counting stays intact (`AddSpriteVertices` counts crops as 8 quads, and
+`Builder_DrawSprite` dispatches via the new `IndevTest_IsCropBlock`).
+c0.30/creative sprites are untouched. Rig verified crash-free chunk
+builds with a generated all-stages crop world (scratchpad
+gen_croptest.py); the VISUAL check needs the user's textured build - the
+rig's texture pack predates the crop tile patches so crops sample blank
+atlas space there.
+
 ### Mob movement jitter / constant 180 flips (user report)
 The Indev waypoint steering was fed c0.30's runSpeed table (zombie 1.0,
 skeleton 0.3) instead of the genuine Indev EntityLiving.moveSpeed values

@@ -431,6 +431,11 @@ static cc_bool Indev_IsCrops(BlockID b) {
 	return b >= INDEV_BLOCK_CROPS_0 && b <= INDEV_BLOCK_CROPS_7;
 }
 
+/* Chunk-builder hook: crop stages render as BlockCrops' row pattern. */
+cc_bool IndevTest_IsCropBlock(BlockID b) {
+	return IndevTest_Enabled && Indev_IsCrops(b);
+}
+
 static cc_bool Indev_IsChestBlock(BlockID b) {
 	return b == INDEV_BLOCK_CHEST || (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3);
 }
