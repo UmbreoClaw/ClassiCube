@@ -484,6 +484,28 @@ static cc_bool IsLit_Fast(int x, int y, int z) { return ClassicLighting_IsLit_Fa
 		CalculateChunkLightingAll(chunkIndex, cx, cy, cz); \
 	}
 
+/* The block-emitted light level (0-15) at a position: the stronger of the
+    cached lamp/lava nibbles. Sky light is NOT included - callers combine it
+    with the sky heightmap + time of day themselves (see Lighting.IsLit).
+    Only meaningful while fancy lighting is the active mode. */
+int FancyLighting_BlockLightLevel(int x, int y, int z) {
+	cc_uint8 lightData;
+	int cx, cy, cz, chunkIndex, lamp, lava;
+	if (!World_Contains(x, y, z) || !chunkLightingData) return 0;
+
+	cx = x >> CHUNK_SHIFT;
+	cy = y >> CHUNK_SHIFT;
+	cz = z >> CHUNK_SHIFT;
+	chunkIndex = ChunkCoordsToIndex(cx, cy, cz);
+	CalcForChunkIfNeeded(cx, cy, cz, chunkIndex);
+
+	if (chunkLightingData[chunkIndex] == NULL) return 0;
+	lightData = chunkLightingData[chunkIndex][GlobalCoordsToChunkCoordsIndex(x, y, z)];
+	lamp = lightData >> FANCY_LIGHTING_LAMP_SHIFT;
+	lava = lightData &  FANCY_LIGHTING_MAX_LEVEL;
+	return lamp > lava ? lamp : lava;
+}
+
 static PackedCol Color_Core(int x, int y, int z, int paletteFace) {
 	cc_uint8 lightData;
 	int cx, cy, cz, chunkIndex;

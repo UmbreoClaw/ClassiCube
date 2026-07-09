@@ -105,6 +105,18 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - per-block light query (torch-lit night farms)
+
+The crop-growth light approximation is gone. FancyLighting already caches a
+per-block byte (lamp nibble | lava nibble) per chunk - the new
+FancyLighting_BlockLightLevel(x,y,z) just exposes max(lamp, lava) from that
+cache (CalcForChunkIfNeeded + two masks; ~20 lines). Indev_GrowLightOk now
+takes max(sky-lit ? day/night sky level : 0, block light) >= 9 - matching
+World.getBlockLightValue, so TORCH-LIT FARMS GROW AT NIGHT like genuine.
+Falls back to the sky-only check if the user forces classic lighting mode.
+
+---
+
 ## SESSION LOG - farming + growth pipeline (in-20100223 ports)
 
 New blocks: farmland dry 83 / wet 84 (tiles 116/115, dirt sides, not
