@@ -442,10 +442,14 @@ static cc_bool Indev_IsFurnaceLit(BlockID b) {
 }
 
 /* Inventory/drop form of a block (directional variants -> canonical id). */
+/* BlockFurnace.idDropped is Block.stoneOvenIdle for BOTH furnace states, so */
+/*  every lit form (base or directional) canonicalises to the idle furnace - */
+/*  mining a burning furnace must never put a lit one in the inventory. */
 BlockID IndevTest_CanonicalBlock(BlockID b) {
 	if (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3) return INDEV_BLOCK_CHEST;
 	if (b >= INDEV_BLOCK_FURN_V0  && b <= INDEV_BLOCK_FURN_V0  + 3) return INDEV_BLOCK_FURNACE;
-	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return INDEV_BLOCK_FURNACE_LIT;
+	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return INDEV_BLOCK_FURNACE;
+	if (b == INDEV_BLOCK_FURNACE_LIT) return INDEV_BLOCK_FURNACE;
 	return b;
 }
 

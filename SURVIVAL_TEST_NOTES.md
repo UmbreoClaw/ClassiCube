@@ -1,5 +1,24 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
+
+### Lit furnace mined -> idle furnace (user report)
+`IndevTest_CanonicalBlock` mapped the lit-furnace directional variants back
+to the lit BASE furnace, and the base lit furnace passed through unchanged -
+so mining a burning furnace put a lit one in the inventory. Genuine
+BlockFurnace.idDropped is Block.stoneOvenIdle for BOTH states; every lit
+form (base + variants 79-82) now canonicalises to the idle furnace. Both
+mining-drop call sites already route through CanonicalBlock, so this one
+mapping fixes them all (Formats.c's chest scan is unaffected).
+
+### Inventory stack counts get their drop shadow (user report)
+The SurvivalInvScreen count atlas was built from the size-14 label font,
+whose baked shadow is size/8 = 1px - effectively invisible. Now built like
+the hotbar's counts: dedicated unpadded size-16 digit font (2px shadow,
+exact glyph metrics for the right-aligned layout), freed after rasterising.
+Rig-verified: counts in the inventory show the dark backdrop shadow.
+
+
 ## SESSION LOG - Phase 2 finish: per-mob attack AI, fire, mob sounds (latest)
 
 ### Per-mob attackEntity ports (all Indev-gated, c0.30 AI untouched)

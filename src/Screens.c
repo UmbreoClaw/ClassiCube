@@ -3188,11 +3188,18 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 	static const cc_string lblInv = String_FromConst("&8Inventory");
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	struct DrawTextArgs args;
+	struct FontDesc countFont;
 
 	Screen_UpdateVb(s);
 	Font_Make(&s->font, 14, FONT_FLAGS_PADDING);
 	Font_SetPadding(&s->font, 1);
-	TextAtlas_Make(&s->countAtlas, &digits, &s->font, &empty);
+	/* Unpadded size-16 digit atlas, same as the hotbar's stack counts - the
+	    baked drawStringWithShadow drop shadow scales with the font size
+	    (size/8 px), and 14pt's 1px shadow was too faint to read against
+	    item sprites. Exact glyph metrics also keep right-alignment tight. */
+	Font_Make(&countFont, 16, FONT_FLAGS_NONE);
+	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
+	Font_Free(&countFont);
 
 	DrawTextArgs_Make(&args, &title, &s->font, true);
 	Drawer2D_MakeTextTexture(&s->titleTex, &args);
