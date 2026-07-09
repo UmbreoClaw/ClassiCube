@@ -2,6 +2,21 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Build stamp + crop outline actually-fix (user report round 3)
+User still saw sparse sprouts on their Windows build after the bank fix.
+Re-derived the whole chain against the engine: chunk faces render with
+culling ON on both backends (DrawNormalFaces draws min+max together and
+lets the GPU cull), so GL and D3D9 winding conventions ARE consistent,
+and the crop quad winding matches Drawer_XMax's convention - the code is
+correct on both. Prime suspect is a stale exe (the artifact was still
+building when they tested). Two changes to close the loop:
+- "Minecraft Indev (<compile date time>)" corner stamp so any build is
+  self-identifying - no more guessing which artifact is running.
+- The 0.25-tall crop outline was being STOMPED: the engine recalculates
+  every DRAW_SPRITE block's bounds from texture alpha on each atlas
+  change (Block_RecalculateAllSpriteBB). Crops are now skipped there, so
+  BlockCrops' fixed 1 x 0.25 x 1 box survives.
+
 ### Crops render fix round 2: view-bank culling + short outline (user report)
 The first "#" port scattered quads across the sprite banks arbitrarily -
 but the sprite region renders with FACE CULLING ON and its four banks

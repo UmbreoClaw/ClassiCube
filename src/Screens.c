@@ -273,7 +273,9 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	if (IndevTest_Enabled) {
 		struct FontDesc font;
 		Gui_MakeBodyFont(&font);
-		TextWidget_SetConst(&s->indevTitle, "Minecraft Indev", &font);
+		/* The compile stamp makes every build self-identifying - "which
+		    artifact am I actually running" kept coming up during testing. */
+		TextWidget_SetConst(&s->indevTitle, "Minecraft Indev (" __DATE__ " " __TIME__ ")", &font);
 		s->indevTitle.tex.x = 2; s->indevTitle.tex.y = 2;
 		Font_Free(&font);
 	}
