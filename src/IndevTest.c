@@ -575,6 +575,30 @@ static void IndevBlocks_Define(void) {
 	Blocks.CanPlace[INDEV_BLOCK_FARMLAND]     = false;
 	Blocks.CanPlace[INDEV_BLOCK_FARMLAND_WET] = false;
 
+	/* Indev rebalanced the CLASSIC blocks' hardness (Block.java setHardness
+	    registrations, x20 = our tick units). Applied only here - the c0.30
+	    gamemode never runs this function, so classic stays faithful. Notable
+	    changes vs c0.30: stone 1.0->1.5s, cobble/planks/brick/mossy/slabs
+	    1.5->2.0s (brick was a 0-hardness quirk in classic!), dirt/sand
+	    0.6->0.5s, log 2.5->2.0s, flowing lava 100->0s (a genuine quirk). */
+	{
+		static const struct { cc_uint8 b; cc_uint16 h; } indevHardness[] = {
+			{ BLOCK_STONE, 30 },  { BLOCK_GRASS, 12 },  { BLOCK_DIRT, 10 },
+			{ BLOCK_COBBLE, 40 }, { BLOCK_WOOD, 40 },   { BLOCK_SAND, 10 },
+			{ BLOCK_GRAVEL, 12 }, { BLOCK_GOLD_ORE, 60 },{ BLOCK_IRON_ORE, 60 },
+			{ BLOCK_COAL_ORE, 60 },{ BLOCK_LOG, 40 },   { BLOCK_LEAVES, 4 },
+			{ BLOCK_SPONGE, 12 }, { BLOCK_GLASS, 6 },   { BLOCK_GOLD, 60 },
+			{ BLOCK_IRON, 100 },  { BLOCK_DOUBLE_SLAB, 40 }, { BLOCK_SLAB, 40 },
+			{ BLOCK_BRICK, 40 },  { BLOCK_BOOKSHELF, 30 }, { BLOCK_MOSSY_ROCKS, 40 },
+			{ BLOCK_OBSIDIAN, 200 }, { BLOCK_LAVA, 0 }
+		};
+		int hi;
+		for (hi = 0; hi < (int)Array_Elems(indevHardness); hi++) {
+			SurvivalTest_SetHardness(indevHardness[hi].b, indevHardness[hi].h);
+		}
+		for (hi = BLOCK_RED; hi <= BLOCK_WHITE; hi++) SurvivalTest_SetHardness((BlockID)hi, 16);
+	}
+
 	/* Crop stages 0-7: X-sprites of tiles 107-114, walk-through, instant */
 	/*  break, not placeable (planted via seeds). */
 	for (k = 0; k < 8; k++) {
@@ -860,6 +884,7 @@ static int       indev_lastSkyLight = -1;
 int  IndevTest_WorldTime(void)      { return indev_worldTime; }
 void IndevTest_SetWorldTime(int t)  { indev_worldTime = t >= 0 ? t % 24000 : 0; }
 void IndevTest_SetSkyBrightness(int b) { indev_skyBright = b; }
+int  IndevTest_SkyBrightness(void)      { return indev_skyBright; }
 
 /* Full-daylight base colours for .mclevel saving - the live Env colours */
 /*  are time-of-day scaled, and saving those (e.g. at night) would bake a */

@@ -105,6 +105,38 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - .mclevel entity parity + Indev block hardness overrides
+
+### .mclevel format parity (the remaining Entities-list gap)
+- SAVE now writes the FULL genuine Entities list: LocalPlayer + every live
+  mob (Zombie/Skeleton/Pig/Creeper/Spider/Sheep with Pos/Rotation/Health,
+  the genuine writeToNBT field set) + every physical item drop ("Item"
+  entities with the ItemStack payload, block ids remapped to Indev space).
+- LOAD restores them: mobs respawn via SurvivalTest_RestoreMob with saved
+  health (genuine default 10 when absent), item drops via SpawnDropWorld
+  (ids remapped back). Arrows/PrimedTnt/Paintings still skipped - genuine
+  Indev also skips Arrow/PrimedTnt on load ("Skipping unknown entity id"),
+  so only Painting remains a real gap (no painting entity system yet).
+- SkyBrightness was SAVED as a constant 15 - now round-trips the real
+  value (paradise maps stay paradise).
+- VERIFIED in the rig: saved a mob-heavy world -> 58 entities parsed out
+  of the file with correct id strings; loaded back with inventory, score,
+  drops and mobs restored, no crash.
+- Remaining known deltas: armor slots 100-103 (needs the armor system),
+  Data light nibble written as full-light (genuine relights anyway),
+  drop-entity Damage always 0 (our drops don't carry tool wear).
+
+### Indev block hardness overrides (classic untouched)
+Indev rebalanced classic blocks' hardness; applied via SetHardness inside
+IndevBlocks_Define - which ONLY runs in Indev mode, so c0.30 keeps its
+faithful table. Changes vs c0.30 (x20 tick units): stone 20->30, cobble/
+planks 30->40, brick 0->40 (classic's brick was a genuine 0-hardness
+quirk!), mossy 20->40, slabs 20->40, dirt/sand 12->10, log 50->40,
+flowing lava 2000->0 (genuine Indev quirk: setHardness(0)), wool 16,
+bookshelf 30, obsidian 200, ores 60, gold block 60, iron block 100.
+
+---
+
 ## SESSION LOG - first-person extruded held item (ItemRenderer port)
 
 The camera-anchored billboard held-item hack is GONE. Items (tools/food/

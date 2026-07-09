@@ -115,6 +115,10 @@ void SurvivalTest_DamageHeldItem(int amount);
 void SurvivalTest_ConsumeHeld(void);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
+/* .mclevel entity save/load: live mob + item drop iteration and respawn. */
+int  SurvivalTest_MobNext(int prev, int* type, Vec3* pos, float* yaw, int* health);
+int  SurvivalTest_DropNext(int prev, Vec3* pos, int* id, int* count);
+void SurvivalTest_RestoreMob(int type, Vec3 pos, float yaw, int health);
 
 /* Swaps two slots. Indices 0..SURVIVAL_INV_SLOTS-1 are the inventory, */
 /*  SURVIVAL_CRAFT_BASE..+3 are the 2x2 crafting grid (no-op when disabled). */

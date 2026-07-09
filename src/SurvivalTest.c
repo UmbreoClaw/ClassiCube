@@ -3957,6 +3957,45 @@ void SurvivalTest_DebugGiveItem(int id) {
 void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
 void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
 
+/* .mclevel entity save: iterates live mobs (returns the next active index */
+/*  after prev, or -1) and physical item drops, for the Entities list. */
+int SurvivalTest_MobNext(int prev, int* type, Vec3* pos, float* yaw, int* health) {
+	int i;
+	for (i = prev + 1; i < MOB_MAX; i++) {
+		if (!st_mobs[i].active || st_mobs[i].health <= 0) continue;
+		*type   = st_mobs[i].type;
+		*pos    = st_mobs[i].Base.Position;
+		*yaw    = st_mobs[i].Base.Yaw;
+		*health = st_mobs[i].health;
+		return i;
+	}
+	return -1;
+}
+
+int SurvivalTest_DropNext(int prev, Vec3* pos, int* id, int* count) {
+	int i;
+	for (i = prev + 1; i < DROP_MAX; i++) {
+		if (!st_drops[i].active) continue;
+		*pos   = st_drops[i].position;
+		*id    = st_drops[i].block;
+		*count = st_drops[i].count;
+		return i;
+	}
+	return -1;
+}
+
+/* .mclevel entity load: respawns a saved mob with its health. */
+void SurvivalTest_RestoreMob(int type, Vec3 pos, float yaw, int health) {
+	struct Mob* m;
+	if (!SurvivalTest_Enabled) return;
+	if (type < 0 || type >= MOB_TYPE_COUNT) return;
+
+	m = SurvivalTest_SpawnMobAt((cc_uint8)type, pos);
+	if (!m) return;
+	m->Base.Yaw = yaw;
+	if (health > 0 && health <= m->health) m->health = health;
+}
+
 /* Right-clicking a placed workbench opens the 3x3 crafting screen; a chest */
 /*  or furnace opens its container screen. Returns true (click consumed) so */
 /*  no block is placed. The regular E-inventory opens the pocket 2x2; all */

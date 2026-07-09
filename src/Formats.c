@@ -1482,8 +1482,15 @@ static void MCLevel_Callback_3(struct NbtTag* tag) {
     NBT compound field order is arbitrary (Java HashMap), so no field-order
     assumptions are made. */
 static struct { int slot, id, count, damage; } mcl_item;
+/* Entity id strings we restore: the player, the 6 mob kinds, item drops */
+static const char* const mcl_mobNames[] = {
+	"Zombie", "Skeleton", "Pig", "Creeper", "Spider", "Sheep"
+};
 static struct {
 	cc_bool isPlayer;
+	int mobType; /* index into mcl_mobNames, or -1 */
+	cc_bool isItem;
+	int dropId, dropCount;
 	float px, py, pz, yaw, pitch;
 	int health, score;
 	cc_uint16 ids[SURVIVAL_INV_SLOTS]; cc_int16 counts[SURVIVAL_INV_SLOTS], dmg[SURVIVAL_INV_SLOTS];
@@ -1497,6 +1504,7 @@ static struct {
 static void MCLevel_ResetItem(void) { mcl_item.slot = -1; mcl_item.id = 0; mcl_item.count = 0; mcl_item.damage = 0; }
 static void MCLevel_ResetEnt(void) {
 	Mem_Set(&mcl_ent, 0, sizeof(mcl_ent));
+	mcl_ent.mobType = -1;
 	MCLevel_ResetItem();
 }
 static void MCLevel_ResetTE(void) {
@@ -1558,7 +1566,19 @@ static void MCLevel_CommitEntity(void) {
 			spawn_point->pitch = mcl_ent.pitch;
 		}
 	}
-	/* other entity kinds (mobs/items/paintings) are not restored yet */
+	if (SurvivalTest_Enabled && !mcl_ent.isPlayer) {
+		Vec3 p;
+		p.x = mcl_ent.px; p.y = mcl_ent.py; p.z = mcl_ent.pz;
+		if (mcl_ent.mobType >= 0) {
+			SurvivalTest_RestoreMob(mcl_ent.mobType, p, mcl_ent.yaw,
+				mcl_ent.health ? mcl_ent.health : 10); /* genuine default */
+		} else if (mcl_ent.isItem && mcl_ent.dropId > 0 && mcl_ent.dropCount > 0) {
+			int bid = mcl_ent.dropId;
+			if (bid > 0 && bid < 256 && IndevTest_Enabled) bid = IndevTest_BlockFromIndev((BlockRaw)bid);
+			if (bid > 0) SurvivalTest_SpawnDropWorld(p, bid, mcl_ent.dropCount);
+		}
+		/* paintings/arrows/primed TNT are still skipped */
+	}
 	MCLevel_ResetEnt();
 }
 
@@ -1600,12 +1620,23 @@ static cc_bool MCLevel_ParseSurvival(struct NbtTag* tag) {
 	/* entity fields: [field] -> [unnamed entity] -> Entities */
 	if (MCLevel_TagIs(p2, "Entities")) {
 		if (IsTag(tag, "id")) {
+			int mi;
 			str = NbtTag_String(tag);
 			mcl_ent.isPlayer = String_CaselessEqualsConst(&str, "LocalPlayer");
+			mcl_ent.isItem   = String_CaselessEqualsConst(&str, "Item");
+			for (mi = 0; mi < Array_Elems(mcl_mobNames); mi++) {
+				if (String_CaselessEqualsConst(&str, mcl_mobNames[mi])) mcl_ent.mobType = mi;
+			}
 			return true;
 		}
 		if (IsTag(tag, "Health")) { mcl_ent.health = NbtTag_I16(tag); return true; }
 		if (IsTag(tag, "Score"))  { mcl_ent.score  = NbtTag_I32(tag); return true; }
+		return true;
+	}
+	/* item drop payload: [field] -> "Item" compound -> [unnamed] -> Entities */
+	if (MCLevel_TagIs(p1, "Item") && MCLevel_TagIs(p3, "Entities")) {
+		if (IsTag(tag, "id"))    { mcl_ent.dropId    = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "Count")) { mcl_ent.dropCount = (cc_int8)NbtTag_U8(tag); return true; }
 		return true;
 	}
 	/* entity Pos/Rotation lists: [float] -> Pos/Rotation -> [unnamed] -> Entities */
@@ -1770,7 +1801,7 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		cur = Nbt_WriteInt32 (cur, "CloudColor", MCLevel_PackRGB(IndevTest_BaseCloudsCol()));
 		cur = Nbt_WriteInt32 (cur, "SkyColor",   MCLevel_PackRGB(IndevTest_BaseSkyCol()));
 		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(IndevTest_BaseFogCol()));
-		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", 15);
+		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", (cc_uint8)IndevTest_SkyBrightness());
 		cur = Nbt_WriteUInt16(cur, "CloudHeight", (cc_uint16)Env.CloudsHeight);
 		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(Env.EdgeHeight + Env.SidesOffset));
 		cur = Nbt_WriteUInt16(cur, "SurroundingWaterHeight",  (cc_uint16)Env.EdgeHeight);
@@ -1820,8 +1851,17 @@ cc_result MCLevel_Save(struct Stream* stream) {
 	cur = buffer;
 	*cur++ = NBT_END; /* close Map */
 
-	/* Entities: just the LocalPlayer (mobs respawn on load) */
-	cur = Nbt_WriteList(cur, "Entities", NBT_DICT, SurvivalTest_Enabled ? 1 : 0);
+	/* Entities: the LocalPlayer plus every live mob and item drop */
+	count = 0;
+	if (SurvivalTest_Enabled) {
+		int mt, mh; float myaw; Vec3 mp;
+		count = 1;
+		for (n = SurvivalTest_MobNext(-1, &mt, &mp, &myaw, &mh); n >= 0;
+			 n = SurvivalTest_MobNext(n,  &mt, &mp, &myaw, &mh)) count++;
+		for (n = SurvivalTest_DropNext(-1, &mp, &mt, &mh); n >= 0;
+			 n = SurvivalTest_DropNext(n,  &mp, &mt, &mh)) count++;
+	}
+	cur = Nbt_WriteList(cur, "Entities", NBT_DICT, count);
 	if (SurvivalTest_Enabled) {
 		static const cc_string localPlayer = String_FromConst("LocalPlayer");
 		invCount = 0;
@@ -1854,6 +1894,73 @@ cc_result MCLevel_Save(struct Stream* stream) {
 					SurvivalTest_SlotCount(n), SurvivalTest_SlotDamage(n));
 		}
 		*cur++ = NBT_END; /* close player compound */
+		if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+		/* live mobs: id/Pos/Rotation/Health per the genuine writeToNBT set */
+		{
+			static const char* const mobNames[] = {
+				"Zombie", "Skeleton", "Pig", "Creeper", "Spider", "Sheep"
+			};
+			int mt, mh; float myaw; Vec3 mp;
+			for (n = SurvivalTest_MobNext(-1, &mt, &mp, &myaw, &mh); n >= 0;
+				 n = SurvivalTest_MobNext(n,  &mt, &mp, &myaw, &mh)) {
+				cc_string mobId;
+				if (mt < 0 || mt >= Array_Elems(mobNames)) continue;
+				mobId = String_FromReadonly(mobNames[mt]);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &mobId);
+				fv[0] = mp.x; fv[1] = mp.y; fv[2] = mp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = myaw; fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt16(cur, "Health", (cc_uint16)mh);
+				cur = Nbt_WriteUInt16(cur, "HurtTime", 0);
+				cur = Nbt_WriteUInt16(cur, "DeathTime", 0);
+				cur = Nbt_WriteUInt16(cur, "AttackTime", 0);
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+
+		/* item drops: "Item" entities with the ItemStack payload */
+		{
+			static const cc_string itemName = String_FromConst("Item");
+			int did, dcount; Vec3 dp;
+			for (n = SurvivalTest_DropNext(-1, &dp, &did, &dcount); n >= 0;
+				 n = SurvivalTest_DropNext(n,  &dp, &did, &dcount)) {
+				int outId = did;
+				if (outId > 0 && outId < 256) outId = IndevTest_BlockToIndev((BlockRaw)outId);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &itemName);
+				fv[0] = dp.x; fv[1] = dp.y; fv[2] = dp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt16(cur, "Health", 5);
+				cur = Nbt_WriteUInt16(cur, "Age", 0);
+				cur = Nbt_WriteDict  (cur, "Item");
+				{
+					cur = Nbt_WriteUInt16(cur, "id",    (cc_uint16)outId);
+					cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)dcount);
+					cur = Nbt_WriteUInt16(cur, "Damage", 0);
+				} *cur++ = NBT_END;
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+		cur = buffer;
 	}
 
 	/* TileEntities: chests + furnaces with their contents. EVERY container */

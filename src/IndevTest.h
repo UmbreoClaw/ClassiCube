@@ -122,6 +122,7 @@ void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock);
 int  IndevTest_WorldTime(void);
 void IndevTest_SetWorldTime(int t);
 void IndevTest_SetSkyBrightness(int b);
+int  IndevTest_SkyBrightness(void);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);
