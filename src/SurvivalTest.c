@@ -2206,7 +2206,10 @@ static void Mob_IndevShootArrow(struct Mob* m, struct Entity* te) {
 	from.y += 1.0f; /* shootArrow: ++arrow.posY above the (eye-anchored) spawn */
 	dx  = te->Position.x - e->Position.x;
 	dz  = te->Position.z - e->Position.z;
-	dy  = (te->Position.y - 0.2f) - from.y;
+	/* Genuine aims at target.posY - 0.2 where posY is the EYE-anchored Java
+	    position - CC's Position.y is the feet, which made arrows dive at the
+	    player's ankles. Aim relative to the target's eye point instead. */
+	dy  = (Entity_GetEyePosition(te).y - 0.2f) - from.y;
 	hor = Math_SqrtF(dx * dx + dz * dz);
 	dy += hor * 0.2f; /* the lob that lets skeleton shots clear mid-range dips */
 
@@ -2716,14 +2719,21 @@ static cc_bool Mob_IndevAttackEntity(struct Mob* m, struct Entity* te, struct Mo
 	}
 
 	/* EntityMob.attackEntity: melee lands within 2.5 blocks when the bounding
-	    boxes overlap vertically. No attacker-side cooldown - the victim's own
-	    invulnerability window is the rate limiter. Flat per-type strength
-	    (zombie 5, everything else the EntityMob default 2), no damage roll. */
+	    boxes overlap vertically. Flat per-type strength (zombie 5, everything
+	    else the EntityMob default 2), no damage roll. */
+	/* Genuine has no attacker-side gate (it re-arms its 20-tick swing timer
+	    every tick and lets the victim's invulnerability absorb the spam) -
+	    but our renderer's 5-tick swing restarting every tick made the arms
+	    flail wildly. Gating on a 10-tick attackDelay keeps the same landed-
+	    damage cadence (the victim's invuln half-window) while the swing
+	    animates cleanly once per attempt. */
 	if (dist >= 2.5f) return false;
+	if (m->attackDelay > 0) return false;
 	Entity_GetBounds(e,  &mb);
 	Entity_GetBounds(te, &tb);
 	if (tb.Max.y <= mb.Min.y || tb.Min.y >= mb.Max.y) return false;
 
+	m->attackDelay  = 10;
 	m->attackTime   = 5; /* the render-side arm-swing timer */
 	m->noActionTime = 0;
 	damage = m->type == MOB_TYPE_ZOMBIE ? 5 : 2;
@@ -2900,7 +2910,10 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 		m->turnRate = (Random_Float(&st_mobRng) - 0.5f) * 60.0f;
 	}
 	e->Yaw  += m->turnRate;
-	e->Pitch = info->defaultLookAngle;
+	/* Indev EntityLiving.updatePlayerActionState pins rotationPitch to 0 -
+	    the c0.30 per-type defaultLookAngle (zombie 30 degrees down) is what
+	    made Indev mobs stare at the player's feet. */
+	e->Pitch = IndevTest_Enabled ? 0.0f : info->defaultLookAngle;
 
 	if (m->hasTarget) {
 		m->moveForward = speed;

@@ -2,6 +2,27 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Mobs staring at / shooting at feet + zombie arm flail (user report)
+Three Java-position-convention and animation fixes, all Indev-gated:
+- **Head pitch**: the pathless BasicAI fallback applied c0.30's per-type
+  defaultLookAngle (zombie 30 degrees DOWN) - genuine Indev
+  EntityLiving.updatePlayerActionState pins rotationPitch to 0, so Indev
+  mobs now hold their heads level instead of staring at your feet.
+- **Skeleton aim**: genuine aims at target.posY - 0.2 where Java posY is
+  eye-anchored; we fed it CC's feet-anchored Position.y, so arrows dove
+  at ankles. Now aims at the target's eye point - 0.2.
+- **Zombie arm flail**: genuine melee re-arms its 20-tick swing timer
+  every tick in range (reads as a held pose with its 20-tick swing
+  model); our 5-tick c0.30 swing restarting every tick flailed. Melee is
+  now gated on a 10-tick attackDelay - same landed-damage cadence as the
+  victim's invuln half-window, one clean swing per attempt. (Documented
+  deviation from the literal every-tick attackEntity, matching its
+  effective behaviour instead.)
+Lock-on jitter should be mostly the moveSpeed fix (previous entry);
+point-blank orbiting/wandering underfoot is genuine EntityCreature
+behaviour (adjacent paths finish instantly and fall back to the random
+action state).
+
 ### Crops render as the genuine "#" row pattern (user report)
 Crops were engine DRAW_SPRITE (a single diagonal X-cross clustered at the
 block centre); genuine BlockCrops is render type 6 - four double-sided
