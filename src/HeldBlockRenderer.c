@@ -164,6 +164,13 @@ static void HeldBlockRenderer_RenderModel(void) {
 			/* Indev's first-person extruded item sprite, riding the same */
 			/*  swing/dig animations as the held block */
 			HeldItem_Render(heldId);
+			/* HeldItem_Render enables alpha test for its cutout mesh - it MUST
+			    be turned back off before the 2D pass, exactly like the bare-arm
+			    branch below. Leaking it discards every GUI pixel whose alpha is
+			    below the 0.5 test threshold on fixed-function backends (D3D9):
+			    the pause-menu dim gradient (alpha 105 top -> 162 bottom) lost
+			    its whole upper part whenever an item was held. */
+			Gfx_SetAlphaTest(false);
 		} else {
 			/* Bare arm - skipped when holding an item id (its sprite renders */
 			/*  in SurvivalTest's drop pass); must still fall through to the */

@@ -2,6 +2,19 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Menu dim losing its top while holding an item (user report)
+Symptom: pause-menu background dim only covered the lower ~60% of the
+screen, triggered by holding any ITEM id (mining with a pickaxe, "Give
+Hoe, Seeds"). Cause: `HeldItem_Render` (the extruded first-person item)
+enables alpha test for its cutout mesh and never turned it back off -
+the bare-arm and held-block branches both restore it, the item branch
+didn't. With alpha test leaked into the 2D pass, every GUI pixel below
+the 0.5 threshold is discarded; the dim gradient runs alpha 105 (top)
+-> 162 (bottom) and crosses 127 about 40% down, which is exactly the
+cutoff line seen. One-line fix: `Gfx_SetAlphaTest(false)` after
+`HeldItem_Render`. Rig-verified holding an iron pick: extruded item
+still renders, pause dim covers the whole screen again.
+
 ### Lit furnace mined -> idle furnace (user report)
 `IndevTest_CanonicalBlock` mapped the lit-furnace directional variants back
 to the lit BASE furnace, and the base lit furnace passed through unchanged -
