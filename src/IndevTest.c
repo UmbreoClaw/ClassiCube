@@ -608,8 +608,9 @@ static void IndevBlocks_Define(void) {
 		for (hi = BLOCK_RED; hi <= BLOCK_WHITE; hi++) SurvivalTest_SetHardness((BlockID)hi, 16);
 	}
 
-	/* Crop stages 0-7: X-sprites of tiles 107-114, walk-through, instant */
-	/*  break, not placeable (planted via seeds). */
+	/* Crop stages 0-7: tiles 107-114 drawn as the genuine "#" row pattern */
+	/*  (Builder_DrawCrops), walk-through, instant break, not placeable */
+	/*  (planted via seeds). */
 	for (k = 0; k < 8; k++) {
 		BlockID id = (BlockID)(INDEV_BLOCK_CROPS_0 + k);
 		IndevBlock_Define(id, "Crops", 107 + k, 107 + k, 107 + k, 107 + k, SOUND_GRASS, 0);
@@ -618,6 +619,10 @@ static void IndevBlocks_Define(void) {
 		Blocks.Draw[id]            = DRAW_SPRITE;
 		Blocks.BlocksLight[id]     = false;
 		Blocks.CanPlace[id]        = false;
+		/* BlockCrops.setBlockBounds(0, 0, 0, 1, 0.25, 1): the pick/outline
+		    box is the full tile but only 4/16 tall, not a whole cube. */
+		Vec3_Set(Blocks.MinBB[id], 0.0f, 0.0f,        0.0f);
+		Vec3_Set(Blocks.MaxBB[id], 1.0f, 4.0f/16.0f,  1.0f);
 		Block_DefineCustom(id, false);
 	}
 }

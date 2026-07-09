@@ -2,6 +2,21 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Crops render fix round 2: view-bank culling + short outline (user report)
+The first "#" port scattered quads across the sprite banks arbitrarily -
+but the sprite region renders with FACE CULLING ON and its four banks
+are VIEW-DIRECTION groups (MapRenderer draws bank 0 when the camera is
+past XMax or ZMin, bank 1 for XMin/ZMax, 2 for XMin/ZMin, 3 for
+XMax/ZMax). From most angles the crop quads were in undrawn banks or
+backface-culled, leaving a few floating sprouts. Each quad now sits in
+a bank guaranteed drawn whenever it is front-facing (+X faces in bank
+0/3, -X in 1/2, +Z in 1/3, -Z in 0/2) with the engine sprite winding
+((v1-v0)x(v2-v1) = outward normal). Also BlockCrops.setBlockBounds(0,
+0, 0, 1, 0.25, 1): the pick/outline box is now 4/16 tall, not a full
+cube. Rig-verified visually this time (patched the crop tiles from
+b173.jar into the rig pack, probe world with obsidian marker ring +
+all-stage crop ring): dense wheat rows from every angle, short outline.
+
 ### Mobs staring at / shooting at feet + zombie arm flail (user report)
 Three Java-position-convention and animation fixes, all Indev-gated:
 - **Head pitch**: the pathless BasicAI fallback applied c0.30's per-type

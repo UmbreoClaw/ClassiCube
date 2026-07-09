@@ -498,9 +498,14 @@ static void DefaultPostStretchChunk(void) {
 static RNGState spriteRng;
 /* Indev BlockCrops (render type 6, RenderBlocks.renderBlockCrops): four
     double-sided planes at +-0.25 from the block centre - two spanning the
-    full Z extent, two spanning the full X - sunk 1/16 into the farmland
-    below. Emitted as TWO of the engine's banked 4-quad sprite units, so
-    the vertex layout stays exactly what the sprite counting expects. */
+    full Z extent, two the full X - sunk 1/16 into the farmland below.
+    The sprite region renders with face culling ON and its four banks are
+    view-direction groups (bank 0 drawn when the camera is beyond XMax or
+    ZMin, etc - see MapRenderer's sprite pass), so every quad must sit in
+    a bank that is guaranteed drawn whenever that quad is front-facing:
+    +X faces -> bank 0 or 3, -X -> 1 or 2, +Z -> 1 or 3, -Z -> 0 or 2.
+    Winding follows the engine sprite convention ((v1-v0)x(v2-v1) points
+    out of the front face). Emitted as two banked 4-quad sprite units. */
 static void Builder_DrawCrops(int x, int y, int z) {
 	struct Builder1DPart* part;
 	struct VertexTextured* v;
@@ -508,12 +513,13 @@ static void Builder_DrawCrops(int x, int y, int z) {
 	PackedCol color;
 	TextureLoc loc;
 	float v1, v2, u1, u2;
-	float X, Y, Z, y1, y2, lo, hi;
+	float X, Y, Z, y1, y2, xlo, xhi, zlo, zhi;
 	int stride;
 
 	X  = (float)x; Y = (float)y; Z = (float)z;
 	y1 = Y - 1.0f/16.0f; y2 = y1 + 1.0f;
-	lo = 0.25f; hi = 0.75f;
+	xlo = X + 0.25f; xhi = X + 0.75f;
+	zlo = Z + 0.25f; zhi = Z + 0.75f;
 
 	loc = Block_Tex(Builder_Block, FACE_XMAX);
 	u1  = 0.0f;
@@ -527,29 +533,37 @@ static void Builder_DrawCrops(int x, int y, int z) {
 	Block_Tint(color, Builder_Block);
 	stride = part->sCount >> 2;
 
-	#define CROP_V(vx, vy, vz, uu, vv) v->x = (vx); v->y = (vy); v->z = (vz); v->Col = color; v->U = (uu); v->V = (vv); v++;
-	/* unit 1: the two planes perpendicular to X, one side per bank */
+	/* one quad: A-end column then B-end column, bottom-top-top-bottom, with
+	    the genuine u mapping (A end = u1). Facing normal = (B - A) rotated
+	    90 degrees clockwise in the XZ plane, same as the engine sprites. */
+	#define CROP_QUAD(ax, az, bx, bz) \
+		v->x = (ax); v->y = y1; v->z = (az); v->Col = color; v->U = u1; v->V = v2; v++; \
+		v->x = (ax); v->y = y2; v->z = (az); v->Col = color; v->U = u1; v->V = v1; v++; \
+		v->x = (bx); v->y = y2; v->z = (bz); v->Col = color; v->U = u2; v->V = v1; v++; \
+		v->x = (bx); v->y = y1; v->z = (bz); v->Col = color; v->U = u2; v->V = v2; v++;
+
+	/* unit 1: the two planes perpendicular to X */
 	v = &Builder_Vertices[part->sOffset];
-	CROP_V(X+lo, y2, Z,      u1, v1) CROP_V(X+lo, y1, Z,      u1, v2) CROP_V(X+lo, y1, Z+1.0f, u2, v2) CROP_V(X+lo, y2, Z+1.0f, u2, v1)
+	CROP_QUAD(xlo, Z,   xlo, Z+1) /* bank 0: xlo plane, +X facing */
 	v -= 4; v += stride;
-	CROP_V(X+lo, y2, Z+1.0f, u1, v1) CROP_V(X+lo, y1, Z+1.0f, u1, v2) CROP_V(X+lo, y1, Z,      u2, v2) CROP_V(X+lo, y2, Z,      u2, v1)
+	CROP_QUAD(xlo, Z+1, xlo, Z)   /* bank 1: xlo plane, -X facing */
 	v -= 4; v += stride;
-	CROP_V(X+hi, y2, Z+1.0f, u1, v1) CROP_V(X+hi, y1, Z+1.0f, u1, v2) CROP_V(X+hi, y1, Z,      u2, v2) CROP_V(X+hi, y2, Z,      u2, v1)
+	CROP_QUAD(xhi, Z+1, xhi, Z)   /* bank 2: xhi plane, -X facing */
 	v -= 4; v += stride;
-	CROP_V(X+hi, y2, Z,      u1, v1) CROP_V(X+hi, y1, Z,      u1, v2) CROP_V(X+hi, y1, Z+1.0f, u2, v2) CROP_V(X+hi, y2, Z+1.0f, u2, v1)
+	CROP_QUAD(xhi, Z,   xhi, Z+1) /* bank 3: xhi plane, +X facing */
 	part->sOffset += 4;
 
 	/* unit 2: the two planes perpendicular to Z */
 	v = &Builder_Vertices[part->sOffset];
-	CROP_V(X,      y2, Z+lo, u1, v1) CROP_V(X,      y1, Z+lo, u1, v2) CROP_V(X+1.0f, y1, Z+lo, u2, v2) CROP_V(X+1.0f, y2, Z+lo, u2, v1)
+	CROP_QUAD(X,   zlo, X+1, zlo) /* bank 0: zlo plane, -Z facing */
 	v -= 4; v += stride;
-	CROP_V(X+1.0f, y2, Z+lo, u1, v1) CROP_V(X+1.0f, y1, Z+lo, u1, v2) CROP_V(X,      y1, Z+lo, u2, v2) CROP_V(X,      y2, Z+lo, u2, v1)
+	CROP_QUAD(X+1, zlo, X,   zlo) /* bank 1: zlo plane, +Z facing */
 	v -= 4; v += stride;
-	CROP_V(X+1.0f, y2, Z+hi, u1, v1) CROP_V(X+1.0f, y1, Z+hi, u1, v2) CROP_V(X,      y1, Z+hi, u2, v2) CROP_V(X,      y2, Z+hi, u2, v1)
+	CROP_QUAD(X,   zhi, X+1, zhi) /* bank 2: zhi plane, -Z facing */
 	v -= 4; v += stride;
-	CROP_V(X,      y2, Z+hi, u1, v1) CROP_V(X,      y1, Z+hi, u1, v2) CROP_V(X+1.0f, y1, Z+hi, u2, v2) CROP_V(X+1.0f, y2, Z+hi, u2, v1)
+	CROP_QUAD(X+1, zhi, X,   zhi) /* bank 3: zhi plane, +Z facing */
 	part->sOffset += 4;
-	#undef CROP_V
+	#undef CROP_QUAD
 }
 
 static void Builder_DrawSprite(int x, int y, int z) {
