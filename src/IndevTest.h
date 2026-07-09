@@ -19,6 +19,12 @@ extern struct IGameComponent IndevTest_Component;
 /*  faithful c0.30-s survival mode are completely unaffected. */
 extern cc_bool IndevTest_Enabled;
 
+/* Terrain tile the procedural fire animation is drawn into every tick */
+/*  (TextureFlamesFX port in Animations.c) - a spare tile in row 7, next to */
+/*  our crops (107-114) / farmland (115-116) / torch-top (117) patches. The */
+/*  burning-mob billboards (SurvivalTest_RenderMobFires) sample it. */
+#define INDEV_FIRE_TEX_LOC 118
+
 /* The items.png atlas texture (0 until a texture pack supplies it). Item */
 /*  sprite rendering (hotbar/hand/drops) bails gracefully while it's 0. */
 GfxResourceID IndevTest_ItemsTex(void);

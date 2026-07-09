@@ -34,8 +34,28 @@ mis-noted before as "monsters don't burn until Alpha"). Ported from
 Entity/EntityZombie/EntitySkeleton.onLivingUpdate: sky light > 7 + entity
 brightness > 0.5 + open sky + `rand*30 < (bright-0.4)*2` roll -> `fire=300`;
 fire deals 1 HP / 20 ticks; water extinguishes with a `random.fizz`; lava
-sets `fire=600`. New `struct Mob.fire`. The visual flame billboard is a
-known gap (mobs take damage/die but no fire sprite yet).
+sets `fire=600`. New `struct Mob.fire`.
+
+### Flame visuals (follow-up commit, no longer a gap)
+- **Fire texture**: TextureFlamesFX ported into Animations.c
+  (`FireAnimation_Tick`, alongside the classic lava/water generators) - the
+  genuine 16x20 heat buffer (bottom 4 rows are random fuel, each cell pulls
+  18x the cell above + its 3x2 neighbourhood / (denom*1.06)) mapped through
+  the genuine palette (r=155b+100, g=b^2, b=b^10, alpha cut below 0.5) into
+  spare terrain tile 118 (`INDEV_FIRE_TEX_LOC`) every tick. Only runs when
+  IndevTest_Enabled; skips HD packs (sim is fixed 16x16 like the original).
+- **Billboard**: Render.java's burning pass as `SurvivalTest_RenderMobFires`
+  (end of RenderMobs): per burning mob, ceil(height/width) stacked strips
+  (cap 4), each 1.4 units tall / 10% narrower than the last, scaled by
+  width*1.4, offset 0.4 toward the viewer (-0.04/layer), yaw-only camera
+  facing (same convention as the item-drop sprites), full-bright white,
+  batched into one dynamic VB + one atlas draw.
+- Ignition moved ABOVE the AI dispatch (genuine onLivingUpdate order), so
+  even a debug No-AI-frozen zombie catches sun - this was also what made
+  it rig-testable.
+- Rig-verified: frozen zombie at noon ignites within ~a second, flame
+  column animates per-tick, burn damage hit-flash visible, .mclevel world
+  load regression-checked in the same run.
 Also fixed the light-aging threshold: was `light > 8`, genuine is entity
 brightness > 0.5 which the `lightBrightnessTable` curve only reaches at
 light 12+ (`Indev_LightBrightness` helper + `IndevTest_CurSkyLight`).

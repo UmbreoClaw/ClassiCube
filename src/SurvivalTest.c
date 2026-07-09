@@ -3258,6 +3258,22 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		}
 		if (inLava) m->fire = 600;
 
+		/* EntityZombie/EntitySkeleton.onLivingUpdate: daylight sets them on
+		    fire - sky light over 7 (daytime), bright spot, open sky overhead,
+		    then a rand*30 < (brightness-0.4)*2 roll (~4%/tick in full sun).
+		    Runs before the AI branch like the genuine onLivingUpdate (so the
+		    debug No-AI freeze doesn't shield them from the sun). */
+		if (m->health > 0 &&
+			(m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON) &&
+			IndevTest_CurSkyLight() > 7) {
+			float mb = Mob_Brightness(m);
+			if (mb > 0.5f &&
+				Lighting.IsLit(Math_Floor(e->Position.x), Math_Floor(e->Position.y), Math_Floor(e->Position.z)) &&
+				Random_Float(&st_mobRng) * 30.0f < (mb - 0.4f) * 2.0f) {
+				m->fire = 300;
+			}
+		}
+
 		/* EntityLiving.onEntityUpdate's ambient-sound roll. Every living
 		    entity runs it, but in in-20100223 only the pig and sheep actually
 		    return a living sound - monsters were still silent. */
@@ -3295,19 +3311,6 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		if (IndevTest_Enabled && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE &&
 			Mob_Brightness(m) > 0.5f) {
 			m->noActionTime += 2;
-		}
-		/* EntityZombie/EntitySkeleton.onLivingUpdate: daylight sets them on
-		    fire - sky light over 7 (daytime), bright spot, open sky overhead,
-		    then a rand*30 < (brightness-0.4)*2 roll (~4%/tick in full sun). */
-		if (IndevTest_Enabled &&
-			(m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON) &&
-			IndevTest_CurSkyLight() > 7) {
-			float mb = Mob_Brightness(m);
-			if (mb > 0.5f &&
-				Lighting.IsLit(Math_Floor(e->Position.x), Math_Floor(e->Position.y), Math_Floor(e->Position.z)) &&
-				Random_Float(&st_mobRng) * 30.0f < (mb - 0.4f) * 2.0f) {
-				m->fire = 300;
-			}
 		}
 		/* BasicAI.tick's despawn roll: once a mob has gone 600+ ticks without */
 		/*  being hurt or landing a hit, each tick has a 1/800 chance to check */
@@ -3759,6 +3762,94 @@ static void SurvivalTest_TickMobs(float delta) {
 }
 
 
+/* Render.java's burning-entity pass: stacked camera-facing strips of the
+    animated fire tile (see Animations.c's FireAnimation_Tick), each 1.4
+    units tall and 10% narrower than the one below, scaled by width*1.4 and
+    offset toward the viewer, drawn full-bright (glDisable(GL_LIGHTING)). */
+#define FIRE_MAX_LAYERS   4
+#define FIRE_MAX_VERTICES 512 /* 32 burning mobs at 4 layers */
+static GfxResourceID st_fireVB;
+
+static void SurvivalTest_RenderMobFires(void) {
+	struct VertexTextured* data;
+	struct VertexTextured* v;
+	struct Mob* m;
+	struct Entity* e;
+	TextureRec rec;
+	int i, texIndex, count = 0;
+	cc_bool any = false;
+
+	for (i = 0; i < MOB_MAX && IndevTest_Enabled; i++) {
+		if (st_mobs[i].active && st_mobs[i].fire > 0) { any = true; break; }
+	}
+	if (!any) return;
+
+	if (!st_fireVB) {
+		st_fireVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, FIRE_MAX_VERTICES);
+		if (!st_fireVB) return;
+	}
+	rec = Atlas1D_TexRec(INDEV_FIRE_TEX_LOC, 1, &texIndex);
+
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_fireVB, VERTEX_FORMAT_TEXTURED, FIRE_MAX_VERTICES);
+	v    = data;
+
+	for (i = 0; i < MOB_MAX; i++) {
+		float s, h, w, zoff, base, fx, fz, len, x0, x1, y0, y1;
+		int layer, layers;
+		m = &st_mobs[i];
+		if (!m->active || m->fire <= 0) continue;
+		e = &m->Base;
+
+		s = e->Size.x * 1.4f;
+		h = e->Size.y / e->Size.x;
+		layers = (int)h; if (layers < h) layers++;
+		if (layers < 1) layers = 1;
+		if (layers > FIRE_MAX_LAYERS) layers = FIRE_MAX_LAYERS;
+		if (count + layers * 4 > FIRE_MAX_VERTICES) break;
+
+		/* the quads face the camera around Y only, like the item sprites */
+		fx  = Camera.CurrentPos.x - e->Position.x;
+		fz  = Camera.CurrentPos.z - e->Position.z;
+		len = Math_SqrtF(fx * fx + fz * fz);
+		if (len < 0.001f) { fx = 0.0f; fz = 1.0f; }
+		else              { fx /= len; fz /= len; }
+
+		w    = 1.0f;
+		zoff = 0.4f + (float)((int)h) * 0.02f;
+		base = 0.0f; /* var18: each layer starts a whole unit higher */
+
+		for (layer = 0; layer < layers; layer++) {
+			/* local x spans -0.5..w-0.5, y spans base..base+1.4, all scaled
+			    by s; right vector = (-fz, fx), viewer offset = (fx, fz)*zoff */
+			x0 = -0.5f * s;  x1 = (w - 0.5f) * s;
+			y0 =  base * s;  y1 = (base + 1.4f) * s;
+
+			#define FIRE_V(lx, ly, uu, vv) \
+				v->x = e->Position.x + (-fz) * (lx) + fx * zoff * s; \
+				v->y = e->Position.y + (ly); \
+				v->z = e->Position.z +   fx  * (lx) + fz * zoff * s; \
+				v->Col = PACKEDCOL_WHITE; v->U = (uu); v->V = (vv); v++;
+			FIRE_V(x1, y0, rec.u2, rec.v2)
+			FIRE_V(x0, y0, rec.u1, rec.v2)
+			FIRE_V(x0, y1, rec.u1, rec.v1)
+			FIRE_V(x1, y1, rec.u2, rec.v1)
+			#undef FIRE_V
+
+			count += 4;
+			base  += 1.0f;
+			w     *= 0.9f;
+			zoff  -= 0.04f;
+		}
+	}
+
+	Gfx_UnlockDynamicVb(st_fireVB);
+	if (count) {
+		Atlas1D_Bind(texIndex);
+		Gfx_DrawVb_IndexedTris(count);
+	}
+}
+
 void SurvivalTest_RenderMobs(float delta, float t) {
 	struct Mob* m;
 	struct Entity* e;
@@ -3831,6 +3922,7 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 			st_mobFlashPass = false;
 		}
 	}
+	SurvivalTest_RenderMobFires();
 	Gfx_SetAlphaTest(false);
 }
 
@@ -5438,6 +5530,7 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_tntCubeVB);
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
+	Gfx_DeleteDynamicVb(&st_fireVB);
 	if (!Gfx.ManagedTextures) {
 		Gfx_DeleteTexture(&st_arrowsTexId);
 		Gfx_DeleteTexture(&st_cracksTexId);
@@ -5487,6 +5580,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_tntCubeVB);
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
+	Gfx_DeleteDynamicVb(&st_fireVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {
