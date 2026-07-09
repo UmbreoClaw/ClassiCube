@@ -34,6 +34,115 @@ static void SetHeldModel(struct Model* model) {
 #endif
 }
 
+/*########################################################################################################################*
+*------------------------------------------Indev extruded held item (ItemRenderer)----------------------------------------*
+*#########################################################################################################################*/
+/* ItemRenderer.renderItemInFirstPerson's non-block branch: the item sprite
+    extruded 1/16 deep - front + back quads plus 16 strip quads along each
+    edge - baked with the genuine local transform chain (translate(-15/16,
+    -1/16, 0) -> rotZ 335 -> rotY 50 -> scale 1.5 -> translate(0,-0.3,0)),
+    then placed/animated by the SAME held-entity transform and swing/dig
+    animations the block-in-hand path uses. */
+static PackedCol HeldBlockRenderer_GetCol(struct Entity* entity);
+
+#define HELDITEM_QUADS (2 + 4 * 16)
+static struct VertexTextured helditem_verts[HELDITEM_QUADS * 4];
+static GfxResourceID helditem_vb;
+static int helditem_lastId = -1;
+static PackedCol helditem_lastCol;
+
+static void HeldItem_Vertex(struct VertexTextured* v, const struct Matrix* m,
+							float x, float y, float z, float u, float vv, PackedCol col) {
+	v->x = x * m->row1.x + y * m->row2.x + z * m->row3.x + m->row4.x;
+	v->y = x * m->row1.y + y * m->row2.y + z * m->row3.y + m->row4.y;
+	v->z = x * m->row1.z + y * m->row2.z + z * m->row3.z + m->row4.z;
+	v->Col = col; v->U = u; v->V = vv;
+}
+
+static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
+	struct VertexTextured* v = helditem_verts;
+	struct Matrix m, r;
+	float x, u, y, vv, eu, ev;
+	int i;
+	/* mirrored like genuine: model x=0 samples u2, x=1 samples u1 */
+	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
+
+	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
+	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	Matrix_RotateY(&r,  50.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	Matrix_Scale(&r, 1.5f, 1.5f, 1.5f);         Matrix_MulBy(&m, &r);
+	Matrix_Translate(&r, 0.0f, -0.3f, 0.0f);    Matrix_MulBy(&m, &r);
+
+	eu = (rec.u2 - rec.u1) * (0.5f / 16.0f); /* the genuine 0.001953125 half-texel */
+	ev = (rec.v2 - rec.v1) * (0.5f / 16.0f);
+
+	#define HI_V(px, py, pz, uu, vvv) HeldItem_Vertex(v, &m, px, py, pz, uu, vvv, col); v++;
+	/* front (z = 0) and back (z = -1/16) faces */
+	HI_V(0,0,0, u1,v1) HI_V(1,0,0, u2,v1) HI_V(1,1,0, u2,v2) HI_V(0,1,0, u1,v2)
+	HI_V(0,1,-1.0f/16, u1,v2) HI_V(1,1,-1.0f/16, u2,v2) HI_V(1,0,-1.0f/16, u2,v1) HI_V(0,0,-1.0f/16, u1,v1)
+
+	for (i = 0; i < 16; i++) {
+		x = i / 16.0f;
+		u = u1 + (u2 - u1) * x - eu;
+		/* -X edge strips */
+		HI_V(x,0,-1.0f/16, u,v1) HI_V(x,0,0, u,v1) HI_V(x,1,0, u,v2) HI_V(x,1,-1.0f/16, u,v2)
+	}
+	for (i = 0; i < 16; i++) {
+		x = i / 16.0f + 1.0f/16.0f;
+		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) - eu;
+		/* +X edge strips */
+		HI_V(x,1,-1.0f/16, u,v2) HI_V(x,1,0, u,v2) HI_V(x,0,0, u,v1) HI_V(x,0,-1.0f/16, u,v1)
+	}
+	for (i = 0; i < 16; i++) {
+		y  = i / 16.0f + 1.0f/16.0f;
+		vv = v1 + (v2 - v1) * (y - 1.0f/16.0f) - ev;
+		/* +Y edge strips */
+		HI_V(0,y,0, u1,vv) HI_V(1,y,0, u2,vv) HI_V(1,y,-1.0f/16, u2,vv) HI_V(0,y,-1.0f/16, u1,vv)
+	}
+	for (i = 0; i < 16; i++) {
+		y  = i / 16.0f;
+		vv = v1 + (v2 - v1) * y - ev;
+		/* -Y edge strips */
+		HI_V(1,y,0, u2,vv) HI_V(0,y,0, u1,vv) HI_V(0,y,-1.0f/16, u1,vv) HI_V(1,y,-1.0f/16, u2,vv)
+	}
+	#undef HI_V
+}
+
+static void HeldItem_Render(int heldId) {
+	struct Matrix transform, m;
+	TextureRec rec;
+	PackedCol col;
+	Vec3 scale;
+
+	if (!IndevTest_BindHeldTexture(heldId, &rec)) return;
+	col = HeldBlockRenderer_GetCol(&held_entity);
+
+	if (heldId != helditem_lastId || col != helditem_lastCol) {
+		HeldItem_BuildMesh(rec, col);
+		helditem_lastId  = heldId;
+		helditem_lastCol = col;
+	}
+	if (!helditem_vb) {
+		helditem_vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, HELDITEM_QUADS * 4);
+		if (!helditem_vb) return;
+	}
+
+	/* same placement/animation transform the block-in-hand path gets */
+	Vec3_Set(scale, 0.4f, 0.4f, 0.4f);
+	Entity_GetTransform(&held_entity, held_entity.Position, scale, &transform);
+	Matrix_Mul(&m, &transform, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_VIEW, &m);
+
+	Gfx_SetAlphaTest(true);
+	Gfx_SetFaceCulling(false); /* thin shell; winding varies per strip */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetDynamicVbData(helditem_vb, helditem_verts, HELDITEM_QUADS * 4);
+	Gfx_DrawVb_IndexedTris(HELDITEM_QUADS * 4);
+	Gfx_SetFaceCulling(true);
+
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+}
+
 static void HeldBlockRenderer_RenderModel(void) {
 	struct Model* model;
 
@@ -49,9 +158,13 @@ static void HeldBlockRenderer_RenderModel(void) {
 		/*  culling state) - skip the bare arm then, so the sprite reads as the */
 		/*  held item rather than floating beside an empty hand. The genuine */
 		/*  extruded ItemRenderer mesh + swing is a future port (back-burnered). */
-		cc_bool holdingItem = IndevTest_Enabled && IndevTest_ItemsTex()
-			&& SurvivalTest_SlotId(Inventory.SelectedIndex) >= 256;
-		if (!holdingItem) {
+		int heldId = SurvivalTest_SlotId(Inventory.SelectedIndex);
+		cc_bool holdingItem = IndevTest_HeldIsExtruded(heldId);
+		if (holdingItem) {
+			/* Indev's first-person extruded item sprite, riding the same */
+			/*  swing/dig animations as the held block */
+			HeldItem_Render(heldId);
+		} else {
 			/* Bare arm - skipped when holding an item id (its sprite renders */
 			/*  in SurvivalTest's drop pass); must still fall through to the */
 			/*  depth/cull teardown below or the 2D HUD/menus get corrupted. */
@@ -112,7 +225,9 @@ static void SetBaseOffset(void) {
 	cc_bool sprite = Blocks.Draw[held_block] == DRAW_SPRITE;
 	Vec3 normalOffset = { 0.56f, -0.72f, -0.72f };
 	Vec3 spriteOffset = { 0.46f, -0.52f, -0.72f };
+	Vec3 itemOffset   = { 0.56f, -0.52f, -0.72f }; /* ItemRenderer's hand anchor */
 	Vec3 offset = sprite ? spriteOffset : normalOffset;
+	if (IndevTest_HeldIsExtruded(SurvivalTest_SlotId(Inventory.SelectedIndex))) offset = itemOffset;
 
 	Vec3_AddBy(&held_entity.Position, &offset);
 	if (!sprite && Blocks.Draw[held_block] != DRAW_GAS) {
@@ -262,6 +377,8 @@ void HeldBlockRenderer_Render(float delta) {
 
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&held_entity.ModelVB);
+	Gfx_DeleteDynamicVb(&helditem_vb);
+	helditem_lastId = -1;
 }
 
 static const struct EntityVTABLE heldEntity_VTABLE = {

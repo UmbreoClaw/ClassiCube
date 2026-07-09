@@ -105,6 +105,35 @@ cross-referenced against the decompiled source tree at `/tmp/good2000mo_oc/`
 
 ---
 
+## SESSION LOG - first-person extruded held item (ItemRenderer port)
+
+The camera-anchored billboard held-item hack is GONE. Items (tools/food/
+materials) and sprite-type blocks (flowers/saplings/torches) in hand now
+render as ItemRenderer.renderItemInFirstPerson's extruded sprite: front +
+back quads plus 16 strip quads per edge (66 quads), baked with the genuine
+local chain translate(-15/16,-1/16,0) -> rotZ 335 -> rotY 50 -> scale 1.5
+-> translate(0,-0.3,0), textured from items.png (items) or the terrain
+tile (sprite blocks), mirrored like genuine (x=0 samples u2).
+
+Integration: rendered INSIDE HeldBlockRenderer's model path, replacing the
+old skip-arm branch - so it inherits the engine's held-entity transform
+(scale 0.4, rotY -45), its projection/view (70 FOV, tilt, bob), and ALL
+its animations (click/dig swing, equip dip on block change). The hand
+anchor uses ItemRenderer's (0.56, -0.52, -0.72). Normal BLOCKS in hand
+keep the engine's held block (classic pose = Indev's inherited look).
+Rotation signs verified by rig iteration (first attempt was mirrored -
+ClassiCube Matrix_Rotate* handedness vs GL glRotatef).
+
+Known deltas (documented, revisit on user feedback): the equip-change dip
+only triggers on BLOCK id changes (engine tracks Inventory_SelectedBlock;
+item ids all map to AIR there); genuine equip curve is +-0.4/tick toward
+target with item swap below 0.1 - engine's dip differs slightly; exact
+swing curves are the engine's classic ones, not ItemRenderer's sqrt-sin
+trio. Pose verified in the rig with the iron pickaxe (blade centre-left,
+handle to the bottom-right corner, visible 1/16 extrusion depth).
+
+---
+
 ## SESSION LOG - per-block light query (torch-lit night farms)
 
 The crop-growth light approximation is gone. FancyLighting already caches a

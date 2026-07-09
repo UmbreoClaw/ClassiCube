@@ -1580,29 +1580,6 @@ static void SurvivalTest_RenderTntGlow(float t) {
 #define ITEMDROP_MAX_VERTICES (DROP_MAX * 4 * 4 + 4) /* 4 jumbled copies per stack + held item */
 static GfxResourceID st_itemDropVB;
 
-/* Whether the held-item sprite should draw this frame, and its anchor pos - */
-/*  in front of the camera, low-right, approximating the first-person hand. */
-static cc_bool SurvivalTest_HeldSpriteState(int* id, Vec3* pos) {
-	struct LocalPlayer* p = Entities.CurPlayer;
-	Vec3 dir, right;
-	float yaw;
-	if (!IndevTest_Enabled || !p)          return false;
-	if (Camera.Active->isThirdPerson)      return false;
-
-	*id = SurvivalTest_SlotId(Inventory.SelectedIndex);
-	if (*id < ST_ITEM_ID_START) return false;
-
-	dir = Vec3_GetDirVector(p->Base.Yaw * MATH_DEG2RAD, p->Base.Pitch * MATH_DEG2RAD);
-	yaw = p->Base.Yaw * MATH_DEG2RAD;
-	right.x = Math_CosF(yaw); right.y = 0.0f; right.z = Math_SinF(yaw);
-
-	*pos    = Camera.CurrentPos;
-	pos->x += dir.x * 0.55f + right.x * 0.28f;
-	pos->y += dir.y * 0.55f - 0.40f;
-	pos->z += dir.z * 0.55f + right.z * 0.28f;
-	return true;
-}
-
 /* An upright sprite quad that only turns around Y to face the camera
     (RenderItem's glRotatef(180 - playerViewY, 0,1,0)) - full camera-facing
     billboards tilt with the view pitch, which Indev item sprites never do. */
@@ -1631,19 +1608,17 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 	GfxResourceID tex = IndevTest_ItemsTex();
 	TextureRec rec;
 	Vec3 pos;
-	Vec2 size;
 	float renderAge, bob;
-	int i, count = 0, heldId, blockSpriteStart = 0, blockSpriteEnd = 0;
-	cc_bool any = false, held;
+	int i, count = 0, blockSpriteStart = 0, blockSpriteEnd = 0;
+	cc_bool any = false;
 
-	held = tex && SurvivalTest_HeldSpriteState(&heldId, &pos);
 	for (i = 0; i < DROP_MAX; i++) {
 		if (!st_drops[i].active) continue;
 		if (!ST_ID_IS_BLOCK(st_drops[i].block)) { if (tex) any = true; }
 		else if (IndevTest_DropIsSprite(st_drops[i].block)) any = true;
 		if (any) break;
 	}
-	if (!any && !held) return;
+	if (!any) return;
 
 	if (!st_itemDropVB) {
 		st_itemDropVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, ITEMDROP_MAX_VERTICES);
@@ -1707,16 +1682,6 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 	}
 	blockSpriteEnd = count;
 
-	/* First-person held item - same pipeline as the drop sprites (which is */
-	/*  known-good), just anchored to the camera instead of a drop entity. */
-	if (held && IndevTest_ItemSpriteUV(heldId, &rec.u1, &rec.v1, &rec.u2, &rec.v2)) {
-		SurvivalTest_HeldSpriteState(&heldId, &pos); /* recompute - pos was reused above */
-		size.x = 0.35f; size.y = 0.35f;
-		Particle_DoRender(&size, &pos, &rec, DropItem_WorldColor(&pos), ptr);
-		ptr   += 4;
-		count += 4;
-	}
-
 	Gfx_UnlockDynamicVb(st_itemDropVB);
 	if (!count) return;
 
@@ -1735,11 +1700,6 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 			Atlas1D_Bind(runAtlas);
 			Gfx_DrawVb_IndexedTris_Range(off - runStart, runStart, DRAW_HINT_NONE);
 		}
-	}
-	/* range 3: the held-item sprite (items.png again) */
-	if (count > blockSpriteEnd && tex) {
-		Gfx_BindTexture(tex);
-		Gfx_DrawVb_IndexedTris_Range(count - blockSpriteEnd, blockSpriteEnd, DRAW_HINT_NONE);
 	}
 	Gfx_SetAlphaTest(false);
 }

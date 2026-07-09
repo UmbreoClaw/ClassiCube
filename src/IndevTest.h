@@ -71,6 +71,10 @@ cc_bool IndevTest_UseHeldItem(int heldId, IVec3 pos);
     crop stage on save, and its application to a loaded base block. */
 int     IndevTest_BlockDataMeta(BlockID b);
 BlockID IndevTest_ApplyDataMeta(BlockID b, int meta);
+/* First-person extruded held item (ItemRenderer port): whether the id uses */
+/*  it, and the texture bind + UV rect for building its mesh. */
+cc_bool IndevTest_HeldIsExtruded(int id);
+cc_bool IndevTest_BindHeldTexture(int id, TextureRec* rec);
 /* Whether a dropped id renders as an upright sprite instead of a miniature */
 /*  block: item ids, sprite-draw blocks (flowers etc) and torches. False */
 /*  outside Indev mode (c0.30 renders every block drop as its cropped cube). */

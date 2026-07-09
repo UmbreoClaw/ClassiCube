@@ -665,6 +665,31 @@ cc_bool IndevTest_IsContainerBlock(BlockID b) {
 	return IndevTest_Enabled && IndevTest_ContainerKindOf(b) != INDEV_CONTAINER_NONE;
 }
 
+/* Whether the held id renders as the first-person extruded item sprite */
+/*  (ItemRenderer's non-block branch): item ids and sprite-type blocks. */
+cc_bool IndevTest_HeldIsExtruded(int id) {
+	if (!IndevTest_Enabled) return false;
+	if (id >= 256) return indev_itemsTexId != 0;
+	return IndevTest_DropIsSprite(id);
+}
+
+/* Binds the texture for the extruded held item and returns its UV rect - */
+/*  items.png for item ids, the terrain tile for sprite blocks. */
+cc_bool IndevTest_BindHeldTexture(int id, TextureRec* rec) {
+	TextureLoc loc;
+	int texIndex;
+	if (id >= 256) {
+		if (!IndevTest_ItemSpriteUV(id, &rec->u1, &rec->v1, &rec->u2, &rec->v2)) return false;
+		if (!indev_itemsTexId) return false;
+		Gfx_BindTexture(indev_itemsTexId);
+		return true;
+	}
+	loc  = Block_Tex((BlockID)id, FACE_XMIN);
+	*rec = Atlas1D_TexRec(loc, 1, &texIndex);
+	Atlas1D_Bind(texIndex);
+	return true;
+}
+
 /* RenderItem.doRender: only blocks with renderType 0 (standard cubes) drop */
 /*  as miniature 3D blocks - everything else (flowers/saplings/mushrooms, */
 /*  torches, and all item ids) renders as an upright sprite quad. */
