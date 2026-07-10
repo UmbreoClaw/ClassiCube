@@ -15,6 +15,7 @@
 #include "Chat.h"
 #include "Audio.h"
 #include "SurvivalTest.h"
+#include "IndevTest.h"
 
 /* Data for a resizable queue, used for liquid physic tick entries. */
 struct TickQueue {
@@ -580,5 +581,13 @@ void Physics_Tick(void) {
 	Physics_TickWater();
 	/*}*/
 	physics_tickCount++;
-	Physics_TickRandomBlocks();
+	/* Indev mode uses the genuine World.tick rate (volume/200 random
+	    updates per tick) - this loop's 3-per-chunk is ~6.8x sparser,
+	    which visibly stalled crop growth and farmland moisture. c0.30
+	    and creative keep the engine loop untouched. */
+	if (IndevTest_Enabled) {
+		IndevTest_TickRandomBlocks();
+	} else {
+		Physics_TickRandomBlocks();
+	}
 }

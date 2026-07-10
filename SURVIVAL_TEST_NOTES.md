@@ -2,6 +2,34 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Growth stall: random ticks ran at 1/6.8 the genuine rate (user report)
+The per-tick math (BlockCrops growth rate, farmland moisture) was already
+genuine, but the DISPATCH was starved: genuine World.tick pays out
+volume/200 random block updates per game tick (updateLCG accumulator +
+the randId*3+1013904223 LCG for coordinates), while the engine's
+Physics_TickRandomBlocks does 3 per 16^3 chunk = volume/1365. Crops that
+genuinely take ~8 min/stage on dry soil took ~57 min, and ~50s farmland
+hydration took ~6 min - "sat a while, nothing grew".
+Fix: IndevTest_TickRandomBlocks ports the genuine loop exactly (volume/
+200 with remainder carry, genuine LCG coordinate unpack, power-of-two
+masks with a bounds skip for odd imports) and dispatches through the
+same Physics.OnRandomTick table - so classic grass/sapling/flower ticks
+also run at the genuine Indev rate. Physics_Tick branches on
+IndevTest_Enabled; c0.30/creative keep the engine loop untouched.
+Rig-verified with a farmland patch + water trench: soil went wet and
+crops advanced a stage inside 90 seconds, matching genuine expectations.
+
+### Bounds audit: no other block shares the farmland fate
+Swept every Indev-layer block against genuine Block.java bounds:
+- farmland 15/16 (fixed previous entry), crops 1x0.25x1 (fixed) - done.
+- torch: genuine floor torch box is 0.4-0.6 x/z, 0-0.6 y; ours uses the
+  engine's texture-derived sprite box which lands within a texel of
+  that. Fine.
+- slabs: engine classic half-block, matches genuine 44. Chest/workbench/
+  furnaces/ores/etc: full cubes in genuine too. Flowers/mushrooms/
+  saplings: engine texture-derived sprite boxes (long-standing classic
+  behaviour, close to genuine's 0.3-0.7 boxes). Nothing else non-full.
+
 ### SOLVED: farmland was full-height, burying the crop planes' bottom row
 The user called it: genuine BlockFarmland is setBlockBounds(0,0,0, 1,
 15/16, 1) - the block sits 1/16 LOW, and the crop planes sink that same

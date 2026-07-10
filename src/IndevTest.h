@@ -138,6 +138,10 @@ int  IndevTest_LightLevel(int x, int y, int z);
 /* The current day/night sky light level (4..15) - what the deobfuscated
     source misnames World.skylightSubtracted. 15 outside Indev mode. */
 int  IndevTest_CurSkyLight(void);
+/* World.tick's random block updates at the genuine rate: volume/200 ticks
+    per game tick via the genuine LCG. Replaces the engine's much sparser
+    3-per-chunk loop while Indev mode is on (see Physics_Tick). */
+void IndevTest_TickRandomBlocks(void);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);

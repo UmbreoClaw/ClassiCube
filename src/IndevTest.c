@@ -1095,6 +1095,50 @@ static void Indev_RegisterFarmTicks(void) {
 	}
 }
 
+/* World.tick's random block update loop, at the genuine rate: updateLCG
+    accumulates the world volume every tick and pays out volume/200 random
+    updates (the remainder carries), with coordinates unpacked from the
+    genuine randId LCG (randId*3 + 1013904223, >> 2, x from the low bits).
+    The engine's own loop is 3 blocks per 16^3 chunk = volume/1365 - about
+    6.8x sparser - which left crops visibly stalled and farmland dry for
+    minutes. Handlers are the same Physics.OnRandomTick table, so classic
+    grass/sapling/flower behaviour simply runs at the genuine rate too.
+    Coordinate masks assume power-of-two dimensions like genuine Indev;
+    the bounds check skips the (biased) picks on any odd-sized import. */
+static int indev_updateLCG;
+static cc_uint32 indev_randId;
+void IndevTest_TickRandomBlocks(void) {
+	int shiftX = 1, shiftZ = 1;
+	int maskX, maskY, maskZ;
+	int count, i, x, y, z, index;
+	cc_uint32 bits;
+	BlockID block;
+	PhysicsHandler tick;
+	if (!IndevTest_Enabled || !World.Blocks) return;
+
+	while ((1 << shiftX) < World.Width)  shiftX++;
+	while ((1 << shiftZ) < World.Length) shiftZ++;
+	maskX = World.Width - 1; maskZ = World.Length - 1; maskY = World.Height - 1;
+
+	indev_updateLCG += World.Volume;
+	count = indev_updateLCG / 200;
+	indev_updateLCG -= count * 200;
+
+	for (i = 0; i < count; i++) {
+		indev_randId = indev_randId * 3u + 1013904223u;
+		bits = indev_randId >> 2;
+		x = (int)(bits & maskX);
+		z = (int)((bits >> shiftX) & maskZ);
+		y = (int)((bits >> (shiftX + shiftZ)) & maskY);
+		if (x >= World.Width || y >= World.Height || z >= World.Length) continue;
+
+		index = World_Pack(x, y, z);
+		block = World.Blocks[index];
+		tick  = Physics.OnRandomTick[block];
+		if (tick) tick(index, block);
+	}
+}
+
 /* ItemHoe.onItemUse: turns grass (with non-solid above) or dirt into dry */
 /*  farmland, wearing the tool; hoed GRASS has a 1-in-8 seed drop. */
 /* ItemSeeds.onItemUse: plants stage-0 crops above farmland. */
