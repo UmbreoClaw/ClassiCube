@@ -2093,7 +2093,7 @@ cc_result MCLevel_Save(struct Stream* stream) {
 
 			cur = buffer;
 			cur = Nbt_WriteInt32(cur, "Pos", tx + (ty << 10) + (tz << 20));
-			if (IndevTest_CanonicalBlock(b) == 67) { /* chest */
+			if (IndevTest_CanonicalBlock(b) == 54) { /* chest (genuine id) */
 				cur = Nbt_WriteString(cur, "id", &chestId);
 			} else {
 				cur = Nbt_WriteString(cur, "id", &furnId);

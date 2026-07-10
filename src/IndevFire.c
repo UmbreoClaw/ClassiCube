@@ -402,7 +402,9 @@ void IndevFire_DefineBlock(void) {
 	Blocks.Brightness[id]      = 15 << FANCY_LIGHTING_LAMP_SHIFT;
 	Blocks.DigSounds[id]       = SOUND_WOOD;
 	Blocks.StepSounds[id]      = SOUND_WOOD;
-	Blocks.CanPlace[id]        = false; /* only flint & steel starts fire */
+	Blocks.CanPlace[id]        = true;  /* genuine has no fire item at all -
+	    ours exists for /client give + the chain armor recipe, so placing
+	    it directly is allowed (it behaves like flint-and-steel fire) */
 	Blocks.CanDelete[id]       = true;
 	Vec3_Set(Blocks.MinBB[id], 0.0f, 0.0f, 0.0f);
 	Vec3_Set(Blocks.MaxBB[id], 1.0f, 1.0f, 1.0f);

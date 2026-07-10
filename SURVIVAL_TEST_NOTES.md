@@ -1,6 +1,40 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Startup Indev world + diamond mining chain (latest)
+## SESSION LOG - Genuine block-id migration (latest)
+
+User (after /give fire handed out the inert CPE Fire 54): asked for
+per-mode block identity so Indev uses the REAL Indev ids. Done - the
+1:1 blocks now live AT their genuine ids, shadowing CPE decoration in
+Indev mode only (Game_Reset restores CPE defs when a non-Indev map
+loads; classic/creative untouched):
+  torch 70->50, fire 98->51, chest 67->54, diamond ore 93->56,
+  workbench 66->58, furnace 68/69->61/62.
+- Items were ALREADY at genuine ids (256+local == shiftedIndex).
+- Metadata-simulating variants keep internal ids (chest/furnace facings
+  71-82, farmland 83/84, crop stages 85-92, wall torches 94-97) and
+  still collapse to genuine id + Data nibble on save.
+- BlockToIndev/FromIndev are now identity for the migrated ids; the
+  leftover CPE-slot remaps stay as lossy fallbacks for stray ids in old
+  worlds. parity_diff.py remap shrank to just the wall torches.
+- /client give checks Indev block names before the engine lookup
+  (IndevTest_FindBlockByName, canonicalised - so "torch" gives 50, not
+  a wall variant), and genuine NUMERIC ids now work: give 51 = fire.
+- Also: diamond ore smelts to a diamond (genuine FurnaceRecipes entry
+  that previously had no source block), and fire is directly placeable
+  (genuine has no fire item at all, so give+place is our extension -
+  it behaves exactly like flint-and-steel fire).
+- Existing .mclevel saves are unaffected: the disk format always stored
+  genuine ids; only the runtime ids moved.
+
+### Rig verification (finally including the flames!)
+- give fire/torch/workbench by name -> correct genuine blocks.
+- Placed fire on the spawn house wall: Builder_DrawFire renders the
+  animated leaning wall-flame perfectly, and within seconds the house
+  was engulfed - wall sheets, ceiling flames, a hole burned through.
+  The fire render was never broken; the earlier invisible-fire hunts
+  were placement/framing failures on the rig.
+
+## SESSION LOG - Startup Indev world + diamond mining chain
 
 - **Startup world**: launching in Indev mode now generates a genuine
   Indev world (IndevGen, Generate-menu defaults Inland/Normal 128x128x64)

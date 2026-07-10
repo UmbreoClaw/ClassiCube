@@ -33,8 +33,8 @@ static int  indevgen_waterLevel, indevgen_groundLevel, indevgen_cloudHeight;
 #define INDEVGEN_FLOATING (indevgen_type == 2)
 #define INDEVGEN_FLAT     (indevgen_type == 3)
 
-#define INDEV_BLOCK_TORCH       70
-#define INDEV_BLOCK_DIAMOND_ORE 93
+#define INDEV_BLOCK_TORCH       50 /* genuine id */
+#define INDEV_BLOCK_DIAMOND_ORE 56 /* genuine id */
 
 void IndevGen_Setup(int type, int theme) {
 	indevgen_type  = type;

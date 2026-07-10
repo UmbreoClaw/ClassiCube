@@ -11,8 +11,8 @@ CC_BEGIN_HEADER
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
-/* The fire block id in our custom-id space (genuine id 51). */
-#define INDEV_BLOCK_FIRE 98
+/* The fire block id - the genuine Indev id. */
+#define INDEV_BLOCK_FIRE 51
 /* The two animated flame tiles (genuine terrain tiles 31 and 31+16, both
     driven by their own TextureFlamesFX instance - see Animations.c). */
 #define INDEV_FIRE_TEX_LOC2 120

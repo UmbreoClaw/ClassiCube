@@ -192,7 +192,7 @@ int IndevTest_FindBlockByName(const cc_string* name) {
 	int b;
 	cc_string bn;
 	if (!IndevTest_Enabled) return -1;
-	for (b = 98; b >= 66; b--) { /* our custom-id range, newest first */
+	for (b = 98; b >= 50; b--) { /* our id range (genuine 50-62 + variants), newest first */
 		bn = Block_UNSAFE_GetName((BlockID)b);
 		if (String_CaselessEquals(&bn, name)) return IndevTest_CanonicalBlock((BlockID)b);
 	}
@@ -347,7 +347,7 @@ cc_bool IndevTest_CanHarvest(int heldId, BlockID block) {
 	level = d->param;
 	switch (block) {
 	case BLOCK_OBSIDIAN:                return level == 3;
-	case 93 /* DIAMOND_ORE (defined below) */: return level >= 2; /* genuine oreDiamond */
+	case 56 /* INDEV_BLOCK_DIAMOND_ORE (defined below) */: return level >= 2; /* genuine oreDiamond */
 	case BLOCK_GOLD_ORE: case BLOCK_GOLD: return level >= 2;
 	case BLOCK_IRON_ORE: case BLOCK_IRON: return level > 0;
 	default:                            return true;
@@ -378,10 +378,10 @@ static const struct IndevRecipe indevRecipes[] = {
 	/* TNT: gunpowder/sand checkerboard */
 	{ BLOCK_TNT,     1, 3,3, { R_ITEM(33),BLOCK_SAND,R_ITEM(33), BLOCK_SAND,R_ITEM(33),BLOCK_SAND, R_ITEM(33),BLOCK_SAND,R_ITEM(33) } },
 	/* the new Indev blocks: workbench (2x2!), torch; chest/furnace need 3x3 */
-	{ 66,            1, 2,2, { BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD } },
-	{ 70,            4, 1,2, { R_ITEM(7), R_ITEM(24) } },
-	{ 67,            1, 3,3, { BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD, BLOCK_WOOD,0,BLOCK_WOOD, BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD } },
-	{ 68,            1, 3,3, { BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE, BLOCK_COBBLE,0,BLOCK_COBBLE, BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE } },
+	{ 58,            1, 2,2, { BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD, BLOCK_WOOD } },        /* workbench */
+	{ 50,            4, 1,2, { R_ITEM(7), R_ITEM(24) } },                                   /* torches */
+	{ 54,            1, 3,3, { BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD, BLOCK_WOOD,0,BLOCK_WOOD, BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD } }, /* chest */
+	{ 61,            1, 3,3, { BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE, BLOCK_COBBLE,0,BLOCK_COBBLE, BLOCK_COBBLE,BLOCK_COBBLE,BLOCK_COBBLE } }, /* furnace */
 	/* bowls x4; mushroom soup (both mushroom orders); flint&steel */
 	{ R_ITEM(25),    4, 3,2, { BLOCK_WOOD,0,BLOCK_WOOD, 0,BLOCK_WOOD,0 } },
 	{ R_ITEM(26),    1, 1,3, { BLOCK_RED_SHROOM, BLOCK_BROWN_SHROOM, R_ITEM(25) } },
@@ -532,15 +532,17 @@ static void IndevItems_Seed(void) {
 /*########################################################################################################################*
 *---------------------------------------------------Indev block additions-------------------------------------------------*
 *#########################################################################################################################*/
-/* Blocks the classic set lacks, defined at the reserved ids (66+) with the */
+/* Blocks the classic set lacks, defined at the GENUINE Indev ids (50-62, */
+/*  shadowing ClassiCube's CPE decoration in Indev mode only - Game_Reset */
+/*  restores the CPE definitions whenever a non-Indev map loads) with the */
 /*  reserved atlas tiles (96+, patched in from the b1.7.3 jar's terrain.png */
 /*  by Resources.c's BetaPatcher - see the notes' reservation table). */
-#define INDEV_BLOCK_WORKBENCH   66
+#define INDEV_BLOCK_WORKBENCH   58 /* genuine id */
 cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDEV_BLOCK_WORKBENCH; }
-#define INDEV_BLOCK_CHEST       67
-#define INDEV_BLOCK_FURNACE     68
-#define INDEV_BLOCK_FURNACE_LIT 69
-#define INDEV_BLOCK_TORCH       70
+#define INDEV_BLOCK_CHEST       54 /* genuine id */
+#define INDEV_BLOCK_FURNACE     61 /* genuine id */
+#define INDEV_BLOCK_FURNACE_LIT 62 /* genuine id */
+#define INDEV_BLOCK_TORCH       50 /* genuine id */
 /* Directional variants: front face per Indev facing metadata 2/3/4/5 */
 /*  (north -Z / south +Z / west -X / east +X), id = base + (meta - 2). */
 /*  The canonical ids above stay the inventory/recipe/drop form (their */
@@ -554,7 +556,7 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_FARMLAND_WET 84
 #define INDEV_BLOCK_CROPS_0      85 /* 85-92 */
 #define INDEV_BLOCK_CROPS_7      92
-#define INDEV_BLOCK_DIAMOND_ORE  93 /* genuine 56; tile 119 */
+#define INDEV_BLOCK_DIAMOND_ORE  56 /* genuine id; tile 119 */
 /* Wall torches: genuine torch (50) metadata 1-4 = hanging on the solid
     block at -X / +X / -Z / +Z respectively (BlockTorch.onBlockAdded order).
     Id = base + (meta - 1). The canonical INDEV_BLOCK_TORCH is metadata 5
@@ -986,11 +988,11 @@ struct SurvivalSlot* IndevTest_ContainerSlot(int i) {
 *#########################################################################################################################*/
 /* TileEntityFurnace.smeltItem: iron ore -> iron ingot, gold ore -> gold
     ingot, sand -> glass, cobblestone -> stone, raw -> cooked porkchop.
-    (Indev also smelts diamond ore -> diamond, but the classic block set has
-    no diamond ore block, so that entry has nothing to map from.) */
+    Diamond ore smelts to a diamond like genuine FurnaceRecipes. */
 static int Furnace_SmeltResult(int id) {
 	if (id == BLOCK_IRON_ORE) return 256 + 9;  /* Iron Ingot */
 	if (id == BLOCK_GOLD_ORE) return 256 + 10; /* Gold Ingot */
+	if (id == INDEV_BLOCK_DIAMOND_ORE) return 256 + 8; /* Diamond */
 	if (id == BLOCK_SAND)     return BLOCK_GLASS;
 	if (id == BLOCK_COBBLE)   return BLOCK_STONE;
 	if (id == 256 + 63)       return 256 + 64; /* Raw -> Cooked Porkchop */
@@ -1782,29 +1784,22 @@ static void OnInit(void) {
 /*  custom blocks and lossy-but-sensible for the rest. */
 BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 	switch (b) {
-	case 50: return 44; /* cobble slab  -> stairSingle */
-	case 51: return 0;  /* rope         -> air */
-	case 52: return 12; /* sandstone    -> sand */
-	case 53: return 0;  /* snow layer   -> air */
-	case 54: return 51; /* fire         -> fire (exact) */
+	/* our blocks live AT the genuine ids now - 50 torch, 51 fire, 54 chest,
+	    56 diamond ore, 58 workbench, 61/62 furnace save as-is. The leftover
+	    CPE decoration ids (unreachable in Indev mode, but old worlds might
+	    carry them) keep lossy-but-sensible fallbacks. */
+	case 50: case 51: case 54: case 56: case 58: case 61: case 62:
+		return b;
+	case 52: return 9;  /* CPE sandstone slot is the genuine waterSource - map
+	    a stray one to still water rather than losing it */
+	case 53: return 11; /* likewise lavaSource / snow slot -> still lava */
 	case 55: return 33; /* light pink   -> clothRose */
-	case 56: return 25; /* forest green -> clothGreen */
 	case 57: return 3;  /* brown        -> dirt */
-	case 58: return 29; /* deep blue    -> clothUltramarine */
 	case 59: return 28; /* turquoise    -> clothCapri */
 	case 60: return 20; /* ice          -> glass */
-	case 61: return 45; /* ceramic tile -> brick */
-	case 62: return 49; /* magma        -> obsidian */
 	case 63: return 1;  /* pillar       -> stone */
 	case 64: return 54; /* crate        -> chest */
 	case 65: return 1;  /* stone brick  -> stone */
-	case 66: return 58; /* workbench (exact) */
-	case 67: return 54; /* chest (exact) */
-	case 68: return 61; /* furnace idle (exact) */
-	case 69: return 62; /* furnace lit (exact) */
-	case 70: return 50; /* torch (exact) */
-	case INDEV_BLOCK_DIAMOND_ORE: return 56; /* diamond ore (exact) */
-	case INDEV_BLOCK_FIRE: return 51; /* fire (exact) */
 	default:
 		if (b <= 49) return b; /* classic identity */
 		/* directional variants: same Indev block, facing carried by the */
@@ -1821,20 +1816,16 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 
 BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	switch (b) {
-	case 50: return 70; /* torch */
-	case 51: return INDEV_BLOCK_FIRE; /* fire (was mapped to the inert CPE
-	    fire block 54 before the real BlockFire port existed) */
+	/* torch/fire/chest/diamond ore/workbench/furnaces load 1:1 - our
+	    definitions sit at the genuine ids */
+	case 50: case 51: case 54: case 56: case 58: case 61: case 62:
+		return b;
 	case 52: return 8;  /* waterSource -> water */
 	case 53: return 10; /* lavaSource  -> lava */
-	case 54: return 67; /* chest */
 	case 55: return 0;  /* gear -> air */
-	case 56: return INDEV_BLOCK_DIAMOND_ORE; /* diamond ore (exact) */
 	case 57: return 42; /* diamond block -> iron block */
-	case 58: return 66; /* workbench */
 	case 59: return INDEV_BLOCK_CROPS_0;  /* + stage from the Data nibble */
 	case 60: return INDEV_BLOCK_FARMLAND; /* wet variant from the Data nibble */
-	case 61: return 68; /* furnace idle */
-	case 62: return 69; /* furnace lit */
 	default: return b <= 49 ? b : 0;
 	}
 }
