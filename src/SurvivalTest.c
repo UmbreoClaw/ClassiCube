@@ -5516,6 +5516,19 @@ static void SurvivalTest_BlockChanged(void* obj,
 									  IVec3 coords, BlockID oldBlock, BlockID block) {
 	if (!SurvivalTest_Enabled) return;
 
+	/* Any block change re-validates the hanging paintings, so breaking the
+	    wall behind one pops it off immediately (user request - genuine
+	    in-20100223 only ever re-checks at tickCounter==100 and lets a
+	    painting hang forever if its wall breaks later, which reads as a
+	    bug; b1.x made the check periodic). */
+	if (IndevTest_Enabled) {
+		int pi;
+		for (pi = 0; pi < PAINTING_MAX; pi++) {
+			if (!st_paintings[pi].active) continue;
+			if (!Painting_ValidSurface(&st_paintings[pi])) Painting_PopOff(&st_paintings[pi]);
+		}
+	}
+
 	if (block == BLOCK_AIR) {
 		/* Block was mined - spawn its physical drop(s) on the ground */
 		SurvivalTest_SpawnDropsForBlock(coords, oldBlock);

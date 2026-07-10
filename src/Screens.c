@@ -2744,7 +2744,7 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	struct Entity* p = &Entities.CurPlayer->Base;
 	struct Matrix proj, savedView;
-	float aspect, relX, relY, headYaw, headPitch;
+	float aspect;
 	int boxX = s->dollBoxX, boxY = s->dollBoxY, boxSize = s->dollBoxSize;
 	int boxH  = s->dollBoxH > 0 ? s->dollBoxH : s->dollBoxSize;
 	if (boxSize <= 0) return;
@@ -2768,46 +2768,63 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		s->doll.vScale       = 1.0f;
 	}
 
-	if (s->mouseX < 0) {
-		/* No PointerMove event has reached this screen yet (e.g. the very first */
-		/*  frame after opening, before the mouse has moved at all) - atan2 of a */
-		/*  zero offset against boxSize below would hit the same singularity as */
-		/*  an offset of exactly 0, returning a full 90 degrees and turning the */
-		/*  head edge-on to the camera. Look straight ahead instead. */
-		headYaw = 0.0f; headPitch = 0.0f;
-	} else {
-		relX = (float)(s->mouseX - (boxX + boxSize / 2));
-		relY = (float)(s->mouseY - (boxY + boxH / 2)); /* vertical centre of the tall box */
-		headYaw   = Math_Atan2f((float)boxSize, relX) * MATH_RAD2DEG;
-		/* +relY so cursor BELOW centre tilts the head down (was inverted) */
-		headPitch = Math_Atan2f((float)boxSize, relY) * MATH_RAD2DEG;
+	/* The genuine GuiInventory tracking maths (in-20100223, transcribed):
+	    dx/dy are measured in the genuine GUI's pixel units from the doll
+	    anchor (window centre horizontally, eye level = 50px above the base
+	    in a 70px-tall window), with a 40px arctan falloff. The BODY yaw
+	    lightly tracks (atan(dx/40)*20), the HEAD tracks at double strength
+	    (atan(dx/40)*40), and the whole body leans with the vertical offset
+	    (atan(dy/40)*20) while the head pitches by the same amount on top.
+	    Genuine multiplies raw radians by 20/40 and feeds glRotatef degrees -
+	    quirky, but transcribed as-is. */
+	{
+		float gscale = 70.0f / (float)boxH; /* our box pixels -> genuine GUI px */
+		float dx, dy, t, lean;
+		if (s->mouseX < 0) {
+			/* no PointerMove yet - look straight ahead */
+			dx = 0.0f; dy = 0.0f;
+		} else {
+			float eyeY = (float)boxY + (float)boxH * (20.0f / 70.0f);
+			dx = ((float)(boxX + boxSize / 2) - (float)s->mouseX) * gscale;
+			dy = (eyeY - (float)s->mouseY) * gscale;
+		}
+		t    = Math_Atan2f(40.0f, dx); /* engine Atan2f(x,y) = atan(y/x) */
+		lean = Math_Atan2f(40.0f, dy);
+
+		/* The view's x+y mirror below IS a 180-degree spin about Z, so the
+		    face-the-camera base is 0 here, and the frame matches genuine's
+		    mirrored one - the genuine signs apply verbatim. */
+		s->doll.RotY  = t * 20.0f;            /* body: light tracking */
+		s->doll.Yaw   = t * 40.0f;            /* head: double strength */
+		s->doll.Pitch = -lean * 20.0f;        /* head pitch */
+		s->doll.RotX  = -lean * 20.0f;        /* whole-body lean */
+		s->doll.RotZ  = 0.0f;
 	}
-
-	/* Body always faces forward towards the camera; only the head tracks the cursor. */
-	/* RotY 0 makes an entity face -Z (its own look direction), but the camera sits */
-	/*  behind the doll looking down -Z, so RotY must be 180 to turn the body to */
-	/*  face +Z (towards the camera) instead of showing its back. Yaw is offset by */
-	/*  the same 180 so head tracking (Yaw - RotY) keeps the same relative motion. */
-	/* SUBTRACT headYaw: ClassiCube's yaw runs the opposite way round to the */
-	/*  Beta convention the tracking maths assumed (same 180-flip family as */
-	/*  the container placement fix), which mirrored the head horizontally - */
-	/*  moving the mouse left made the doll look right. */
-	s->doll.Yaw   = 180.0f - headYaw;
-	s->doll.Pitch = headPitch;
-	s->doll.RotY  = 180.0f;
-	s->doll.RotX  = 0.0f;
-	s->doll.RotZ  = 0.0f;
 	s->doll.Position.x = 0.0f;
-	s->doll.Position.y = -(s->doll.Size.y * 0.5f);
-	s->doll.Position.z = -SURVINV_DOLL_DIST;
+	s->doll.Position.y = 0.0f;
+	s->doll.Position.z = 0.0f;
 
-	/* Aspect must match the (now possibly non-square) viewport, else the doll */
-	/*  stretches - width/height of the actual render region. */
-	aspect = (float)(boxSize - 2) / (float)(boxH - 2);
-	Gfx_CalcPerspectiveMatrix(&proj, SURVINV_DOLL_FOV * MATH_DEG2RAD, aspect, 16.0f);
+	/* Genuine renders the doll in the GUI's plain orthographic projection
+	    (glTranslatef + glScalef 30, no perspective at all) - the previous
+	    perspective camera here was what splayed the legs near the frame
+	    edge. The -30/+30/+30 scale + 180-degree Z spin in genuine is an
+	    x+y flip: it maps the y-up model into y-down GUI space while
+	    preserving triangle winding (and mirrors the doll horizontally,
+	    which is also genuine). Reproduced via the view matrix below. */
+	aspect = 30.0f * (float)(boxH - 2) / 70.0f; /* genuine scale 30, resized to our box */
+	Gfx_CalcOrthoMatrix(&proj, (float)(boxSize - 2), (float)(boxH - 2), -1000.0f, 1000.0f);
 
-	savedView   = Gfx.View;
-	Gfx.View    = Matrix_Identity; /* Model_Render composes the model transform with Gfx.View */
+	savedView = Gfx.View;
+	{
+		struct Matrix flip, place;
+		/* x+y mirror (winding-preserving), then anchor at the window's
+		    bottom-centre like genuine's (+51,+75) with z pushed into the
+		    ortho range */
+		Matrix_Scale(&flip, -aspect, -aspect, aspect);
+		Matrix_Translate(&place, (float)(boxSize - 2) * 0.5f,
+								 (float)(boxH - 2) * (67.0f / 70.0f), 50.0f);
+		Matrix_Mul(&Gfx.View, &flip, &place);
+	}
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Gfx_LoadMatrix(MATRIX_PROJ, &proj);
 

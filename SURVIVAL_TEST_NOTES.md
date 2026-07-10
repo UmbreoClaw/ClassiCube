@@ -1,6 +1,43 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Fire + flint & steel (BlockFire port) (latest)
+## SESSION LOG - Paperdoll genuine rewrite + painting wall-break pop (latest)
+
+User: paperdoll placement/armor "a little misdone" - head should track,
+body lightly track while staying front-facing with a tilt, legs looked
+misshaped; also paintings must pop when the block behind breaks.
+
+### Paperdoll (SurvivalInv_RenderDoll rewritten from genuine GuiInventory)
+- The old doll used homebrew atan2 tracking (written before we had the
+  in-20100223 source) and a PERSPECTIVE camera - the wide-angle
+  distortion near the frame edge is what misshaped the legs.
+- Now transcribed from genuine drawGuiContainerBackgroundLayer:
+  ORTHOGRAPHIC GUI projection (glTranslate + glScale 30, no perspective),
+  x+y-mirrored view (genuine's glScalef(-30,30,30) + RotZ 180 pair -
+  preserves winding, mirrors the doll horizontally, maps y-up into the
+  GUI's y-down; it IS a 180-degree spin, so the face-camera base yaw is
+  0 in that frame, not 180 - first attempt showed the doll's back).
+- Tracking math verbatim: dx/dy measured from the doll anchor (window
+  centre, eye 50px above base in the 70px window) in genuine GUI px,
+  body RotY = atan(dx/40)*20, head Yaw = atan(dx/40)*40 (double), head
+  Pitch = -atan(dy/40)*20, whole-body lean RotX = -atan(dy/40)*20
+  (lean and pitch stack, like genuine). Genuine multiplies raw radians
+  by 20/40 and calls them degrees - transcribed as-is.
+- Engine gotcha: Math_Atan2f(x, y) computes atan(y/x) - args look
+  swapped vs libc atan2.
+- Rig-verified both cursor directions: head+body turn toward the
+  cursor, low cursor pitches the head down with the body tipping.
+  Armor rides the same entity transform. User to confirm feel + armor.
+
+### Painting pops when the wall behind breaks
+- Genuine in-20100223 only re-checks onValidSurface at tickCounter==100
+  (the counter resets ONLY when that check fails), so a wall broken
+  later leaves the painting hanging forever - reads as a genuine bug
+  (b1.x made it periodic). Per user request: every block change now
+  re-validates all active paintings (SurvivalTest_BlockChanged), so
+  breaking the backing wall pops the painting immediately. The
+  tick-100 check stays.
+
+## SESSION LOG - Fire + flint & steel (BlockFire port)
 
 User: "finish the fire and flint and steel". Roadmap stage 4. New module
 src/IndevFire.c/.h (picked up automatically - Makefile globs src/*.c).
