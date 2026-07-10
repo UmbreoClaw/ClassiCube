@@ -1101,6 +1101,26 @@ static void IndevGen_GenerateHouse(void) {
 	if (!IndevTest_Enabled) return;
 	WR_SetBlockNotify(x1 - 2, y1, z1, INDEV_BLOCK_TORCH);
 	WR_SetBlockNotify(x1 + 2, y1, z1, INDEV_BLOCK_TORCH);
+
+	/* genuine setBlockWithNotify runs BlockTorch.onBlockAdded, which mounts
+	    the torch on its first solid neighbour (-X, +X, -Z, +Z order) - so
+	    the house torches hang on the side walls (metadata 1 / 2, our wall
+	    variant ids 94 / 95), they do NOT stand on the floor. Applied after
+	    the notify so the light pass saw the same torch emission. */
+	{
+		static const int tdx[2] = { -2, 2 };
+		int t, tx, meta;
+		for (t = 0; t < 2; t++) {
+			tx   = x1 + tdx[t];
+			meta = 0;
+			if      (WR_Opaque(WR_GetId(tx - 1, y1, z1))) meta = 1;
+			else if (WR_Opaque(WR_GetId(tx + 1, y1, z1))) meta = 2;
+			else if (WR_Opaque(WR_GetId(tx, y1, z1 - 1))) meta = 3;
+			else if (WR_Opaque(WR_GetId(tx, y1, z1 + 1))) meta = 4;
+			if (meta) Gen_Blocks[(y1 * World.Length + z1) * World.Width + tx] =
+				(BlockRaw)(93 + meta); /* INDEV_BLOCK_TORCH_W1 (94) + meta-1 */
+		}
+	}
 }
 
 /* growGrassOnDirt (light >= 4 approximated as sky exposure) */

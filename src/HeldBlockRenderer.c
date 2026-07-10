@@ -64,8 +64,13 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	struct Matrix m, r;
 	float x, u, y, vv, eu, ev;
 	int i;
-	/* mirrored like genuine: model x=0 samples u2, x=1 samples u1 */
-	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
+	/* genuine builds the plane u-mirrored (model x=0 samples u2) because
+	    ITS camera views the plane's back. Our -50 yaw (see below, opposite
+	    apparent sign) shows the camera the FRONT face instead - so the u
+	    mirror must be dropped here or every held item reads left-right
+	    flipped (user-spotted on the iron axe). The v flip stays: model
+	    y=0 is the sprite's bottom row (v2) in both engines. */
+	float u1 = rec.u1, u2 = rec.u2, v1 = rec.v2, v2 = rec.v1;
 
 	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
 	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);

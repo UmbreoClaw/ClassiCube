@@ -37,6 +37,10 @@ GfxResourceID IndevTest_InvGuiTex(void);
 GfxResourceID IndevTest_CraftGuiTex(void);
 /* Whether the block is the Indev workbench (right-click opens the 3x3 grid). */
 cc_bool IndevTest_IsWorkbench(BlockID b);
+/* Wall-mounted torch variants (genuine torch metadata 1-4) - the chunk */
+/*  builder renders them tilted via the genuine renderBlockTorch geometry. */
+cc_bool IndevTest_IsWallTorch(BlockID b);
+int IndevTest_WallTorchMeta(BlockID b);
 /* Atlas UVs of an item id's sprite (items.png, 16x16 grid). False when the */
 /*  id isn't a known Indev item - callers skip drawing then. */
 cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2);

@@ -94,8 +94,10 @@ static void AddSpriteVertices(BlockID block) {
 	int i = Atlas1D_Index(Block_Tex(block, FACE_XMAX));
 	struct Builder1DPart* part = &Builder_Parts[i];
 	/* Indev crops draw 8 quads (4 double-sided "#" rows), not the 4 of */
-	/*  the diagonal cross - see Builder_DrawCrops. */
-	part->sCount += IndevTest_IsCropBlock(block) ? 8 * 4 : 4 * 4;
+	/*  the diagonal cross - see Builder_DrawCrops. Wall torches draw 5 */
+	/*  (4 tilted sides + tip cap) padded to 8 with degenerate quads so */
+	/*  the banked sprite layout stays quad-aligned - Builder_DrawWallTorch. */
+	part->sCount += (IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block)) ? 8 * 4 : 4 * 4;
 }
 
 static void AddVertices(BlockID block, Face face) {
@@ -566,8 +568,88 @@ static void Builder_DrawCrops(int x, int y, int z) {
 	#undef CROP_QUAD
 }
 
+/* The genuine RenderBlocks.renderBlockTorch geometry for the wall-mounted
+    torch variants (metadata 1-4): a 2px column leaning out of its wall -
+    base shifted 0.1 towards the wall and raised 0.2, bottom vertices
+    displaced a further 0.4 towards the wall (the top stays put, giving the
+    lean), full-tile side quads, and the 2x2px tip cap at 10/16 height
+    interpolated along the lean line. Emitted as 2 quads per sprite bank
+    (like crops), with 3 degenerate quads padding 5 real ones up to 8. */
+static void Builder_DrawWallTorch(int x, int y, int z) {
+	/* metadata 1-4: attached to the solid block at -X / +X / -Z / +Z */
+	static const float offX[4]  = { -0.1f, 0.1f, 0.0f,  0.0f };
+	static const float offZ[4]  = {  0.0f, 0.0f, -0.1f, 0.1f };
+	static const float tiltX[4] = { -0.4f, 0.4f, 0.0f,  0.0f };
+	static const float tiltZ[4] = {  0.0f, 0.0f, -0.4f, 0.4f };
+
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float u1, u2, v1, v2, cu1, cu2, cv1, cv2;
+	float cx, cz, y0, yT, yC, a, b, capx, capz;
+	int m, stride;
+
+	m  = IndevTest_WallTorchMeta(Builder_Block) - 1;
+	a  = tiltX[m]; b = tiltZ[m];
+	cx = (float)x + 0.5f + offX[m];
+	cz = (float)z + 0.5f + offZ[m];
+	y0 = (float)y + 0.2f;
+	yT = y0 + 1.0f;          /* side quads span the full tile height */
+	yC = y0 + 10.0f/16.0f;   /* tip cap height */
+	capx = cx + a * (6.0f/16.0f);
+	capz = cz + b * (6.0f/16.0f);
+
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	v2  = v1 + Atlas1D.InvTileSize * UV2_Scale;
+	/* the tip cap samples the 2x2px torch-tip texels (u 7-9, v 6-8 of 16) */
+	cu1 = u1 + (u2 - u1) * ( 7.0f/16.0f);
+	cu2 = u1 + (u2 - u1) * ( 9.0f/16.0f);
+	cv1 = v1 + (v2 - v1) * ( 6.0f/16.0f);
+	cv2 = v1 + (v2 - v1) * ( 8.0f/16.0f);
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+
+	/* side quad facing per the engine sprite rule (normal = top A->B edge
+	    rotated 90 degrees clockwise in XZ); bottoms lean by (a, b) */
+	#define TORCH_QUAD(atx, atz, btx, btz) 		v->x = (atx) + a; v->y = y0; v->z = (atz) + b; v->Col = color; v->U = u1; v->V = v2; v++; 		v->x = (atx);     v->y = yT; v->z = (atz);     v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = (btx);     v->y = yT; v->z = (btz);     v->Col = color; v->U = u2; v->V = v1; v++; 		v->x = (btx) + a; v->y = y0; v->z = (btz) + b; v->Col = color; v->U = u2; v->V = v2; v++;
+	#define TORCH_DEGEN() 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++;
+
+	/* bank 0: the two X-plane sides (facing -X, then +X) */
+	v = &Builder_Vertices[part->sOffset];
+	TORCH_QUAD(cx - 1.0f/16.0f, cz + 0.5f, cx - 1.0f/16.0f, cz - 0.5f)
+	TORCH_QUAD(cx + 1.0f/16.0f, cz - 0.5f, cx + 1.0f/16.0f, cz + 0.5f)
+	v -= 8; v += stride;
+	/* bank 1: the two Z-plane sides (facing -Z, then +Z) */
+	TORCH_QUAD(cx - 0.5f, cz - 1.0f/16.0f, cx + 0.5f, cz - 1.0f/16.0f)
+	TORCH_QUAD(cx + 0.5f, cz + 1.0f/16.0f, cx - 0.5f, cz + 1.0f/16.0f)
+	v -= 8; v += stride;
+	/* bank 2: the tip cap (upward), padded with a degenerate quad */
+	v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv1; v++;
+	v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv2; v++;
+	v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv2; v++;
+	v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv1; v++;
+	TORCH_DEGEN()
+	v -= 8; v += stride;
+	/* bank 3: padding only */
+	TORCH_DEGEN()
+	TORCH_DEGEN()
+	part->sOffset += 8;
+	#undef TORCH_QUAD
+	#undef TORCH_DEGEN
+}
+
 static void Builder_DrawSprite(int x, int y, int z) {
 	if (IndevTest_IsCropBlock(Builder_Block)) { Builder_DrawCrops(x, y, z); return; }
+	if (IndevTest_IsWallTorch(Builder_Block)) { Builder_DrawWallTorch(x, y, z); return; }
 	{
 	struct Builder1DPart* part;
 	struct VertexTextured* v;

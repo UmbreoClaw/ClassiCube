@@ -1,6 +1,68 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Huge-map lighting crash fix (latest)
+## SESSION LOG - Wall torches + held-item mirror fix (latest)
+
+User: "now we should work on torch hanging to walls" + spotted that held
+items rendered left-right mirrored ("items in hand are mirrored lol").
+
+### Wall torches (genuine BlockTorch metadata port)
+- 4 new wall-variant block ids 94-97 = genuine torch (50) metadata 1-4
+  (hanging on the solid block at -X/+X/-Z/+Z; standing torch 70 = meta 5).
+  Same tile/brightness as the torch; MinBB/MaxBB = the genuine
+  collisionRayTrace per-metadata pick bounds (the thin wall-hugging
+  selection outline verified on the rig).
+- **Placement** (BlockChanged placed-hook): genuine ItemBlock.onItemUse
+  order - onBlockAdded's auto wall-pick (-X,+X,-Z,+Z walls then floor),
+  overridden by onBlockPlaced's clicked-face mounting when that backing
+  is a normal cube, then dropTorchIfCantStay (no support anywhere = the
+  block pops straight back off as an item). Face comes from
+  Game_SelectedPos (valid in the same input frame). Conversion via
+  Game_UpdateBlock (no event, same pattern as container rotation).
+- **Pop-off** (onNeighborBlockChange): every block change re-checks the
+  six neighbouring torches; a wall torch pops (as an item) when ITS wall
+  goes - it never re-mounts elsewhere - and a standing torch when its
+  floor goes. Both genuine. Rig-verified: torch mounted on a plank
+  pillar's side popped to a pickup-able item when the pillar was chopped.
+- **Rendering** (Builder_DrawWallTorch): the genuine renderBlockTorch
+  geometry - base shifted 0.1 into the wall and raised 0.2, bottom verts
+  displaced a further 0.4 toward the wall (top stays -> the lean),
+  full-tile side quads, 2x2px tip cap at 10/16 height interpolated along
+  the lean line. Routed through the builder sprite path; the banked
+  sprite vertex layout needs quad counts uniform per bank, so the 5 real
+  quads are padded to 8 (2 per bank) with degenerate quads.
+- **Spawn house**: genuine setBlockWithNotify runs onBlockAdded, so the
+  genuine house torches HANG on the side walls (meta 1/2) - our gen now
+  applies the same auto-mount after the notify pass (light unaffected:
+  same emission, applied post-light). Rig-verified both house torches
+  wall-mounted. scratchpad/parity_diff.py remap extended (94-97 -> 50).
+- **.mclevel**: wall variants save as torch 50 + Data nibble meta 1-4
+  (BlockDataMeta/ApplyDataMeta/BlockToIndev all extended) - round-trips
+  with genuine Indev saves.
+- isBlockNormalCube approximated as Blocks.FullOpaque (leaves/glass/
+  slabs correctly rejected as torch supports, matching genuine).
+
+### Held-item mirror fix (user-spotted on the iron axe)
+- Genuine ItemRenderer builds the extruded plane u-mirrored because ITS
+  camera views the plane's BACK; our -50 yaw (the opposite-apparent-sign
+  workaround, see the pickaxe session) shows the camera the FRONT - so
+  every held item read left-right flipped. Dropped the u mirror
+  (u1=rec.u1 now); the v mapping stays flipped (model y=0 = sprite
+  bottom row in both engines). Rig-verified zoomed: axe blade now faces
+  left into the scene like genuine, torch flame still up.
+- Full first-person orientation lineage for future reference:
+  engine yaw -50 (not +50)  +  UNMIRRORED u  +  flipped v. If the yaw
+  workaround is ever revisited, the u mirror flips with it.
+
+### Rig verification summary
+- House torches wall-mounted on both side walls, leaning correctly.
+- /client give resolved "torch", "wood", "iron axe" ("planks" is not a
+  name - the classic block 5 name is "Wood").
+- Hand placement on a wall face mounts correctly (count consumed);
+  clicking onto a torch's own pick box places nothing (genuine-ish).
+- Standing placement, side placement on a free-standing block, pop-off
+  with item return all verified.
+
+## SESSION LOG - Huge-map lighting crash fix
 
 User: reproducible ACCESS_VIOLATION crash right after generating a HUGE
 (512x512) Floating Woods world (client.log supplied; also reproduced on

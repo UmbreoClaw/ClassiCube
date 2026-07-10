@@ -17,6 +17,7 @@
 #include "Entity.h"
 #include "Lighting.h"
 #include "BlockPhysics.h"
+#include "Picking.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -532,6 +533,17 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_CROPS_0      85 /* 85-92 */
 #define INDEV_BLOCK_CROPS_7      92
 #define INDEV_BLOCK_DIAMOND_ORE  93 /* genuine 56; tile 119 */
+/* Wall torches: genuine torch (50) metadata 1-4 = hanging on the solid
+    block at -X / +X / -Z / +Z respectively (BlockTorch.onBlockAdded order).
+    Id = base + (meta - 1). The canonical INDEV_BLOCK_TORCH is metadata 5
+    (standing on the floor) and stays the inventory/drop form. */
+#define INDEV_BLOCK_TORCH_W1     94 /* 94-97 */
+static cc_bool Indev_IsWallTorch(BlockID b) {
+	return b >= INDEV_BLOCK_TORCH_W1 && b <= INDEV_BLOCK_TORCH_W1 + 3;
+}
+cc_bool IndevTest_IsWallTorch(BlockID b) { return IndevTest_Enabled && Indev_IsWallTorch(b); }
+/* Torch metadata of a wall-torch id (1-4), for the tilt tables. */
+int IndevTest_WallTorchMeta(BlockID b) { return b - INDEV_BLOCK_TORCH_W1 + 1; }
 
 static cc_bool Indev_IsFarmland(BlockID b) {
 	return b == INDEV_BLOCK_FARMLAND || b == INDEV_BLOCK_FARMLAND_WET;
@@ -560,6 +572,7 @@ static cc_bool Indev_IsFurnaceLit(BlockID b) {
 /*  every lit form (base or directional) canonicalises to the idle furnace - */
 /*  mining a burning furnace must never put a lit one in the inventory. */
 BlockID IndevTest_CanonicalBlock(BlockID b) {
+	if (Indev_IsWallTorch(b)) return INDEV_BLOCK_TORCH;
 	if (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3) return INDEV_BLOCK_CHEST;
 	if (b >= INDEV_BLOCK_FURN_V0  && b <= INDEV_BLOCK_FURN_V0  + 3) return INDEV_BLOCK_FURNACE;
 	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return INDEV_BLOCK_FURNACE;
@@ -582,6 +595,7 @@ int IndevTest_BlockDataMeta(BlockID b) {
 	if (b == INDEV_BLOCK_FARMLAND_WET)    return 7;
 	if (Indev_IsCrops(b))                 return b - INDEV_BLOCK_CROPS_0;
 	if (b == INDEV_BLOCK_TORCH)           return 5; /* standing */
+	if (Indev_IsWallTorch(b))             return IndevTest_WallTorchMeta(b);
 	return 0;
 }
 
@@ -590,6 +604,8 @@ BlockID IndevTest_ApplyDataMeta(BlockID b, int meta) {
 	if (IndevTest_IsContainerBlock(b)) return IndevTest_FacingVariant(b, meta);
 	if (b == INDEV_BLOCK_FARMLAND && meta > 0) return INDEV_BLOCK_FARMLAND_WET;
 	if (b == INDEV_BLOCK_CROPS_0 && meta > 0)  return (BlockID)(INDEV_BLOCK_CROPS_0 + (meta > 7 ? 7 : meta));
+	if (b == INDEV_BLOCK_TORCH && meta >= 1 && meta <= 4)
+		return (BlockID)(INDEV_BLOCK_TORCH_W1 + meta - 1);
 	return b;
 }
 
@@ -674,6 +690,36 @@ static void IndevBlocks_Define(void) {
 	Blocks.Brightness[INDEV_BLOCK_TORCH]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
 	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_TORCH],  7.0f/16.0f, 0.0f,        7.0f/16.0f);
 	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_TORCH],  9.0f/16.0f, 10.0f/16.0f, 9.0f/16.0f);
+	/* Wall torch variants: same tile/light as the standing torch, rendered
+	    tilted by the chunk builder (Builder_DrawWallTorch - the genuine
+	    renderBlockTorch geometry). Draw = SPRITE routes them through the
+	    builder's sprite path; MinBB/MaxBB are the genuine per-metadata
+	    collisionRayTrace pick bounds (they don't drive rendering here). */
+	{
+		/* genuine BlockTorch.collisionRayTrace bounds for metadata 1-4 */
+		static const float wtMin[4][3] = {
+			{ 0.00f, 0.2f, 0.35f }, { 0.70f, 0.2f, 0.35f },
+			{ 0.35f, 0.2f, 0.00f }, { 0.35f, 0.2f, 0.70f }
+		};
+		static const float wtMax[4][3] = {
+			{ 0.30f, 0.8f, 0.65f }, { 1.00f, 0.8f, 0.65f },
+			{ 0.65f, 0.8f, 0.30f }, { 0.65f, 0.8f, 1.00f }
+		};
+		int k;
+		for (k = 0; k < 4; k++) {
+			BlockID id = (BlockID)(INDEV_BLOCK_TORCH_W1 + k);
+			IndevBlock_Define(id, "Torch", 106, 106, 106, 106, SOUND_WOOD, 0);
+			Blocks.Collide[id]         = COLLIDE_NONE;
+			Blocks.ExtendedCollide[id] = COLLIDE_NONE;
+			Blocks.Draw[id]            = DRAW_SPRITE;
+			Blocks.BlocksLight[id]     = false;
+			Blocks.Brightness[id]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+			Vec3_Set(Blocks.MinBB[id], wtMin[k][0], wtMin[k][1], wtMin[k][2]);
+			Vec3_Set(Blocks.MaxBB[id], wtMax[k][0], wtMax[k][1], wtMax[k][2]);
+			Block_DefineCustom(id, false);
+		}
+	}
+
 	/* Top face uses tile 117 (torch tile shifted down 1px in the patcher) so */
 	/*  the bounds crop (x 7-9, y 7-9) shows the ember, matching genuine */
 	/*  renderBlockTorch's top UVs of x 7-9, y 6-8. */
@@ -1506,6 +1552,65 @@ void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock) {
 	indev_tes[i].used = false;
 }
 
+/* World.isBlockNormalCube: a solid material rendered as a full opaque cube */
+/*  (what torches may hang on / stand on). */
+static cc_bool Indev_NormalCube(int x, int y, int z) {
+	if (!World_Contains(x, y, z)) return false;
+	return Blocks.FullOpaque[World_GetBlock(x, y, z)];
+}
+
+/* BlockTorch.onBlockAdded's auto wall-pick: first solid neighbour in the
+    genuine -X, +X, -Z, +Z, floor order gives metadata 1/2/3/4/5 (0 = no
+    support anywhere). */
+static int Indev_TorchAutoMeta(IVec3 p) {
+	if (Indev_NormalCube(p.x - 1, p.y, p.z)) return 1;
+	if (Indev_NormalCube(p.x + 1, p.y, p.z)) return 2;
+	if (Indev_NormalCube(p.x, p.y, p.z - 1)) return 3;
+	if (Indev_NormalCube(p.x, p.y, p.z + 1)) return 4;
+	if (Indev_NormalCube(p.x, p.y - 1, p.z)) return 5;
+	return 0;
+}
+
+/* BlockTorch.onBlockPlaced: the clicked face picks the mounting when the
+    block behind that face is solid (0 = fall back to the auto pick). */
+static int Indev_TorchFaceMeta(IVec3 pos) {
+	if (!Game_SelectedPos.valid) return 0;
+	switch (Game_SelectedPos.closest) {
+	case FACE_YMAX: return Indev_NormalCube(pos.x, pos.y - 1, pos.z) ? 5 : 0;
+	case FACE_XMAX: return Indev_NormalCube(pos.x - 1, pos.y, pos.z) ? 1 : 0;
+	case FACE_XMIN: return Indev_NormalCube(pos.x + 1, pos.y, pos.z) ? 2 : 0;
+	case FACE_ZMAX: return Indev_NormalCube(pos.x, pos.y, pos.z - 1) ? 3 : 0;
+	case FACE_ZMIN: return Indev_NormalCube(pos.x, pos.y, pos.z + 1) ? 4 : 0;
+	default:        return 0;
+	}
+}
+
+/* BlockTorch.onNeighborBlockChange for one position: a torch whose OWN
+    support is no longer a normal cube pops off as a torch item. A wall
+    torch only re-checks its wall (it never re-mounts elsewhere), a
+    standing torch only its floor - both genuine. */
+static void Indev_TorchCheckPop(int x, int y, int z) {
+	BlockID b; int sx, sy, sz, meta;
+	Vec3 p;
+	if (!World_Contains(x, y, z)) return;
+	b = World_GetBlock(x, y, z);
+	if (b == INDEV_BLOCK_TORCH)    { meta = 5; }
+	else if (Indev_IsWallTorch(b)) { meta = IndevTest_WallTorchMeta(b); }
+	else return;
+
+	sx = x; sy = y; sz = z;
+	if      (meta == 1) { sx--; }
+	else if (meta == 2) { sx++; }
+	else if (meta == 3) { sz--; }
+	else if (meta == 4) { sz++; }
+	else                { sy--; }
+	if (Indev_NormalCube(sx, sy, sz)) return;
+
+	p.x = x + 0.5f; p.y = y + 0.5f; p.z = z + 0.5f;
+	SurvivalTest_SpawnDropWorld(p, INDEV_BLOCK_TORCH, 1);
+	Game_ChangeBlock(x, y, z, BLOCK_AIR);
+}
+
 /* Tile entity lifecycle + placement rotation, driven off block changes. */
 static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, BlockID block) {
 	cc_bool oldFurn, nowFurn;
@@ -1539,6 +1644,35 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 		Game_UpdateBlock(coords.x, coords.y, coords.z,
 			IndevTest_FacingVariant(block, meta)); /* no event - avoids recursion */
 	}
+
+	/* Player placed a torch: onBlockAdded's auto wall-pick, overridden by
+	    onBlockPlaced's clicked-face mounting, then dropTorchIfCantStay
+	    (genuine ItemBlock.onItemUse runs exactly that sequence). */
+	if (block == INDEV_BLOCK_TORCH) {
+		Vec3 dp;
+		meta = Indev_TorchAutoMeta(coords);
+		q    = Indev_TorchFaceMeta(coords);
+		if (q) meta = q;
+
+		if (!meta) {
+			/* no support anywhere: pops straight off as an item */
+			dp.x = coords.x + 0.5f; dp.y = coords.y + 0.5f; dp.z = coords.z + 0.5f;
+			Game_UpdateBlock(coords.x, coords.y, coords.z, BLOCK_AIR);
+			SurvivalTest_SpawnDropWorld(dp, INDEV_BLOCK_TORCH, 1);
+		} else if (meta != 5) {
+			Game_UpdateBlock(coords.x, coords.y, coords.z,
+				(BlockID)(INDEV_BLOCK_TORCH_W1 + meta - 1)); /* no event */
+		}
+	}
+
+	/* Any block change makes the six neighbouring torches re-check their
+	    support (BlockTorch.onNeighborBlockChange) */
+	Indev_TorchCheckPop(coords.x - 1, coords.y, coords.z);
+	Indev_TorchCheckPop(coords.x + 1, coords.y, coords.z);
+	Indev_TorchCheckPop(coords.x, coords.y - 1, coords.z);
+	Indev_TorchCheckPop(coords.x, coords.y + 1, coords.z);
+	Indev_TorchCheckPop(coords.x, coords.y, coords.z - 1);
+	Indev_TorchCheckPop(coords.x, coords.y, coords.z + 1);
 }
 
 /* Map loading runs Game_Reset, which wipes ALL custom block definitions - */
@@ -1628,6 +1762,7 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 		if (Indev_IsChestBlock(b))   return 54;
 		if (Indev_IsFurnaceIdle(b))  return 61;
 		if (Indev_IsFurnaceLit(b))   return 62;
+		if (Indev_IsWallTorch(b))    return 50; /* meta 1-4 via the Data nibble */
 		if (Indev_IsFarmland(b))     return 60; /* moisture in the Data nibble */
 		if (Indev_IsCrops(b))        return 59; /* stage in the Data nibble */
 		return 1; /* anything else -> stone */
