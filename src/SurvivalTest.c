@@ -3349,9 +3349,13 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 		if (m->health > 0 &&
 			(m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON) &&
 			IndevTest_CurSkyLight() > 7) {
+			/* classic Level.isLit treats out-of-bounds as lit; the engine's
+			    IsLit does NO bounds checks, so guard before indexing its
+			    heightmap (mobs can wander off the map edge) */
+			int mx = Math_Floor(e->Position.x), my = Math_Floor(e->Position.y), mz = Math_Floor(e->Position.z);
 			float mb = Mob_Brightness(m);
 			if (mb > 0.5f &&
-				Lighting.IsLit(Math_Floor(e->Position.x), Math_Floor(e->Position.y), Math_Floor(e->Position.z)) &&
+				(!World_Contains(mx, my, mz) || Lighting.IsLit(mx, my, mz)) &&
 				Random_Float(&st_mobRng) * 30.0f < (mb - 0.4f) * 2.0f) {
 				m->fire = 300;
 			}

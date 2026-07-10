@@ -1,6 +1,58 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Debug menu -> /client commands + swing revert (latest)
+## SESSION LOG - Huge-map lighting crash fix (latest)
+
+User: reproducible ACCESS_VIOLATION crash right after generating a HUGE
+(512x512) Floating Woods world (client.log supplied; also reproduced on
+the Linux rig - the in-game handler stack showed IndevTest_LightLevel ->
+ClassicLighting_IsLit -> ClassicLighting_GetLightHeight).
+
+### Root cause (proven from the user's crash registers)
+- IndevTest_LightLevel passed x/y/z STRAIGHT into Lighting.IsLit; the
+  engine's ClassicLighting_GetLightHeight indexes
+  classic_heightmap[z * Width + x] with NO bounds check (engine callers
+  always pre-check World_Contains - see ClassicLighting_Color).
+- Entities go out of bounds routinely: mobs wander off floating-island
+  edges, and Mob AI path-weight sampling probes blocks AROUND a mob, so
+  a mob standing at the border samples z = -1 immediately.
+- The user's crash 6 registers nail it: rdx = 0xFFFFFFFFFFFFFF64 = -156
+  = Lighting_Pack(356, -1) on a 512-wide map (-512 + 356), and the
+  faulting address was heightmap base - 0x138 (= -156 shorts). QED.
+- Why only HUGE maps crash: a 512x512 heightmap (512KB) crosses glibc's
+  mmap threshold, so it gets its own mapping with unmapped guard space
+  right before it -> negative index = instant segfault. Small maps'
+  heightmaps live mid-heap, so the same bug silently read garbage there
+  ("seemed to be a one time thing" on smaller maps).
+
+### Fixes
+- IndevTest_LightLevel now CLAMPS each coordinate to the world bounds -
+  which is exactly what genuine World.getBlockLightValue does (it clamps
+  var1/var2/var3 rather than rejecting), so this is parity, not just
+  safety. Plus a !World.Blocks early-out (returns full light 15).
+  One choke point covers every caller: Mob_Brightness, AI path weights,
+  RenderMobs light, painting per-cell light, grass/zombie-burn checks.
+- The c0.30 zombie/skeleton daylight-burn check called Lighting.IsLit
+  directly with raw mob coords - same latent crash in classic mode.
+  Guarded with World_Contains; out-of-bounds counts as lit, matching
+  classic Level.isLit's out-of-bounds-returns-true.
+- Audited every other Lighting.* call in our files: the Lighting.Color
+  variants bounds-check internally (safe), the mob-spawn and grass-tick
+  IsLit calls use already-validated in-bounds coords (safe).
+
+### The user's client.log also contains an older crash family
+- 4x "Textures must have power of two dimensions" aborts (a different
+  build/exe base). All our embedded/created textures are pow2 (arrows
+  32x32, cracks padded 160->256x16, plate 64x32, kz 256x256), so that
+  signature likely predates the current build or involves their local
+  texture pack - if it recurs on this build, get a fresh client.log.
+
+### Rig verification
+- Fixed binary: generated Huge/Floating/Woods (the exact repro), spawned
+  in the wooden house, ran a 5-minute survival watch with initial mobs
+  active - no crash (unfixed binary died to the same recipe within
+  seconds on the first rig repro).
+
+## SESSION LOG - Debug menu -> /client commands + swing revert
 
 User: revamp the F9 debug menu (buttons outgrew the grid) into client chat
 commands, delete the GUI entirely, make noai/armor per-spawn modifiers of

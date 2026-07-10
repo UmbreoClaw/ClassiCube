@@ -1110,6 +1110,19 @@ static void Indev_TickDayNight(void) {
     darkness-spawn rule, and light-accelerated monster aging. */
 int IndevTest_LightLevel(int x, int y, int z) {
 	int light = 0;
+	/* genuine World.getBlockLightValue CLAMPS out-of-range coords to the
+	    nearest in-range block, and that clamp is load-bearing here: entities
+	    off the map edge (mobs wandering off a floating island) and mob-AI
+	    path sampling near borders query outside the world, and the engine's
+	    classic-lighting heightmap does no bounds checking of its own. On
+	    huge (512x512) maps the heightmap is its own mmap'd allocation, so
+	    an unclamped query is an instant segfault (user-reported crash on
+	    huge floating woods worlds). */
+	if (!World.Blocks) return 15;
+	if (x < 0) { x = 0; } else if (x >= World.Width)  { x = World.Width  - 1; }
+	if (y < 0) { y = 0; } else if (y >= World.Height) { y = World.Height - 1; }
+	if (z < 0) { z = 0; } else if (z >= World.Length) { z = World.Length - 1; }
+
 	if (Lighting.IsLit(x, y, z)) light = Indev_SkyLight();
 	if (Lighting_Mode == LIGHTING_MODE_FANCY) {
 		int block = FancyLighting_BlockLightLevel(x, y, z);
