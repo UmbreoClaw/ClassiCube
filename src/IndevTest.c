@@ -1532,6 +1532,17 @@ void IndevTest_RenderSky(void) {
 	Gfx_SetAlphaTest(false);
 	Gfx_SetAlphaBlendingAdditive(true); /* dst + src, like glBlendFunc(ONE, ONE) */
 
+	if (!indev_sunTexId || !indev_moonTexId) {
+		/* sun.png/moon.png live in default.zip (packed there by the resource
+		    fetcher) - a custom texture pack without them silently loses the
+		    sky, so say it once instead of leaving users guessing */
+		static cc_bool warned;
+		if (!warned) {
+			warned = true;
+			Chat_AddRaw("&cIndev sky: sun.png/moon.png missing from the texture pack");
+		}
+	}
+
 	if (indev_sunTexId) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 		Gfx_BindTexture(indev_sunTexId);

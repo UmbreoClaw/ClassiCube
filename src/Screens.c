@@ -2846,19 +2846,21 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
 
 	/* Screens render in the 2D pass (depth off, alpha BLENDING on, culling */
-	/*  off). A model needs the full 3D baseline the world pass provides: */
-	/*  depth test+write, alpha TEST (not blend), and backface culling. */
+	/*  off). A model needs the 3D baseline the world's entity pass provides: */
+	/*  depth test+write and alpha TEST (not blend). Face culling stays OFF - */
+	/*  the world draws models with culling off (Model.c only enables it for */
+	/*  sprites), so model boxes have no winding guarantee: mirrored parts */
+	/*  (corner-swapped bounds, e.g. armor limbs) wind backwards and culling */
+	/*  eats their faces (= armor pieces invisible on the doll only). */
 	Gfx_SetDepthTest(true);
 	Gfx_SetDepthWrite(true);
 	Gfx_SetAlphaTest(true);
 	Gfx_SetAlphaBlending(false);
-	Gfx_SetFaceCulling(true);
 
 	Model_Render(s->doll.Model, &s->doll);
 	/* the paperdoll wears the player's armor, like genuine GuiInventory */
 	IndevArmor_Render(&s->doll);
 
-	Gfx_SetFaceCulling(false);
 	Gfx_SetAlphaBlending(true);
 	Gfx_SetAlphaTest(false);
 	Gfx_SetDepthWrite(false);
