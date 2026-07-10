@@ -569,7 +569,9 @@ static struct SoundAsset {
 	{ "mob_explode1.wav", "9e22b5aeec31de99410b682cc161a6096a1cd00a" }, { "mob_fizz1.wav",    "c649e60ea9a99c97501a50d2dc4e579343e91ea8" },
 	/* fire.fire ambient crackle + fire.ignite (flint & steel), from the same
 	    era's newsound/fire/ - BlockFire.randomDisplayTick / ItemFlintAndSteel */
-	{ "mob_fire1.wav",    "8b260108a73470c16cd244325242d4780cfb7d78" }, { "mob_ignite1.wav",  "19c729c3ceb753a824246b494bce5fa5c802f0f0" }
+	{ "mob_fire1.wav",    "8b260108a73470c16cd244325242d4780cfb7d78" }, { "mob_ignite1.wav",  "19c729c3ceb753a824246b494bce5fa5c802f0f0" },
+	/* random.splash (newsound/random/splash.ogg) - Entity water-entry */
+	{ "mob_splash1.wav",  "22a491f266f5c3cdd6e669a9493daaf40c9c8575" }
 };
 static cc_bool allSoundsExist;
 
@@ -623,7 +625,7 @@ static void SoundAssets_CountMissing(void) {
 	if (allSoundsExist) return;
 
 	Resources_MissingCount += Array_Elems(soundAssets);
-	Resources_MissingSize  += 606; /* 417 dig/step + ~189 mob/entity/fire oggs */
+	Resources_MissingSize  += 617; /* 417 dig/step + ~200 mob/entity/fire/splash oggs */
 }
 
 

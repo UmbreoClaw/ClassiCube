@@ -142,6 +142,10 @@ void SurvivalTest_PlaySoundAtBlock(int x, int y, int z, int type, float vol, flo
 /*  mul 2.5) and EntityFlameFX ("flame") - torch/furnace/fire ambience. */
 void SurvivalTest_SpawnSmokeFX(float x, float y, float z, float scaleMul);
 void SurvivalTest_SpawnFlameFX(float x, float y, float z);
+/* EntitySplashFX ("splash") and EntityLavaFX ("lava") - water edge foam */
+/*  and lava embers, spawned by the fluid randomDisplayTicks. */
+void SurvivalTest_SpawnSplashFX(float x, float y, float z);
+void SurvivalTest_SpawnLavaFX(float x, float y, float z);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 /* Arms a TNT block's fuse (fire consuming TNT calls this). */

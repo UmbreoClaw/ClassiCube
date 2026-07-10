@@ -1493,6 +1493,58 @@ static void Indev_FireDisplayTick(int x, int y, int z) {
 	}
 }
 
+/* BlockFluid.randomDisplayTick (both still and flowing inherit it):
+    lava under open air spits a fullbright ember 1/100, and water resting
+    at an exposed ledge edge throws 4 foam droplets off each open side.
+    (The liquid.lava/liquid.water ambient-sound roll in the genuine method
+    is dead code in this build - nextInt(128) == -1 is never true.) */
+static cc_bool Indev_LiquidAirCheck(int x, int y, int z) {
+	BlockID side  = World_Contains(x, y, z)     ? World_GetBlock(x, y, z)     : BLOCK_AIR;
+	BlockID below = World_Contains(x, y - 1, z) ? World_GetBlock(x, y - 1, z) : BLOCK_AIR;
+	if (Blocks.Collide[side] == COLLIDE_SOLID)  return false;
+	if (Blocks.Collide[side] == COLLIDE_LIQUID) return false;
+	return Blocks.Collide[below] == COLLIDE_SOLID ||
+	       Blocks.Collide[below] == COLLIDE_LIQUID;
+}
+
+static void Indev_FluidDisplayTick(int x, int y, int z, cc_bool lava) {
+	RNGState* r = &indev_dispRng;
+	int i;
+
+	if (lava) {
+		BlockID above = World_Contains(x, y + 1, z) ? World_GetBlock(x, y + 1, z) : BLOCK_AIR;
+		if (above == BLOCK_AIR && !Indev_NormalCube(x, y + 1, z) &&
+			Random_Next(r, 100) == 0) {
+			/* this.maxY: the fluid's render top (setBlockBounds 0.91) */
+			SurvivalTest_SpawnLavaFX((float)x + Random_Float(r),
+									 (float)y + 0.91f,
+									 (float)z + Random_Float(r));
+		}
+		return;
+	}
+
+	if (Indev_LiquidAirCheck(x + 1, y, z)) {
+		for (i = 0; i < 4; i++)
+			SurvivalTest_SpawnSplashFX((float)(x + 1) + 2.0f/16.0f, (float)y,
+									   (float)z + Random_Float(r));
+	}
+	if (Indev_LiquidAirCheck(x - 1, y, z)) {
+		for (i = 0; i < 4; i++)
+			SurvivalTest_SpawnSplashFX((float)x - 2.0f/16.0f, (float)y,
+									   (float)z + Random_Float(r));
+	}
+	if (Indev_LiquidAirCheck(x, y, z + 1)) {
+		for (i = 0; i < 4; i++)
+			SurvivalTest_SpawnSplashFX((float)x + Random_Float(r), (float)y,
+									   (float)(z + 1) + 2.0f/16.0f);
+	}
+	if (Indev_LiquidAirCheck(x, y, z - 1)) {
+		for (i = 0; i < 4; i++)
+			SurvivalTest_SpawnSplashFX((float)x + Random_Float(r), (float)y,
+									   (float)z - 2.0f/16.0f);
+	}
+}
+
 /* BlockTorch.randomDisplayTick: one smoke wisp + one flame fleck above the
     torch head, offset toward the wall for the hanging metas. */
 static void Indev_TorchDisplayTick(int x, int y, int z, int meta) {
@@ -1561,6 +1613,10 @@ void IndevTest_RandomDisplayTicks(void) {
 			Indev_TorchDisplayTick(x, y, z, IndevTest_WallTorchMeta(b));
 		} else if (Indev_IsFurnaceLit(b)) {
 			Indev_FurnaceDisplayTick(x, y, z, IndevTest_BlockFacingMeta(b));
+		} else if (b == BLOCK_LAVA || b == BLOCK_STILL_LAVA) {
+			Indev_FluidDisplayTick(x, y, z, true);
+		} else if (b == BLOCK_WATER || b == BLOCK_STILL_WATER) {
+			Indev_FluidDisplayTick(x, y, z, false);
 		}
 	}
 }

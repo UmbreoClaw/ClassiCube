@@ -65,7 +65,7 @@ static RNGState sounds_rnd;
 static const char* const mobSnd_names[MOBSND_COUNT] = {
 	"pig", "pigdeath", "sheep", "hurt", "bow",
 	"fuse", "drr", "pop", "explode", "fizz",
-	"fire", "ignite"
+	"fire", "ignite", "splash"
 };
 static struct SoundGroup mobSnd_groups[MOBSND_COUNT];
 

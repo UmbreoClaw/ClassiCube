@@ -25,6 +25,53 @@ static float held_swingY;
 static float held_time, held_period = 0.25f;
 static BlockID held_lastBlock;
 
+/* ItemRenderer.updateEquippedItem (Indev): switching the selected stack
+    dips the held item down 0.6 and back up at a constant 0.4/tick, and
+    the OLD item keeps rendering until the dip passes below 0.1 - only
+    then does the displayed item swap to the new one. Replaces the
+    engine's sine switch animation while Indev mode is on. */
+static float held_equipProg = 1.0f, held_prevEquipProg = 1.0f;
+static float held_equipAcc;
+static int   held_equipDispKey = -1; /* (hotbar index << 16) | slot id */
+
+static int HeldEquip_CurKey(void) {
+	return (Inventory.SelectedIndex << 16) | SurvivalTest_SlotId(Inventory.SelectedIndex);
+}
+
+/* The id whose held form is currently DRAWN (lags the selection while the
+    equip dip plays out). 0 = empty hand. */
+static int HeldEquip_DisplayedId(void) {
+	if (!IndevTest_Enabled || held_equipDispKey < 0)
+		return SurvivalTest_SlotId(Inventory.SelectedIndex);
+	return held_equipDispKey & 0xFFFF;
+}
+
+static void HeldEquip_Tick(void) {
+	float target, d;
+	held_prevEquipProg = held_equipProg;
+
+	target = HeldEquip_CurKey() == held_equipDispKey ? 1.0f : 0.0f;
+	d = target - held_equipProg;
+	if (d < -0.4f) d = -0.4f;
+	if (d >  0.4f) d =  0.4f;
+	held_equipProg += d;
+
+	if (held_equipProg < 0.1f) held_equipDispKey = HeldEquip_CurKey();
+}
+
+static void HeldEquip_Update(float delta) {
+	if (!IndevTest_Enabled) return;
+	if (held_equipDispKey < 0) held_equipDispKey = HeldEquip_CurKey();
+
+	/* genuine updates once per 20Hz tick, rendering interpolates between
+	    the last two ticks - reproduce with a fixed-step accumulator */
+	held_equipAcc += delta;
+	while (held_equipAcc >= 1.0f / 20.0f) {
+		held_equipAcc -= 1.0f / 20.0f;
+		HeldEquip_Tick();
+	}
+}
+
 /* Since not using Entity_SetModel, which normally automatically does this */
 static void SetHeldModel(struct Model* model) {
 #ifdef CC_BUILD_CONSOLE
@@ -191,7 +238,7 @@ static void HeldBlockRenderer_RenderModel(void) {
 		/*  culling state) - skip the bare arm then, so the sprite reads as the */
 		/*  held item rather than floating beside an empty hand. The genuine */
 		/*  extruded ItemRenderer mesh + swing is a future port (back-burnered). */
-		int heldId = SurvivalTest_SlotId(Inventory.SelectedIndex);
+		int heldId = HeldEquip_DisplayedId();
 		cc_bool holdingItem = IndevTest_HeldIsExtruded(heldId);
 		if (holdingItem) {
 			/* Indev's first-person extruded item sprite, riding the same */
@@ -275,12 +322,20 @@ static void SetBaseOffset(void) {
 	Vec3 spriteOffset = { 0.46f, -0.52f, -0.72f };
 	Vec3 itemOffset   = { 0.56f, -0.52f, -0.72f }; /* ItemRenderer's hand anchor */
 	Vec3 offset = sprite ? spriteOffset : normalOffset;
-	if (IndevTest_HeldIsExtruded(SurvivalTest_SlotId(Inventory.SelectedIndex))) offset = itemOffset;
+	if (IndevTest_HeldIsExtruded(HeldEquip_DisplayedId())) offset = itemOffset;
 
 	Vec3_AddBy(&held_entity.Position, &offset);
 	if (!sprite && Blocks.Draw[held_block] != DRAW_GAS) {
 		float height = Blocks.MaxBB[held_block].y - Blocks.MinBB[held_block].y;
 		held_entity.Position.y += 0.2f * (1.0f - height);
+	}
+
+	if (IndevTest_Enabled) {
+		/* the equip dip: glTranslatef(0.56, -0.52 - (1 - progress)*0.6, -0.72),
+		    with progress interpolated between the last two 20Hz ticks */
+		float p = held_prevEquipProg +
+			(held_equipProg - held_prevEquipProg) * (held_equipAcc * 20.0f);
+		held_entity.Position.y -= (1.0f - p) * 0.6f;
 	}
 }
 
@@ -355,6 +410,8 @@ void HeldBlockRenderer_ClickAnim(cc_bool digging) {
 }
 
 static void DoSwitchBlockAnim(void* obj) {
+	/* Indev drives switching through the genuine equip-dip instead */
+	if (IndevTest_Enabled) return;
 	if (held_swinging) {
 		/* Like graph -sin(x) : x=0.5 and x=2.5 have same y values,
 		   but increasing x causes y to change in opposite directions */
@@ -467,6 +524,15 @@ void HeldBlockRenderer_Render(float delta) {
 	held_swingY = 0.0f;
 	held_block  = Inventory_SelectedBlock;
 	view = Gfx.View;
+
+	HeldEquip_Update(delta);
+	if (IndevTest_Enabled) {
+		/* render the item the equip dip says is in the hand: the OLD one
+		    until the dip bottoms out (ids < 256 are blocks; item ids fall
+		    to BLOCK_AIR here and draw via HeldItem_Render below) */
+		int dispId = HeldEquip_DisplayedId();
+		held_block = dispId < 256 ? (BlockID)dispId : BLOCK_AIR;
+	}
 
 	Gfx_LoadMatrix(MATRIX_PROJ, &held_blockProj);
 	SetMatrix();

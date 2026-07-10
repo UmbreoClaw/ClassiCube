@@ -92,6 +92,7 @@ static float st_hurtDir;
 
 /* Entity.fire for the local player (Indev layer): > 0 while alight. */
 static int st_playerFire;
+static cc_bool st_playerWasInWater = true; /* true = no splash on the first tick */
 
 /* Debug/testing toggle, driven by the /client god command - NOT part of */
 /*  genuine c0.30-s parity (see the Debug/testing tools section at the bottom). */
@@ -179,6 +180,9 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
     for the player damage / drops / arrows / explosion code that plays them. */
 static void  Indev_PlaySoundAt(Vec3 pos, int type, float vol, float pitch);
 static float Mob_SndPitch(void);
+/* Entity.onEntityUpdate's water-entry splash - forward declared for the
+    drop/mob/player water hooks that fire it. vel is per-TICK motion. */
+static void  Indev_EntitySplash(Vec3 pos, Vec3 vel, float width);
 /* Defined later, in the TNT section - forward declared so the Drops section */
 /*  above (which decides what mining a TNT block does) can ignite its fuse. */
 /*  fuseTicks lets callers other than mining (the explosion chain-reaction) */
@@ -273,6 +277,7 @@ struct DropItem {
 	cc_bool pickingUp;
 	float   pickupTime;  /* seconds into the pickup-fly animation */
 	Vec3    pickupFrom;  /* position captured the instant pickup started */
+	cc_bool wasInWater;  /* last tick's water state - the air->water edge splashes */
 };
 static struct DropItem st_drops[DROP_MAX];
 /* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
@@ -521,6 +526,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	d->age         = 0.0f;
 	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
+	d->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
 	d->active      = true;
 }
 
@@ -825,6 +831,23 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 		d->age += delta;
 		if (d->age >= DROP_LIFETIME_SECS) { d->active = false; continue; }
 		SurvivalTest_DropPhysics(d, delta);
+
+		/* Entity.onEntityUpdate: items splash when they land in water too */
+		if (IndevTest_Enabled) {
+			int bx = (int)Math_Floor(d->position.x);
+			int by = (int)Math_Floor(d->position.y);
+			int bz = (int)Math_Floor(d->position.z);
+			cc_bool inW = World_Contains(bx, by, bz) &&
+				ST_IsWaterBlock(World_GetBlock(bx, by, bz));
+			if (inW && !d->wasInWater) {
+				/* drop velocities are per-second; genuine motion is per-tick */
+				Vec3 v = d->velocity;
+				v.x /= 20.0f; v.y /= 20.0f; v.z /= 20.0f;
+				Indev_EntitySplash(d->position, v, 0.25f);
+			}
+			d->wasInWater = inW;
+		}
+
 		if (d->pickupDelay > 0.0f) { d->pickupDelay -= delta; }
 		else                       { SurvivalTest_DropTryPickup(d, pe); }
 	}
@@ -1276,6 +1299,9 @@ static struct TntFuse st_tnt[TNT_MAX];
 #define PUFF_C030_SMOKE 0 /* c0.30 SmokeParticle (TNT fuse puffs) */
 #define PUFF_INDEV_SMOKE 1 /* Indev EntitySmokeFX ("smoke"/"largesmoke") */
 #define PUFF_INDEV_FLAME 2 /* Indev EntityFlameFX ("flame") */
+#define PUFF_INDEV_BUBBLE 3 /* Indev EntityBubbleFX ("bubble") */
+#define PUFF_INDEV_SPLASH 4 /* Indev EntitySplashFX ("splash", RainFX + 0.04 gravity) */
+#define PUFF_INDEV_LAVA   5 /* Indev EntityLavaFX ("lava") */
 struct TntSmoke {
 	Vec3  pos, prevPos;
 	Vec3  vel;        /* per-tick displacement, exactly as in Particle.java */
@@ -1375,11 +1401,84 @@ void SurvivalTest_SpawnFlameFX(float x, float y, float z) {
 	s->active = true;
 }
 
+/* EntityBubbleFX: rises through water at the spawning entity's motion,
+    dies the moment it leaves water. mx/my/mz = entity motion (per tick). */
+static void Indev_SpawnBubbleFX(float x, float y, float z,
+								float mx, float my, float mz) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	s->vel.x = mx * 0.2f + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.02f;
+	s->vel.y = my * 0.2f + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.02f;
+	s->vel.z = mz * 0.2f + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.02f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray  = 1.0f; /* white */
+	s->scale = (Random_Float(&st_dropRng) * 0.5f + 0.5f) * 2.0f
+	           * (Random_Float(&st_dropRng) * 0.6f + 0.2f);
+	s->life  = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
+	if (s->life < 1) s->life = 1;
+	s->age   = 0;
+	s->kind  = PUFF_INDEV_BUBBLE;
+	s->active = true;
+}
+
+/* EntitySplashFX (EntityRainFX with 0.04 gravity): the water droplets a
+    splash-down and waterfall edges throw up. */
+void SurvivalTest_SpawnSplashFX(float x, float y, float z) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	TntSmoke_BaseVel(&s->vel);
+	s->vel.x *= 0.3f;
+	s->vel.y  = Random_Float(&st_dropRng) * 0.2f + 0.1f;
+	s->vel.z *= 0.3f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray  = 1.0f;
+	s->scale = (Random_Float(&st_dropRng) * 0.5f + 0.5f) * 2.0f;
+	s->life  = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
+	if (s->life < 1) s->life = 1;
+	s->age   = 0;
+	s->kind  = PUFF_INDEV_SPLASH;
+	s->active = true;
+}
+
+/* EntityLavaFX: the fullbright embers lava spits, trailing smoke. */
+void SurvivalTest_SpawnLavaFX(float x, float y, float z) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	TntSmoke_BaseVel(&s->vel);
+	s->vel.x *= 0.8f;
+	s->vel.y  = Random_Float(&st_dropRng) * 0.4f + 0.05f;
+	s->vel.z *= 0.8f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray  = 1.0f;
+	s->scale = (Random_Float(&st_dropRng) * 0.5f + 0.5f) * 2.0f
+	           * (Random_Float(&st_dropRng) * 2.0f + 0.2f);
+	s->life  = (int)(16.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
+	if (s->life < 1) s->life = 1;
+	s->age   = 0;
+	s->kind  = PUFF_INDEV_LAVA;
+	s->active = true;
+}
+
 /* Point solidity test for the Indev smoke's moveEntity approximation */
 static cc_bool TntSmoke_Solid(float x, float y, float z) {
 	int bx = (int)Math_Floor(x), by = (int)Math_Floor(y), bz = (int)Math_Floor(z);
 	if (!World_Contains(bx, by, bz)) return false;
 	return Blocks.Collide[World_GetBlock(bx, by, bz)] == COLLIDE_SOLID;
+}
+
+static BlockID TntSmoke_BlockAt(float x, float y, float z) {
+	int bx = (int)Math_Floor(x), by = (int)Math_Floor(y), bz = (int)Math_Floor(z);
+	if (!World_Contains(bx, by, bz)) return BLOCK_AIR;
+	return World_GetBlock(bx, by, bz);
 }
 
 /* SmokeParticle.tick()/Particle.tick() (c0.30, noPhysics=true) and Indev's
@@ -1404,6 +1503,69 @@ static void SurvivalTest_TickTntSmoke(void) {
 			s->pos.y += s->vel.y;
 			s->pos.z += s->vel.z;
 			s->vel.x *= 0.96f; s->vel.y *= 0.96f; s->vel.z *= 0.96f;
+			continue;
+		}
+
+		if (s->kind == PUFF_INDEV_BUBBLE) {
+			/* EntityBubbleFX: floats up, dies the moment its cell isn't water */
+			BlockID in;
+			s->vel.y += 0.002f;
+			s->pos.x += s->vel.x;
+			s->pos.y += s->vel.y;
+			s->pos.z += s->vel.z;
+			s->vel.x *= 0.85f; s->vel.y *= 0.85f; s->vel.z *= 0.85f;
+
+			in = TntSmoke_BlockAt(s->pos.x, s->pos.y, s->pos.z);
+			if (in != BLOCK_WATER && in != BLOCK_STILL_WATER) s->active = false;
+			continue;
+		}
+
+		if (s->kind == PUFF_INDEV_SPLASH) {
+			/* EntityRainFX tick with EntitySplashFX's 0.04 gravity: falls,
+			    half-dies on landing, dies inside liquid/solid */
+			BlockID in;
+			s->vel.y -= 0.04f;
+			if (!TntSmoke_Solid(s->pos.x + s->vel.x, s->pos.y, s->pos.z))
+				s->pos.x += s->vel.x;
+			if (TntSmoke_Solid(s->pos.x, s->pos.y + s->vel.y, s->pos.z)) {
+				if (s->vel.y < 0.0f) {
+					if (Random_Float(&st_dropRng) < 0.5f) s->active = false;
+					s->vel.x *= 0.7f; s->vel.z *= 0.7f;
+				}
+				s->vel.y = 0.0f;
+			} else {
+				s->pos.y += s->vel.y;
+			}
+			if (!TntSmoke_Solid(s->pos.x, s->pos.y, s->pos.z + s->vel.z))
+				s->pos.z += s->vel.z;
+			s->vel.x *= 0.98f; s->vel.y *= 0.98f; s->vel.z *= 0.98f;
+
+			in = TntSmoke_BlockAt(s->pos.x, s->pos.y, s->pos.z);
+			if (Blocks.Collide[in] == COLLIDE_LIQUID ||
+				Blocks.Collide[in] == COLLIDE_SOLID) s->active = false;
+			continue;
+		}
+
+		if (s->kind == PUFF_INDEV_LAVA) {
+			/* EntityLavaFX: falls under 0.03 gravity, trails smoke while young */
+			cc_bool ground;
+			if (Random_Float(&st_dropRng) > (float)s->age / (float)s->life) {
+				SurvivalTest_SpawnSmokeFX(s->pos.x, s->pos.y, s->pos.z, 1.0f);
+			}
+			s->vel.y -= 0.03f;
+			ground = false;
+			if (!TntSmoke_Solid(s->pos.x + s->vel.x, s->pos.y, s->pos.z))
+				s->pos.x += s->vel.x;
+			if (TntSmoke_Solid(s->pos.x, s->pos.y + s->vel.y, s->pos.z)) {
+				if (s->vel.y < 0.0f) ground = true;
+				s->vel.y = 0.0f;
+			} else {
+				s->pos.y += s->vel.y;
+			}
+			if (!TntSmoke_Solid(s->pos.x, s->pos.y, s->pos.z + s->vel.z))
+				s->pos.z += s->vel.z;
+			s->vel.x *= 0.999f; s->vel.y *= 0.999f; s->vel.z *= 0.999f;
+			if (ground) { s->vel.x *= 0.7f; s->vel.z *= 0.7f; }
 			continue;
 		}
 
@@ -1933,22 +2095,22 @@ static void SurvivalTest_RenderTntSmoke(float t) {
 		if (ageT < 0.0f) ageT = 0.0f;
 		if (ageT > 1.0f) ageT = 1.0f;
 
-		if (s->kind == PUFF_INDEV_FLAME) {
-			/* EntityFlameFX: fixed atlas index 48 (row 3, column 0) */
-			rec.u1 = 0.0f;
-			rec.u2 = 0.0624375f;
-			rec.v1 = 3.0f / 16.0f;
-			rec.v2 = rec.v1 + 0.0624375f;
-		} else {
-			/* SmokeParticle: tex = 7 - (age*8)/life, walking the 8 smoke frames in */
-			/*  the top row of the 16-wide atlas from densest puff (7) to wisp (0). */
+		/* EntityFX.renderParticle: 16x16 grid on particles.png, cell = the
+		    class's particleTextureIndex (smoke walks 7..0 along the top row) */
+		switch (s->kind) {
+		case PUFF_INDEV_FLAME:  frame = 48; break;
+		case PUFF_INDEV_BUBBLE: frame = 32; break;
+		case PUFF_INDEV_SPLASH: frame = 17; break;
+		case PUFF_INDEV_LAVA:   frame = 49; break;
+		default:
 			frame = 7 - (s->age * 8) / s->life;
 			if (frame < 0) frame = 0;
-			rec.u1 = frame / 16.0f;
-			rec.u2 = rec.u1 + 0.0624375f;
-			rec.v1 = 0.0f;
-			rec.v2 = 0.0624375f;
+			break;
 		}
+		rec.u1 = (frame % 16) / 16.0f;
+		rec.u2 = rec.u1 + 0.0624375f;
+		rec.v1 = (frame / 16) / 16.0f;
+		rec.v2 = rec.v1 + 0.0624375f;
 
 		lit = DropItem_WorldColor(&pos);
 		switch (s->kind) {
@@ -1969,6 +2131,17 @@ static void SurvivalTest_RenderTntSmoke(float t) {
 				(cc_uint8)(PackedCol_R(lit) * ageT + 255.0f * (1.0f - ageT)),
 				(cc_uint8)(PackedCol_G(lit) * ageT + 255.0f * (1.0f - ageT)),
 				(cc_uint8)(PackedCol_B(lit) * ageT + 255.0f * (1.0f - ageT)), 255);
+			break;
+		case PUFF_INDEV_LAVA:
+			/* shrinks (1 - t^2), always fullbright (getEntityBrightness = 1) */
+			quadHalf = 0.1f * s->scale * (1.0f - ageT * ageT);
+			col = PACKEDCOL_WHITE;
+			break;
+		case PUFF_INDEV_BUBBLE:
+		case PUFF_INDEV_SPLASH:
+			/* plain white, world-lit, constant scale */
+			quadHalf = 0.1f * s->scale;
+			col = lit;
 			break;
 		default:
 			/* rCol=gCol=bCol (the random 0..0.3 grey) * the block's brightness. */
@@ -2062,6 +2235,7 @@ struct Mob {
 	                      /*  st_mobs[] index (BasicAttackAI.attackTarget - mobs */
 	                      /*  aggro onto whatever hurt them, not just the player) */
 	cc_bool  jumping;
+	cc_bool  wasInWater;  /* last tick's water state - the air->water edge splashes */
 
 	int health;
 	int lastHealth;  /* health snapshot when the invuln window last opened (Mob.lastHealth) */
@@ -2186,6 +2360,36 @@ void SurvivalTest_PlaySoundAtBlock(int x, int y, int z, int type, float vol, flo
 	Vec3 pos;
 	pos.x = (float)x + 0.5f; pos.y = (float)y + 0.5f; pos.z = (float)z + 0.5f;
 	Indev_PlaySoundAt(pos, type, vol, pitch);
+}
+
+/* Entity.onEntityUpdate: falling into water plays "random.splash" at a
+    speed-scaled volume and throws up a ring of bubbles + water droplets
+    (1 + width*20 of each, spread +-width around the entity, one block
+    above the surface cell the feet just entered). */
+static void Indev_EntitySplash(Vec3 pos, Vec3 vel, float width) {
+	float vol, fy, fx, fz;
+	int i, n;
+	if (!IndevTest_Enabled) return;
+
+	vol = Math_SqrtF(vel.x * vel.x * 0.2f + vel.y * vel.y +
+	                 vel.z * vel.z * 0.2f) * 0.2f;
+	if (vol > 1.0f) vol = 1.0f;
+	Indev_PlaySoundAt(pos, MOBSND_SPLASH, vol,
+		1.0f + (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.4f);
+
+	fy = (float)((int)pos.y) + 1.0f;
+	n  = (int)(1.0f + width * 20.0f);
+	for (i = 0; i < n; i++) {
+		fx = pos.x + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * width;
+		fz = pos.z + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * width;
+		Indev_SpawnBubbleFX(fx, fy, fz,
+			vel.x, vel.y - Random_Float(&st_dropRng) * 0.2f, vel.z);
+	}
+	for (i = 0; i < n; i++) {
+		fx = pos.x + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * width;
+		fz = pos.z + (Random_Float(&st_dropRng) * 2.0f - 1.0f) * width;
+		SurvivalTest_SpawnSplashFX(fx, fy, fz);
+	}
 }
 
 static int SurvivalTest_CountMobs(void) {
@@ -3481,6 +3685,13 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	inWater = ST_InLiquid(e, false);
 	inLava  = ST_InLiquid(e, true);
 
+	/* Entity.onEntityUpdate: falling into water splashes (Indev layer) */
+	if (IndevTest_Enabled) {
+		if (inWater && !m->wasInWater)
+			Indev_EntitySplash(e->Position, e->Velocity, e->Size.x);
+		m->wasInWater = inWater;
+	}
+
 	/* Environmental damage - Mob.tick()'s airSupply/lava handling. Both */
 	/*  damage calls go through the same flat invincibility window as combat */
 	/*  damage (see Mob_Hurt), so e.g. lava only actually ticks roughly once */
@@ -3776,6 +3987,7 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	Entity_Init(&m->Base);
 	m->Base.VTABLE = &mob_VTABLE;
 	m->fuseState   = -1; /* EntityCreeper.creeperState idles at -1, not 0 */
+	m->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
 
 	model = String_FromReadonly(mobTypeInfo[type].model);
 	Entity_SetModel(&m->Base, &model);
@@ -6164,6 +6376,13 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	    1 HP a second while the 300-tick counter runs down, water fizzes it
 	    out, lava re-arms it to 600 (Entity.onEntityUpdate). */
 	if (IndevTest_Enabled) {
+		/* Entity.onEntityUpdate: hitting the water splashes (sound volume
+		    scales with entry speed, so wading in barely whispers while a
+		    high dive is loud) */
+		if (inWater && !st_playerWasInWater)
+			Indev_EntitySplash(e->Position, e->Velocity, 0.6f);
+		st_playerWasInWater = inWater;
+
 		if (ST_InFire(e)) {
 			SurvivalTest_Hurt(1);
 			if (!inWater) st_playerFire = 300;
