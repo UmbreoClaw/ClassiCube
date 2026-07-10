@@ -2800,7 +2800,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
 		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
 		s->doll.RotZ  = 0.0f;
-		s->dollCamPitch = lean * 20.0f;       /* the vertical tilt is a CAMERA
+		s->dollCamPitch = -lean * 20.0f;      /* the vertical tilt is a CAMERA
 		    rotation applied to the whole scene, not a body lean - genuine's
 		    glRotatef(-atan(dy/40)*20, 1,0,0) before rendering the entity.
 		    Mirrored frame flips the sign back to +lean here. */
