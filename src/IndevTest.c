@@ -19,6 +19,8 @@
 #include "BlockPhysics.h"
 #include "Picking.h"
 #include "IndevFire.h"
+#include "Bitmap.h"
+#include "Logger.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -94,12 +96,36 @@ GfxResourceID IndevTest_ContGuiTex(void) { return indev_contGuiTexId; }
 
 /* terrain/sun.png + terrain/moon.png - the celestial quads renderSky draws */
 static GfxResourceID indev_sunTexId, indev_moonTexId;
+/* Genuine renderSky draws these with glBlendFunc(GL_ONE, GL_ONE) - texture
+    alpha is completely IGNORED. The engine's additive blend is
+    (SRC_ALPHA, ONE), which multiplies by alpha instead: any texture pack
+    whose sun/moon carry a real alpha channel (feathered glow) gets dimmed
+    to near-invisibility. Forcing alpha to 255 at load makes the two
+    formulas identical for these textures, on every backend. */
+static void CelestialPngProcess(GfxResourceID* texId, struct Stream* stream,
+								const cc_string* name) {
+	struct Bitmap bmp;
+	cc_result res;
+	int i, size;
+
+	res = Png_Decode(&bmp, stream);
+	if (res) { Logger_SysWarn2(res, "decoding", name); return; }
+
+	if (Game_ValidateBitmap(name, &bmp)) {
+		size = bmp.width * bmp.height;
+		for (i = 0; i < size; i++) {
+			bmp.scan0[i] |= BITMAPCOLOR_A_MASK;
+		}
+		Gfx_RecreateTexture(texId, &bmp, TEXTURE_FLAG_MANAGED, false);
+	}
+	Mem_Free(bmp.scan0);
+}
 static void SunPngProcess(struct Stream* stream, const cc_string* name) {
-	Game_UpdateTexture(&indev_sunTexId, stream, name, NULL, NULL);
+	CelestialPngProcess(&indev_sunTexId, stream, name);
 }
 static struct TextureEntry sun_entry = { "sun.png", SunPngProcess };
 static void MoonPngProcess(struct Stream* stream, const cc_string* name) {
-	Game_UpdateTexture(&indev_moonTexId, stream, name, NULL, NULL);
+	CelestialPngProcess(&indev_moonTexId, stream, name);
 }
 static struct TextureEntry moon_entry = { "moon.png", MoonPngProcess };
 
@@ -1631,12 +1657,13 @@ static void Indev_BakeStars(void) {
 }
 
 static void Indev_SkyQuad(struct VertexTextured* v, float size, float y,
-						  cc_bool flipUV) {
-	float u0 = flipUV ? 1.0f : 0.0f, u1 = 1.0f - u0;
-	v[0].x = -size; v[0].y = y; v[0].z = -size; v[0].Col = PACKEDCOL_WHITE; v[0].U = u0; v[0].V = u0;
-	v[1].x =  size; v[1].y = y; v[1].z = -size; v[1].Col = PACKEDCOL_WHITE; v[1].U = u1; v[1].V = u0;
-	v[2].x =  size; v[2].y = y; v[2].z =  size; v[2].Col = PACKEDCOL_WHITE; v[2].U = u1; v[2].V = u1;
-	v[3].x = -size; v[3].y = y; v[3].z =  size; v[3].Col = PACKEDCOL_WHITE; v[3].U = u0; v[3].V = u1;
+						  cc_bool flipU) {
+	/* the moon's quad mirrors U only (genuine: u=1 at -x, v=0 at -z) */
+	float u0 = flipU ? 1.0f : 0.0f, u1 = 1.0f - u0;
+	v[0].x = -size; v[0].y = y; v[0].z = -size; v[0].Col = PACKEDCOL_WHITE; v[0].U = u0; v[0].V = 0.0f;
+	v[1].x =  size; v[1].y = y; v[1].z = -size; v[1].Col = PACKEDCOL_WHITE; v[1].U = u1; v[1].V = 0.0f;
+	v[2].x =  size; v[2].y = y; v[2].z =  size; v[2].Col = PACKEDCOL_WHITE; v[2].U = u1; v[2].V = 1.0f;
+	v[3].x = -size; v[3].y = y; v[3].z =  size; v[3].Col = PACKEDCOL_WHITE; v[3].U = u0; v[3].V = 1.0f;
 }
 
 /* World.getStarBrightness: clamp01(1 - (cos(a*2PI)*2 + 12/16)) squared * 0.5 */
