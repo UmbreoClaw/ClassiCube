@@ -1,6 +1,29 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Armor part 2: worn-armor rendering + fuzz-verified math (latest)
+## SESSION LOG - Held pickaxe orientation + held torch fixes (latest)
+
+User reports: the first-person pickaxe looked flipped while mining (the swing
+angle read wrong), and a held torch floated at arm's length.
+
+- **Pickaxe/item sprite orientation** (HeldBlockRenderer.c): the extruded
+  item mesh sampled the sprite u-mirrored + v-flipped "like genuine".
+  Genuine's mirroring is relative to ITS raw camera transform chain; our
+  mesh rides the ENGINE's held-entity transform, whose handedness differs -
+  the correct sampling here is u and v both UNflipped (verified empirically:
+  head-up handle-down idle pose, and the head leads the swing arc into the
+  block crack, matching genuine screenshots).
+- **Held torch** (HeldBlockRenderer.c + IndevTest.c): genuine ItemRenderer
+  holds only renderType 0 blocks as 3D blocks; torches (renderType 2) and
+  flowers/mushrooms/saplings (renderType 1) use the SAME extruded sprite
+  path as items, drawn from their terrain tile. Added the
+  IndevTest_HeldIsExtruded(block) branch to the held renderer (the block
+  model path had drawn the torch at the block-in-hand anchor - the floating
+  look). The terrain-atlas TexRec comes out upside-down relative to
+  items.png rects, so IndevTest_BindHeldTexture swaps v for block tiles.
+- Both verified on the rig with an injected pickaxe/torch save: idle pose,
+  mid-swing arc, and the torch flame-up in the fist.
+
+## SESSION LOG - Armor part 2: worn-armor rendering + fuzz-verified math
 
 ### Damage/wear calcs FORMALLY VERIFIED (user asked for this explicitly)
 scratchpad/ArmorFuzz.java pits a verbatim port of the genuine decompiled

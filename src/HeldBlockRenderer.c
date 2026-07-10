@@ -64,8 +64,11 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	struct Matrix m, r;
 	float x, u, y, vv, eu, ev;
 	int i;
-	/* mirrored like genuine: model x=0 samples u2, x=1 samples u1 */
-	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
+	/* NOTE: genuine mirrors u (x=0 samples the sprite's right edge), but our
+	    mesh rides the engine's held-entity transform whose handedness differs
+	    from genuine's raw camera chain - matching genuine's ON-SCREEN result
+	    (head up, blade toward the screen centre) needs u unmirrored here. */
+	float u1 = rec.u1, u2 = rec.u2, v1 = rec.v1, v2 = rec.v2;
 
 	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
 	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
@@ -182,6 +185,14 @@ static void HeldBlockRenderer_RenderModel(void) {
 			Model_RenderArm(model, &held_entity);
 			Gfx_SetAlphaTest(false);
 		}
+	}
+	else if (IndevTest_HeldIsExtruded(held_block)) {
+		/* genuine ItemRenderer: only renderType 0 blocks are held as 3D
+		    blocks - torches/flowers/mushrooms/saplings render as the same
+		    extruded terrain-tile sprite items use, IN the hand (the block
+		    model path drew the torch at arm's length, visibly floating) */
+		HeldItem_Render(held_block);
+		Gfx_SetAlphaTest(false);
 	}
 	else {
 		model = Models.Block;

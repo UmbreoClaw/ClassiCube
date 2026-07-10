@@ -794,6 +794,11 @@ cc_bool IndevTest_BindHeldTexture(int id, TextureRec* rec) {
 	loc  = Block_Tex((BlockID)id, FACE_XMIN);
 	*rec = Atlas1D_TexRec(loc, 1, &texIndex);
 	Atlas1D_Bind(texIndex);
+	{
+		/* the extruded mesh expects items.png-style v ordering (v1 = sprite
+		    top); the terrain atlas rec comes out the other way up */
+		float t = rec->v1; rec->v1 = rec->v2; rec->v2 = t;
+	}
 	return true;
 }
 
