@@ -52,6 +52,17 @@ items rendered left-right mirrored ("items in hand are mirrored lol").
 - Full first-person orientation lineage for future reference:
   engine yaw -50 (not +50)  +  UNMIRRORED u  +  flipped v. If the yaw
   workaround is ever revisited, the u mirror flips with it.
+- ROUND 2 (user: "still both broken... missing pixels"): the u unflip
+  fixed the front/back faces but the per-pixel EDGE extrusion strips
+  kept genuine's -eu half-texel nudge, which belongs to the old
+  DECREASING u mapping - with the mapping now increasing, -eu sampled
+  the NEIGHBOURING texel column, so outline columns hit transparent
+  texels and alpha-tested away (the missing pixels; the held torch even
+  showed a detached second stick from the offset strips). X strips now
+  use +eu; the v mapping still decreases so Y strips keep -ev.
+  Rig-verified zoomed: axe head solid with clean outline, torch a
+  single stick. LESSON: the u1/u2 plane mapping and the strip
+  half-texel nudges are one coupled system - flip them together.
 
 ### Rig verification summary
 - House torches wall-mounted on both side walls, leaning correctly.

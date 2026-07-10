@@ -91,15 +91,21 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	HI_V(0,0,0, u1,v1) HI_V(1,0,0, u2,v1) HI_V(1,1,0, u2,v2) HI_V(0,1,0, u1,v2)
 	HI_V(0,1,-1.0f/16, u1,v2) HI_V(1,1,-1.0f/16, u2,v2) HI_V(1,0,-1.0f/16, u2,v1) HI_V(0,0,-1.0f/16, u1,v1)
 
+	/* Each 1px edge strip must sample the CENTER of its own texel column.
+	    The u mapping now INCREASES with x (the mirror was dropped, see
+	    above), so the half-texel nudge is +eu - keeping genuine's -eu
+	    with the flipped mapping sampled the NEIGHBOURING column, alpha-
+	    testing away the sprite's outline ("missing pixels" report). The
+	    v mapping still decreases with y, so those strips keep -ev. */
 	for (i = 0; i < 16; i++) {
 		x = i / 16.0f;
-		u = u1 + (u2 - u1) * x - eu;
+		u = u1 + (u2 - u1) * x + eu;
 		/* -X edge strips */
 		HI_V(x,0,-1.0f/16, u,v1) HI_V(x,0,0, u,v1) HI_V(x,1,0, u,v2) HI_V(x,1,-1.0f/16, u,v2)
 	}
 	for (i = 0; i < 16; i++) {
 		x = i / 16.0f + 1.0f/16.0f;
-		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) - eu;
+		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) + eu;
 		/* +X edge strips */
 		HI_V(x,1,-1.0f/16, u,v2) HI_V(x,1,0, u,v2) HI_V(x,0,0, u,v1) HI_V(x,0,-1.0f/16, u,v1)
 	}
