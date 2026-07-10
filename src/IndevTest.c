@@ -154,6 +154,46 @@ static const struct IndevItemDef indevItems[] = {
 	{ 65, ITEM_KIND_MATERIAL, 0,  26, "Painting" },
 };
 
+/* Item display name for chat feedback (NULL when the id isn't a known item). */
+const char* IndevTest_ItemName(int id) {
+	int i, local = id - 256;
+	if (local < 0 || !IndevTest_Enabled) return NULL;
+	for (i = 0; i < (int)Array_Elems(indevItems); i++) {
+		if (indevItems[i].id == local) return indevItems[i].name;
+	}
+	return NULL;
+}
+
+/* Caseless compare of an item's display name against a query, with spaces */
+/*  and underscores skipped on both sides - so "Iron Pickaxe" matches */
+/*  "iron_pickaxe", "ironpickaxe" and "iron pickaxe" alike. */
+static cc_bool Indev_ItemNameMatches(const char* name, const cc_string* query) {
+	int i = 0, j = 0;
+	char a, b;
+	for (;;) {
+		while (name[i] == ' ') i++;
+		while (j < query->length && (query->buffer[j] == ' ' || query->buffer[j] == '_')) j++;
+		a = name[i]; b = j < query->length ? query->buffer[j] : '\0';
+		if (!a || !b) return !a && !b;
+		if (a >= 'A' && a <= 'Z') a += 32;
+		if (b >= 'A' && b <= 'Z') b += 32;
+		if (a != b) return false;
+		i++; j++;
+	}
+}
+
+/* Finds an item by display name (see the matcher above for the accepted */
+/*  spellings). Returns the full 256+ id, or -1 when nothing matches or */
+/*  Indev mode is off (items don't exist in plain c0.30). */
+int IndevTest_FindItemByName(const cc_string* name) {
+	int i;
+	if (!IndevTest_Enabled) return -1;
+	for (i = 0; i < (int)Array_Elems(indevItems); i++) {
+		if (Indev_ItemNameMatches(indevItems[i].name, name)) return 256 + indevItems[i].id;
+	}
+	return -1;
+}
+
 /* items.png is a 16x16 grid of 16px sprites (icons 128+ live on row 8+). */
 /* Returns false when the id isn't a known item (or is a block id). */
 cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2) {

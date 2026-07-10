@@ -30,6 +30,7 @@
 #include "Gui.h"
 #include "Picking.h"
 #include "Particle.h"
+#include "Commands.h"
 
 /* Classic 0.30 Survival Test gamemode implementation.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
@@ -88,14 +89,10 @@ static int   st_hurtTicks;
 /*  yaw at the moment of the hit, baked in (not recomputed while it decays). */
 static float st_hurtDir;
 
-/* Debug/testing toggles, driven by the F9 SurvivalDebugScreen - NOT part of */
+/* Debug/testing toggle, driven by the /client god command - NOT part of */
 /*  genuine c0.30-s parity (see the Debug/testing tools section at the bottom). */
-/*  st_godMode blocks ALL player damage; st_debugNoAI and st_debugForceArmor */
-/*  affect only mobs subsequently spawned via the debug menu, never natural */
-/*  spawns. All default false (zero-init), so they're inert unless toggled on. */
+/*  Blocks ALL player damage; defaults false (zero-init) so it's inert. */
 static cc_bool st_godMode;
-static cc_bool st_debugNoAI;
-static cc_bool st_debugForceArmor;
 
 /* Slot-based inventory: slots 0..8 are the hotbar, 9..35 are storage. */
 /* ItemStack groundwork for the Indev layer: `id` spans BLOCKS (0..255) and, */
@@ -155,6 +152,9 @@ static RNGState st_mobRng;
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static cc_bool SurvivalTest_AddItem(cc_uint16 id);
 #define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
+/* /client debug commands (bottom of file) - registered while survival is on. */
+static void SurvivalTest_RegisterCommands(void);
+static void SurvivalTest_UnregisterCommands(void);
 /* Paintings (defined later, used by render/attack/arrow code above them) */
 static void SurvivalTest_RenderPaintings(void);
 static void SurvivalTest_TickPaintings(void);
@@ -3639,7 +3639,10 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	/*  field initialisers - only zombies/skeletons extend HumanoidMob, so every */
 	/*  other type is faithfully left with neither (pigs/sheep/creepers/spiders */
 	/*  have no arms/head shaped to wear plate on in the original anyway). */
-	if (type == MOB_TYPE_ZOMBIE || type == MOB_TYPE_SKELETON) {
+	/*  c0.30-ONLY: in-20100223's EntityZombie/EntitySkeleton have no such */
+	/*  fields and RenderLiving has no plate pass, so Indev natural spawns */
+	/*  are never armored (MobSpawner.java assigns nothing either). */
+	if (!IndevTest_Enabled && (type == MOB_TYPE_ZOMBIE || type == MOB_TYPE_SKELETON)) {
 		m->hasHelmet = Random_Float(&st_mobRng) < 0.2f;
 		m->hasArmor  = Random_Float(&st_mobRng) < 0.2f;
 	}
@@ -6150,6 +6153,7 @@ static void SurvivalTest_Init(void) {
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	TextureEntry_Register(&arrows_entry);
 	TextureEntry_Register(&cracks_entry);
+	SurvivalTest_RegisterCommands();
 }
 
 static void SurvivalTest_Free(void) {
@@ -6165,6 +6169,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 	Gfx_DeleteDynamicVb(&st_fireVB);
 	Gfx_DeleteDynamicVb(&st_paintingVB);
+	SurvivalTest_UnregisterCommands();
 }
 
 static void SurvivalTest_OnNewMap(void) {
@@ -6216,7 +6221,7 @@ static cc_bool SurvivalTest_DebugFrontPos(float dist, Vec3* pos) {
 	return true;
 }
 
-void SurvivalTest_DebugSpawnMob(int type) {
+void SurvivalTest_DebugSpawnMob(int type, cc_bool noAI, cc_bool forceArmor) {
 	struct Mob* m;
 	Vec3 pos;
 	if (!SurvivalTest_Enabled) return;
@@ -6226,9 +6231,9 @@ void SurvivalTest_DebugSpawnMob(int type) {
 	m = SurvivalTest_SpawnMobAt((cc_uint8)type, pos);
 	if (!m) return;
 
-	/* Apply the persistent debug spawn toggles (F9 menu) to this one mob. */
-	if (st_debugNoAI) m->noAI = true;
-	if (st_debugForceArmor && (m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON)) {
+	/* Per-spawn modifiers from the /client spawn command args. */
+	if (noAI) m->noAI = true;
+	if (forceArmor && (m->type == MOB_TYPE_ZOMBIE || m->type == MOB_TYPE_SKELETON)) {
 		m->hasHelmet = true;
 		m->hasArmor  = true;
 	}
@@ -6274,12 +6279,8 @@ void SurvivalTest_DebugShootArrow(void) {
 							ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
 }
 
-cc_bool SurvivalTest_DebugGodMode(void)     { return st_godMode; }
-cc_bool SurvivalTest_DebugNoAI(void)        { return st_debugNoAI; }
-cc_bool SurvivalTest_DebugForceArmor(void)  { return st_debugForceArmor; }
-void SurvivalTest_DebugToggleGodMode(void)    { st_godMode          = !st_godMode; }
-void SurvivalTest_DebugToggleNoAI(void)       { st_debugNoAI        = !st_debugNoAI; }
-void SurvivalTest_DebugToggleForceArmor(void) { st_debugForceArmor  = !st_debugForceArmor; }
+cc_bool SurvivalTest_DebugGodMode(void)    { return st_godMode; }
+void SurvivalTest_DebugToggleGodMode(void) { st_godMode = !st_godMode; }
 
 /* Prints the live mob population against the world-size-scaled caps, so the */
 /*  spawn scaling (SurvivalGameMode.spawnMobs' area formulas) can be watched */
@@ -6314,6 +6315,267 @@ void SurvivalTest_DebugSetArrows(int count) {
 	if (count < 0) count = 0;
 	if (count > ARROW_PLAYER_MAX) count = ARROW_PLAYER_MAX;
 	st_playerArrows = count;
+}
+
+
+/*########################################################################################################################*
+*------------------------------------------------/client debug commands-------------------------------------------------*
+*#########################################################################################################################*/
+/* The chat-command interface to the debug tools above (replaced the old F9 */
+/*  button menu, which had outgrown its grid). Registered only while survival */
+/*  mode is on, so they never appear in /client help for normal ClassiCube. */
+
+/* Must match the SurvivalDebugMobType enum order (SurvivalTest.h). */
+static const char* const debugMobNames[SURVIVAL_DEBUG_MOB_COUNT] = {
+	"zombie", "skeleton", "pig", "creeper", "spider", "sheep"
+};
+
+static void SpawnCommand_Execute(const cc_string* args, int argsCount) {
+	cc_bool noAI = false, armor = false;
+	int type = -1, count = 1, i, n;
+
+	if (!argsCount) {
+		Chat_AddRaw("&e/client spawn: &cno entity given - see /client help spawn");
+		return;
+	}
+	/* the non-mob spawners take no modifiers */
+	if (String_CaselessEqualsConst(&args[0], "tnt"))   { SurvivalTest_DebugSpawnTnt();   return; }
+	if (String_CaselessEqualsConst(&args[0], "drops")) { SurvivalTest_DebugSpawnDrops(); return; }
+	if (String_CaselessEqualsConst(&args[0], "arrow")) { SurvivalTest_DebugShootArrow(); return; }
+
+	for (i = 0; i < SURVIVAL_DEBUG_MOB_COUNT; i++) {
+		if (String_CaselessEqualsConst(&args[0], debugMobNames[i])) type = i;
+	}
+	if (type == -1) {
+		Chat_Add1("&e/client spawn: &cunknown entity \"%s\"", &args[0]);
+		return;
+	}
+
+	for (i = 1; i < argsCount; i++) {
+		if (String_CaselessEqualsConst(&args[i], "noai")) {
+			noAI = true;
+		} else if (String_CaselessEqualsConst(&args[i], "armor")) {
+			armor = true;
+		} else if (Convert_ParseInt(&args[i], &n) && n > 0) {
+			count = n > 10 ? 10 : n;
+		} else {
+			Chat_Add1("&e/client spawn: &cunknown modifier \"%s\" (noai/armor/count)", &args[i]);
+			return;
+		}
+	}
+	while (count-- > 0) SurvivalTest_DebugSpawnMob(type, noAI, armor);
+}
+
+static struct ChatCommand SpawnCommand = {
+	"Spawn", SpawnCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client spawn [entity] [count] [noai] [armor]",
+		"&eSpawns entities in front of you. Entities: zombie, skeleton,",
+		"&e  spider, creeper, pig, sheep, tnt, drops, arrow.",
+		"&enoai &f- mob stands still. &earmor &f- zombie/skeleton wears plate.",
+	}
+};
+
+static void GiveCommand_Execute(const cc_string* args, int argsCount) {
+	cc_string name; char nameBuffer[STRING_SIZE];
+	cc_string display;
+	const char* itemName;
+	int id, count = 1, given = 0, i;
+
+	if (!argsCount) {
+		Chat_AddRaw("&e/client give: &cno item given - see /client help give");
+		return;
+	}
+	/* a trailing integer is the count: "give iron pickaxe 5" */
+	if (argsCount > 1 && Convert_ParseInt(&args[argsCount - 1], &i)) {
+		count = i < 1 ? 1 : (i > 99 ? 99 : i);
+		argsCount--;
+	}
+	/* remaining args joined = the (possibly multi-word) item/block name */
+	String_InitArray(name, nameBuffer);
+	for (i = 0; i < argsCount; i++) {
+		if (i) String_Append(&name, ' ');
+		String_AppendString(&name, &args[i]);
+	}
+
+	if (Convert_ParseInt(&name, &id)) {
+		/* raw numeric id - blocks below 256, Indev items at 256+ */
+		if (id >= 256 ? !IndevTest_ItemName(id) : (id <= 0 || id > 255)) {
+			Chat_Add1("&e/client give: &cunknown id \"%s\"", &name);
+			return;
+		}
+	} else {
+		id = IndevTest_FindItemByName(&name);
+		if (id == -1) id = Block_Parse(&name);
+		if (id == -1) {
+			Chat_Add1("&e/client give: &cunknown item/block \"%s\"", &name);
+			return;
+		}
+	}
+
+	while (given < count && SurvivalTest_AddItem((cc_uint16)id)) given++;
+
+	itemName = IndevTest_ItemName(id);
+	display  = itemName ? String_FromReadonly(itemName) : Block_UNSAFE_GetName((BlockID)id);
+	Chat_Add2("&eGave &f%i&e x &f%s", &given, &display);
+	if (given < count) Chat_AddRaw("&e/client give: &cinventory full");
+}
+
+static struct ChatCommand GiveCommand = {
+	"Give", GiveCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client give [item] [count]",
+		"&eAdds items/blocks to your inventory, by name or numeric id.",
+		"&ee.g. &fgive iron pickaxe&e, &fgive painting&e, &fgive planks 32",
+	}
+};
+
+static void TimeCommand_Execute(const cc_string* args, int argsCount) {
+	int t;
+	if (!IndevTest_Enabled) {
+		Chat_AddRaw("&e/client time: &conly Indev worlds have a day/night cycle");
+		return;
+	}
+	if (!argsCount) {
+		t = IndevTest_WorldTime();
+		Chat_Add1("&eTime: &f%i&e/24000", &t);
+		return;
+	}
+	/* worldTime presets: celestial angle = t/24000 - 0.15, so noon (angle 0) */
+	/*  is t=3600; midnight t=15600; dawn/dusk are the half-lit cosine zeroes. */
+	if      (String_CaselessEqualsConst(&args[0], "dawn"))     { t = 21600; }
+	else if (String_CaselessEqualsConst(&args[0], "noon"))     { t =  3600; }
+	else if (String_CaselessEqualsConst(&args[0], "dusk"))     { t =  9600; }
+	else if (String_CaselessEqualsConst(&args[0], "midnight")) { t = 15600; }
+	else if (!Convert_ParseInt(&args[0], &t) || t < 0 || t > 23999) {
+		Chat_AddRaw("&e/client time: &cexpected dawn/noon/dusk/midnight or 0-23999");
+		return;
+	}
+	IndevTest_SetWorldTime(t);
+}
+
+static struct ChatCommand TimeCommand = {
+	"Time", TimeCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client time [dawn/noon/dusk/midnight/ticks]",
+		"&eSets the Indev world time (0-23999). No arg shows the time.",
+	}
+};
+
+static void GodCommand_Execute(const cc_string* args, int argsCount) {
+	SurvivalTest_DebugToggleGodMode();
+	Chat_AddRaw(SurvivalTest_DebugGodMode() ? "&eGod mode: &aON" : "&eGod mode: &cOFF");
+}
+
+static struct ChatCommand GodCommand = {
+	"God", GodCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client god",
+		"&eToggles invincibility (blocks all player damage).",
+	}
+};
+
+static void HealCommand_Execute(const cc_string* args, int argsCount) {
+	int n = SURVIVAL_MAX_HEALTH;
+	if (argsCount && (!Convert_ParseInt(&args[0], &n) || n <= 0)) {
+		Chat_AddRaw("&e/client heal: &cexpected a positive number");
+		return;
+	}
+	SurvivalTest_Heal(n);
+}
+
+static struct ChatCommand HealCommand = {
+	"Heal", HealCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client heal [amount]",
+		"&eRestores health (full heal when no amount is given).",
+	}
+};
+
+static void HurtCommand_Execute(const cc_string* args, int argsCount) {
+	int n = 5;
+	if (argsCount && (!Convert_ParseInt(&args[0], &n) || n <= 0)) {
+		Chat_AddRaw("&e/client hurt: &cexpected a positive number");
+		return;
+	}
+	SurvivalTest_Hurt(n);
+}
+
+static struct ChatCommand HurtCommand = {
+	"Hurt", HurtCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client hurt [amount]",
+		"&eDamages you (5 when no amount is given), for testing armor etc.",
+	}
+};
+
+static void ArrowsCommand_Execute(const cc_string* args, int argsCount) {
+	int n = 99;
+	if (IndevTest_Enabled) {
+		Chat_AddRaw("&e/client arrows: &cIndev arrows are items - use /client give arrow [n]");
+		return;
+	}
+	if (argsCount && !Convert_ParseInt(&args[0], &n)) {
+		Chat_AddRaw("&e/client arrows: &cexpected a number");
+		return;
+	}
+	SurvivalTest_DebugSetArrows(n);
+}
+
+static struct ChatCommand ArrowsCommand = {
+	"Arrows", ArrowsCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client arrows [count]",
+		"&eSets your c0.30 quiver count (99 when no count is given).",
+	}
+};
+
+static void MobsCommand_Execute(const cc_string* args, int argsCount) {
+	if (argsCount && String_CaselessEqualsConst(&args[0], "kill")) {
+		SurvivalTest_DebugKillAllMobs();
+		Chat_AddRaw("&eKilled all mobs");
+		return;
+	}
+	SurvivalTest_DebugMobCensus();
+}
+
+static struct ChatCommand MobsCommand = {
+	"Mobs", MobsCommand_Execute,
+	COMMAND_FLAG_SINGLEPLAYER_ONLY,
+	{
+		"&a/client mobs [kill]",
+		"&eNo arg: prints the mob census (alive/cap/spawn roll).",
+		"&ekill &f- instantly kills every mob in the world.",
+	}
+};
+
+static void SurvivalTest_RegisterCommands(void) {
+	Commands_Register(&SpawnCommand);
+	Commands_Register(&GiveCommand);
+	Commands_Register(&TimeCommand);
+	Commands_Register(&GodCommand);
+	Commands_Register(&HealCommand);
+	Commands_Register(&HurtCommand);
+	Commands_Register(&ArrowsCommand);
+	Commands_Register(&MobsCommand);
+}
+
+static void SurvivalTest_UnregisterCommands(void) {
+	Commands_Unregister(&SpawnCommand);
+	Commands_Unregister(&GiveCommand);
+	Commands_Unregister(&TimeCommand);
+	Commands_Unregister(&GodCommand);
+	Commands_Unregister(&HealCommand);
+	Commands_Unregister(&HurtCommand);
+	Commands_Unregister(&ArrowsCommand);
+	Commands_Unregister(&MobsCommand);
 }
 
 

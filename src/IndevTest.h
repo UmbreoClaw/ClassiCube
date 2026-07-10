@@ -40,6 +40,11 @@ cc_bool IndevTest_IsWorkbench(BlockID b);
 /* Atlas UVs of an item id's sprite (items.png, 16x16 grid). False when the */
 /*  id isn't a known Indev item - callers skip drawing then. */
 cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2);
+/* Item display name (NULL for unknown ids), and name -> 256+ id lookup */
+/*  ("iron_pickaxe"/"Iron Pickaxe"/"ironpickaxe" all match; -1 = no match). */
+/*  Both are debug/chat helpers for the /client give command. */
+const char* IndevTest_ItemName(int id);
+int IndevTest_FindItemByName(const cc_string* name);
 /* Heal amount when id is an edible Indev item (apple/soup/bread/porkchops), */
 /*  else 0. Always 0 while Indev mode is off. */
 int IndevTest_ItemFoodHeal(int id);

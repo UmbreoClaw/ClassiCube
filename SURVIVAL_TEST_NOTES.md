@@ -1,6 +1,67 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Paintings (EntityPainting port) (latest)
+## SESSION LOG - Debug menu -> /client commands + swing revert (latest)
+
+User: revamp the F9 debug menu (buttons outgrew the grid) into client chat
+commands, delete the GUI entirely, make noai/armor per-spawn modifiers of
+the spawn command, and check how Indev handles mob armor at spawn. ALSO:
+the Indev mining swing animation read as broken in play - revert to the
+original (pre-"genuine chop") animation.
+
+### Swing animation revert (HeldBlockRenderer.c)
+- The genuine-Indev X-chop dig branch (RotY -20 / RotZ -20 / RotX -80,
+  ported from ItemRenderer's glRotatef chain) is GONE - user verdict after
+  playing with it: "fucked mining up massively". Every mode now uses the
+  original engine swing again (RotY/Yaw -= sin(sqrtLerpPI)*80, RotX +=
+  sin(t*t*pi)*20), i.e. the exact pre-session code.
+- KEPT: the held sprite-plane yaw (-50) fix and the extruded-item UV
+  mapping - those addressed the static "face toward player" orientation
+  complaint, not the swing. If the hand still reads wrong, that yaw
+  constant in HeldBlockRenderer_RenderModel is the next knob.
+- Lesson: on-paper genuine (transcribed glRotatef axes) lost to how it
+  actually FEELS in this engine's held-item transform space; the engine
+  applies its own base transforms, so genuine local axes don't land the
+  same. Faithfulness calls here go to the user's hands-on verdict.
+
+### Indev mob-armor parity fix (found per user's hunch)
+- Genuine check: in-20100223 EntityZombie/EntitySkeleton have NO
+  helmet/armor fields, MobSpawner.java assigns nothing, and the only
+  armor rendering in the whole client is RenderPlayer (RenderLiving has
+  no plate pass). Armored zombies/skeletons are a c0.30 Survival Test
+  thing (HumanoidMob's 20% field-initialiser rolls).
+- SurvivalTest_SpawnMobAt was rolling those 20% chances in BOTH modes ->
+  natural Indev spawns could wear plate. Now gated !IndevTest_Enabled.
+- The /client spawn "armor" modifier still force-equips them in either
+  mode (debug-only visual, never natural).
+
+### F9 menu -> /client commands
+- Menus.c's whole SurvivalDebugScreen section (2 pages x 18 buttons),
+  its Menus.h decl and the F9 InputHandler hook are DELETED. F9 is free.
+- New command section at the bottom of SurvivalTest.c (registered in
+  SurvivalTest_Init only while survival mode is on - normal ClassiCube's
+  /client help never sees them; unregistered in Free):
+  - /client spawn <zombie|skeleton|spider|creeper|pig|sheep|tnt|drops|
+    arrow> [count<=10] [noai] [armor] - modifiers in any order
+  - /client give <name|id> [count<=99] - names via the Indev item table
+    (spaces/underscores/case all ignored: "iron_pickaxe"/"Iron Pickaxe"/
+    "ironpickaxe"), then Block_Parse fallback; raw ids too (256+ ids
+    require Indev + a known item). Reports "inventory full" on overflow.
+  - /client time [dawn|noon|dusk|midnight|0-23999] - Indev only; no arg
+    prints the current time
+  - /client god (toggle, prints state) / heal [n] / hurt [n]
+  - /client arrows [n] - c0.30 quiver only; Indev points at give arrow
+  - /client mobs [kill] - census (alive/cap/roll) or kill-all
+- IndevTest gained the name helpers: IndevTest_ItemName(id) and
+  IndevTest_FindItemByName (both NULL/-1 outside Indev, which auto-gates
+  giving items in classic mode).
+- SurvivalTest_DebugSpawnMob signature: (type) -> (type, noAI, forceArmor);
+  the global st_debugNoAI/st_debugForceArmor toggles are gone (they were
+  only ever F9-menu state). God mode stays a toggle.
+- Menus.c gotcha: the file is CRLF in most sections but the include block
+  is LF - and IndevTest.h is still needed there (IndevGenScreen uses
+  IndevTest_Enabled at ~1392), only the GUI section was deletable.
+
+## SESSION LOG - Paintings (EntityPainting port)
 
 User: "work on paintings next, try to remember box bounds and such as well
 as like with farmland" - i.e. the bounding-box math must be EXACT (the

@@ -276,8 +276,9 @@ enum SurvivalDebugMobType {
 
 /* Spawns a mob of the given SurvivalDebugMobType a few blocks in front of the player, */
 /*  along their current look direction. No-op if survival is disabled or the mob slot */
-/*  table (SurvivalTest_RenderMobs et al) is full. */
-void SurvivalTest_DebugSpawnMob(int type);
+/*  table (SurvivalTest_RenderMobs et al) is full. noAI freezes the mob in place; */
+/*  forceArmor puts plate + helmet on zombies/skeletons (both /client spawn modifiers). */
+void SurvivalTest_DebugSpawnMob(int type, cc_bool noAI, cc_bool forceArmor);
 /* Instantly kills every currently active mob in the world (no death-score credit, */
 /*  matching a debug/console kill rather than a real player kill). No-op when survival */
 /*  mode is disabled. */
@@ -297,16 +298,10 @@ void SurvivalTest_DebugSpawnTnt(void);
 /*  the count, so it can be spammed while testing. No-op when survival is disabled. */
 void SurvivalTest_DebugShootArrow(void);
 
-/* Debug spawn-affecting toggles + invincibility. The Toggle* fns flip the flag; the */
-/*  plain getters report current state (used to label the F9 menu buttons). God mode */
-/*  blocks all player damage; NoAI/ForceArmor only affect mobs spawned via the debug */
-/*  menu afterwards (never natural spawns). All no-op/false when survival is disabled. */
+/* Debug invincibility (blocks all player damage) - flipped by /client god, */
+/*  which reports the new state from the getter. No-op when survival is off. */
 cc_bool SurvivalTest_DebugGodMode(void);
-cc_bool SurvivalTest_DebugNoAI(void);
-cc_bool SurvivalTest_DebugForceArmor(void);
 void SurvivalTest_DebugToggleGodMode(void);
-void SurvivalTest_DebugToggleNoAI(void);
-void SurvivalTest_DebugToggleForceArmor(void);
 
 CC_END_HEADER
 #endif
