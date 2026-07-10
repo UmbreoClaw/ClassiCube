@@ -332,6 +332,7 @@ cc_bool IndevTest_CanHarvest(int heldId, BlockID block) {
 	level = d->param;
 	switch (block) {
 	case BLOCK_OBSIDIAN:                return level == 3;
+	case 93 /* DIAMOND_ORE (defined below) */: return level >= 2; /* genuine oreDiamond */
 	case BLOCK_GOLD_ORE: case BLOCK_GOLD: return level >= 2;
 	case BLOCK_IRON_ORE: case BLOCK_IRON: return level > 0;
 	default:                            return true;

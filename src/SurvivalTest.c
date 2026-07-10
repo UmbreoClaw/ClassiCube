@@ -658,6 +658,8 @@ static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	case BLOCK_STONE:   dropId = BLOCK_COBBLE; break;      /* BlockStone -> cobblestone */
 	case BLOCK_LOG:     dropId = BLOCK_LOG; break;         /* BlockLog -> the log itself */
 	case BLOCK_COAL_ORE: dropId = 256 + 7; break;          /* -> coal ITEM */
+	case 93 /* INDEV_BLOCK_DIAMOND_ORE */:
+	                    dropId = 256 + 8; break;           /* -> diamond ITEM */
 	case BLOCK_LEAVES:  dropId = BLOCK_SAPLING;
 	                    count  = Random_Next(&st_dropRng, 10) == 0 ? 1 : 0; break;
 	case BLOCK_GRAVEL:  if (Random_Next(&st_dropRng, 10) == 0) dropId = 256 + 62; /* flint */

@@ -1,6 +1,18 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Paperdoll genuine rewrite + painting wall-break pop (latest)
+## SESSION LOG - Startup Indev world + diamond mining chain (latest)
+
+- **Startup world**: launching in Indev mode now generates a genuine
+  Indev world (IndevGen, Generate-menu defaults Inland/Normal 128x128x64)
+  instead of the classic NotchyGen one - the game boots into the spawn
+  house. Rig-verified.
+- **Diamond chain**: diamond ore (93) now drops the diamond ITEM (256+8,
+  qty 1 - BlockOre.idDropped) and requires an iron-or-better pickaxe
+  (genuine ItemPickaxe.canHarvestBlock: oreDiamond/blockDiamond need
+  harvestLevel >= 2). Diamond tools/sword/armor recipes already existed,
+  so mining a diamond with an iron pick completes the progression loop.
+
+## SESSION LOG - Paperdoll genuine rewrite + painting wall-break pop
 
 User: paperdoll placement/armor "a little misdone" - head should track,
 body lightly track while staying front-facing with a tilt, legs looked
