@@ -169,6 +169,9 @@ void IndevTest_TickRandomBlocks(void);
     what it lands on (fire crackle + largesmoke, torch/furnace smoke and
     flame flecks). Client ambience - separate RNG, no world-state effect. */
 void IndevTest_RandomDisplayTicks(void);
+/* Block.canPlaceBlockAt for the Indev additions (currently the chest's
+    no-triples rule) - true if placing block b at pos is legal. */
+cc_bool IndevTest_CanPlaceBlockAt(BlockID b, IVec3 pos);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);

@@ -27,6 +27,7 @@
 #include "Picking.h"
 #include "SurvivalTest.h"
 #include "IndevFire.h"
+#include "IndevTest.h"
 
 static cc_bool input_buttonsDown[3];
 static int input_pickingId = -1;
@@ -461,6 +462,8 @@ static void InputHandler_PlaceBlock(void) {
 
 	/* In survival, can only place blocks the player actually has */
 	if (!SurvivalTest_CanPlace(block)) return;
+	/* Block.canPlaceBlockAt (Indev): chests refuse triple/L arrangements */
+	if (!IndevTest_CanPlaceBlockAt(block, pos)) return;
 
 	if (!CheckIsFree(block)) return;
 

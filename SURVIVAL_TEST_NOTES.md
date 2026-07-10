@@ -4445,6 +4445,80 @@ constants transcribed verbatim; user to verify crackle/fizz/ignite by ear.
 
 ---
 
+## SESSION LOG — sky blend fix + polish batch (equip-dip, splashes, chest rules)
+
+### Sun/moon invisible on the user's machine - SOLVED, was never Direct3D
+User confirmed: stars render, sun/moon don't, textures present in their
+CUSTOM texture pack. That isolated it to the textured draws - and the
+genuine source held the answer: renderSky draws sun/moon with
+glBlendFunc(GL_ONE, GL_ONE) (alpha IGNORED), while our port used the
+engine's Gfx_SetAlphaBlendingAdditive = (SRC_ALPHA, ONE) on every
+backend. A pack whose sun.png has a real alpha channel gets multiplied
+into invisibility; the stock beta-jar textures are alpha-255 everywhere,
+which is why the rig (default pack) always showed it. Stars were immune
+(drawn with vertex alpha 255). Fix: force alpha 255 on the sun/moon
+bitmaps at texture load (CelestialPngProcess), making the two formulas
+identical for these textures on any backend/pack - keeps the engine's
+additive blend untouched for its other users (TNT flash, fire overlay).
+Also fixed the moon quad UVs: genuine mirrors U ONLY (u=1 at -x, v=0 at
+-z); we flipped both, so the moon was vertically mirrored. (02d09cb)
+
+### Polish batch (user-ordered phase 3)
+- **Equip-dip** (ItemRenderer.updateEquippedItem): switching the selected
+  stack dips the held item 0.6 down and back at 0.4/tick; the OLD item
+  keeps rendering until progress < 0.1, then the hand swaps. 20Hz
+  fixed-step accumulator + render interpolation in HeldBlockRenderer;
+  keyed on (hotbar index << 16 | slot id) standing in for genuine's
+  ItemStack identity. Engine's sine switch anim suppressed in Indev
+  (c0.30 keeps it). Rig-verified frame sequence. (64315c4)
+- **Water-entry splash** (Entity.onEntityUpdate): player, mobs and drops
+  splash on the air->water edge - random.splash volume
+  sqrt(vx^2*0.2 + vy^2 + vz^2*0.2)*0.2 (wading whispers, dives are
+  loud), pitch 1 +- 0.4, plus 1+width*20 bubbles AND as many droplets
+  at floor(feet)+1. wasInWater latches per entity, init true = genuine
+  isFirstUpdate suppression. Drop velocities are per-second - scaled
+  /20 for the genuine per-tick volume formula. Rig-verified via gdb
+  pool state after a teleport-drop into a pond. (64315c4)
+- **New particle kinds** (all genuine constants): EntityBubbleFX (texIdx
+  32, rises 0.002/tick, x0.85 damping, dies leaving water),
+  EntitySplashFX (EntityRainFX with 0.04 gravity, texIdx 17, half-dies
+  on landing, dies in liquid/solid), EntityLavaFX (texIdx 49,
+  fullbright, 1-t^2 shrink, smoke trail while rand > age/life, 0.03
+  gravity). (64315c4)
+- **Fluid randomDisplayTick** joins the ambience driver: lava under open
+  air spits an ember 1/100 at y+0.91 (the fluid's real maxY); water at
+  an exposed ledge edge (liquidAirCheck: side not solid/liquid, below-
+  side solid or liquid) throws 4 droplets off each open face at +-2/16
+  outside the block. The liquid.lava/liquid.water sound roll in genuine
+  is DEAD CODE (nextInt(128) == -1 never true) - faithfully omitted.
+- **Chest placement rules** (BlockChest.canPlaceBlockAt): a chest may
+  touch at most one other chest and never one that's already paired -
+  doubles are the cap, triples/L-shapes refuse. Hooked as
+  IndevTest_CanPlaceBlockAt in InputHandler_PlaceBlock. The lid rule
+  now also checks above the OTHER half of a double (genuine
+  blockActivated), and uses isBlockNormalCube (a chest stacked on a
+  chest seals it - genuine, chests are opaque cubes). Rig-verified:
+  third-in-row refused, lid-blocked double won't open.
+- **Third-person held items: faithfully SKIPPED** - in-20100223's
+  RenderPlayer has NO held-item rendering (only armor passes +
+  drawFirstPersonHand); held-on-model arrived in later versions.
+  Implementing it would be a deviation.
+- **Per-play pitch variance: audit says already complete** - engine
+  Sounds_Play randomizes every dig/step play (pitch / (rand*0.2+0.9),
+  volume / (rand*0.4+1), survival-gated) from an earlier session, and
+  every mob/entity call site carries its genuine per-call jitter.
+
+### Known gaps / follow-ups
+- Large chest (task 40): adjacent chests must open as the genuine
+  54-slot InventoryLargeChest (-X/-Z half first). TEs already store
+  27 slots each and genuine pairs only at open time, so .mclevel is
+  unaffected - the work is the 6-row container GUI + slot-space
+  plumbing (19 SURVIVAL_CONTAINER_* uses in Screens.c).
+- random.splash / fire sounds inaudible on the headless rig - user to
+  verify by ear (sounds zip auto-refetches, ~46 KB total).
+
+---
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.

@@ -969,8 +969,42 @@ cc_bool IndevTest_DropIsSprite(int id) {
 	return Blocks.Draw[id] == DRAW_SPRITE || id == INDEV_BLOCK_TORCH;
 }
 
+static cc_bool Indev_NormalCube(int x, int y, int z); /* defined with the torch helpers */
+
+static cc_bool Indev_ChestAt(int x, int y, int z) {
+	if (!World_Contains(x, y, z)) return false;
+	return Indev_IsChestBlock(World_GetBlock(x, y, z));
+}
+
+/* BlockChest.isThereANeighborChest: the cell holds a chest that already
+    touches another chest (i.e. it's half of an existing double). */
+static cc_bool Indev_ChestIsPaired(int x, int y, int z) {
+	if (!Indev_ChestAt(x, y, z)) return false;
+	return Indev_ChestAt(x - 1, y, z) || Indev_ChestAt(x + 1, y, z) ||
+	       Indev_ChestAt(x, y, z - 1) || Indev_ChestAt(x, y, z + 1);
+}
+
+/* BlockChest.canPlaceBlockAt: a chest may touch at most ONE other chest,
+    and never one that is already half of a double - doubles are the limit,
+    triples and L-shapes are refused outright. Everything else places. */
+cc_bool IndevTest_CanPlaceBlockAt(BlockID b, IVec3 pos) {
+	int n = 0;
+	if (!IndevTest_Enabled || !Indev_IsChestBlock(b)) return true;
+
+	if (Indev_ChestAt(pos.x - 1, pos.y, pos.z)) n++;
+	if (Indev_ChestAt(pos.x + 1, pos.y, pos.z)) n++;
+	if (Indev_ChestAt(pos.x, pos.y, pos.z - 1)) n++;
+	if (Indev_ChestAt(pos.x, pos.y, pos.z + 1)) n++;
+	if (n > 1) return false;
+
+	return !Indev_ChestIsPaired(pos.x - 1, pos.y, pos.z) &&
+	       !Indev_ChestIsPaired(pos.x + 1, pos.y, pos.z) &&
+	       !Indev_ChestIsPaired(pos.x, pos.y, pos.z - 1) &&
+	       !Indev_ChestIsPaired(pos.x, pos.y, pos.z + 1);
+}
+
 int IndevTest_OpenContainer(IVec3 pos) {
-	BlockID b, above;
+	BlockID b;
 	int kind, i;
 	if (!IndevTest_Enabled) return INDEV_CONTAINER_NONE;
 
@@ -978,11 +1012,19 @@ int IndevTest_OpenContainer(IVec3 pos) {
 	kind = IndevTest_ContainerKindOf(b);
 	if (!kind) return INDEV_CONTAINER_NONE;
 
-	/* BlockChest.blockActivated: a normal (opaque) cube directly above the */
-	/*  chest keeps it shut. Furnaces have no such rule. */
-	if (kind == INDEV_CONTAINER_CHEST && World_Contains(pos.x, pos.y + 1, pos.z)) {
-		above = World_GetBlock(pos.x, pos.y + 1, pos.z);
-		if (Blocks.Draw[above] == DRAW_OPAQUE) return INDEV_CONTAINER_NONE;
+	/* BlockChest.blockActivated: a normal cube directly above the chest -
+	    or above the OTHER half of a double chest - keeps the lid shut.
+	    Furnaces have no such rule. */
+	if (kind == INDEV_CONTAINER_CHEST) {
+		if (Indev_NormalCube(pos.x, pos.y + 1, pos.z)) return INDEV_CONTAINER_NONE;
+		if (Indev_ChestAt(pos.x - 1, pos.y, pos.z) &&
+			Indev_NormalCube(pos.x - 1, pos.y + 1, pos.z)) return INDEV_CONTAINER_NONE;
+		if (Indev_ChestAt(pos.x + 1, pos.y, pos.z) &&
+			Indev_NormalCube(pos.x + 1, pos.y + 1, pos.z)) return INDEV_CONTAINER_NONE;
+		if (Indev_ChestAt(pos.x, pos.y, pos.z - 1) &&
+			Indev_NormalCube(pos.x, pos.y + 1, pos.z - 1)) return INDEV_CONTAINER_NONE;
+		if (Indev_ChestAt(pos.x, pos.y, pos.z + 1) &&
+			Indev_NormalCube(pos.x, pos.y + 1, pos.z + 1)) return INDEV_CONTAINER_NONE;
 	}
 
 	i = IndevTE_Find(pos);
