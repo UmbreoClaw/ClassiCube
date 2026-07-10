@@ -7,6 +7,8 @@
 #include "Block.h"
 #include "Event.h"
 #include "Http.h"
+#include "IndevGen.h"
+#include "SurvivalTest.h"
 #include "Funcs.h"
 #include "Entity.h"
 #include "Graphics.h"
@@ -146,6 +148,12 @@ static void SPConnection_BeginConnect(void) {
 	gen = &FlatgrassGen;
 #else
 	gen = &NotchyGen;
+	/* Indev mode boots into a genuine Indev world, not a classic one -
+	    same defaults as the Generate-new-level menu (Inland, Normal) */
+	if (SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV) {
+		IndevGen_Setup(0, 0);
+		gen = &IndevGen;
+	}
 #endif
 
 	Random_SeedFromCurrentTime(&rnd);
