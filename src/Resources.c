@@ -566,7 +566,10 @@ static struct SoundAsset {
 	{ "mob_sheep3.wav",   "c9ac72409cbe6093e84d72a2a5c719d9e4a0e6b2" }, { "mob_hurt1.wav",    "9d485556b89bf776042080774679c37300bc744b" },
 	{ "mob_bow1.wav",     "87edc11141fb5a045f2ed830b545aaa73f96ee99" }, { "mob_fuse1.wav",    "a92ba2b8f6abc41aa8d679ad808a81d0aafa04b2" },
 	{ "mob_drr1.wav",     "40a5a4307c1a2a5a1b9f71254275689845374104" }, { "mob_pop1.wav",     "8f45b5faf6dfae2065846d26612f7552b73640dd" },
-	{ "mob_explode1.wav", "9e22b5aeec31de99410b682cc161a6096a1cd00a" }, { "mob_fizz1.wav",    "c649e60ea9a99c97501a50d2dc4e579343e91ea8" }
+	{ "mob_explode1.wav", "9e22b5aeec31de99410b682cc161a6096a1cd00a" }, { "mob_fizz1.wav",    "c649e60ea9a99c97501a50d2dc4e579343e91ea8" },
+	/* fire.fire ambient crackle + fire.ignite (flint & steel), from the same
+	    era's newsound/fire/ - BlockFire.randomDisplayTick / ItemFlintAndSteel */
+	{ "mob_fire1.wav",    "8b260108a73470c16cd244325242d4780cfb7d78" }, { "mob_ignite1.wav",  "19c729c3ceb753a824246b494bce5fa5c802f0f0" }
 };
 static cc_bool allSoundsExist;
 
@@ -620,7 +623,7 @@ static void SoundAssets_CountMissing(void) {
 	if (allSoundsExist) return;
 
 	Resources_MissingCount += Array_Elems(soundAssets);
-	Resources_MissingSize  += 571; /* 417 dig/step + ~154 mob/entity oggs */
+	Resources_MissingSize  += 606; /* 417 dig/step + ~189 mob/entity/fire oggs */
 }
 
 

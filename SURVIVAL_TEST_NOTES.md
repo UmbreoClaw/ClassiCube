@@ -4352,6 +4352,99 @@ Item (entity), Breaking, Damage, Pig, Skeleton, Indev 0.31; decompiled `Item.jav
 
 ---
 
+## SESSION LOG — doll armor culling fix + fire interaction batch
+
+### Paperdoll armor partially invisible — face culling, FIXED (2b4122a)
+Armor pieces rendered broken ONLY on the GUI paperdoll (helmet rim only,
+torso missing, one leg bare) while the identical armor drew perfectly in
+the world view (proved by gdb-equipping a diamond set and comparing views).
+Root cause: the doll pass enabled `Gfx_SetFaceCulling(true)`, but ClassiCube
+draws entity models with culling OFF everywhere (Model.c only enables it
+for sprite billboards), so model box geometry carries NO winding guarantee —
+mirrored parts built from corner-swapped bounds (armor limbs, the skin's
+left leg) wind backwards and culling silently eats their faces. Fix: leave
+culling off for the doll like every other model draw. Rig-verified: full
+diamond set renders on the doll.
+- Lesson recorded: any state the engine never exercises against model
+  geometry (winding, two-sidedness) must not be enabled in custom passes.
+
+### Sun/moon missing on the user's machine (Direct3D?) — diagnostic added
+Code audit found no GL-only calls in `IndevTest_RenderSky`; D3D9 implements
+`Gfx_SetAlphaBlendingAdditive` with the same (SRCALPHA, ONE) formula as GL.
+Textures are the likelier failure: sun.png/moon.png only exist inside
+default.zip (resource fetcher packs them from the beta jar) — a CUSTOM
+texture pack never has them and the sky quads silently skip. Added a
+one-time chat warning when either texture is missing. Discriminator for
+the user: stars visible at night = pass runs, textures missing; nothing
+at all = pass broken on D3D (escalate).
+
+### Fire interaction batch (task 38) — genuine BlockFire click/ambience layer
+All from in-20100223 decompiled source:
+- **Fire is unpickable** (`BlockFire.isCollidable()` = false → the ray in
+  `World.rayTraceBlocks` skips it): `Game_CanPick` now returns false for
+  fire in Indev mode. No selection wireframe, can't be mined/punched, the
+  pick ray hits whatever is behind the flames. Placing a block into the
+  fire cell is also blocked (genuine ItemBlock only places into id 0).
+- **Punch-extinguish** (`World.extinguishFire`, called by Minecraft.clickMouse
+  on every left click that lands on a block, BEFORE the dig): step one cell
+  out of the clicked face; if it holds fire, play "random.fizz" (vol 0.5,
+  pitch 2.6 + (r−r)*0.8) and remove it. The click still punches the block
+  afterwards. Hooked at the top of `InputHandler_DeleteBlock`.
+- **Flint & steel now plays "fire.ignite"** (vol 1.0, pitch r*0.4 + 0.8) when
+  it actually places fire, per ItemFlintAndSteel.onItemUse.
+- **randomDisplayUpdates port** (`IndevTest_RandomDisplayTicks`, 20 Hz from
+  SurvivalTest_Tick): 1000 random cells in the ±16 cube around the player,
+  dispatching the visual-only randomDisplayTick of whatever it lands on:
+  - fire: 1/24 chance of the ambient "fire.fire" crackle (vol 1+r, pitch
+    r*0.7+0.3) + "largesmoke" plumes — 2 per burnable neighbour face
+    (hugging that face) when not sitting on solid/burnable ground, else
+    3 pouring out the top (y + 0.5 + r*0.5).
+  - torches (standing + wall metas): 1 smoke wisp + 1 flame fleck at the
+    head (+0.7 y, ±0.27 toward the wall for hanging metas, +0.22 y).
+  - lit furnaces: 1 smoke + 1 flame licking out of the front face at a
+    random mouth height (x/z ±0.52, y + r*6/16, lateral r*0.6−0.3).
+  Separate client-side RNG — zero effect on the parity-matched world
+  RNG streams.
+- **Particle pool generalised** (the TNT smoke pool in SurvivalTest.c):
+  slots now carry kind + scale. Three kinds, each with its genuine class
+  constants: c0.30 SmokeParticle (TNT, unchanged), Indev EntitySmokeFX
+  ("smoke" ×1 / "largesmoke" ×2.5: scale (r*0.5+0.5)*2 * 12/16 * mul,
+  lifetime ×mul, grow-in clamp01(ageT*32), collides — blocked vertical
+  motion crawls sideways ×1.1, ground friction 0.7), and Indev
+  EntityFlameFX ("flame": velocity ×0.01, atlas index 48, shrinks
+  1 − t²·0.5, brightness lerps fullbright→world light, noClip). Pool
+  raised 96 → 192 for ambience volume.
+- **Sound assets**: newsound/fire/fire.ogg (8b260108…) and ignite.ogg
+  (19c729c3…) added to the fetcher as mob_fire1/mob_ignite1 (sha1s
+  verified live on Mojang's CDN), MOBSND_FIRE/MOBSND_IGNITE groups.
+  Existing installs auto-refetch the sounds zip (entry-count check).
+- **`IndevFire_IsFire` is now gated on `IndevTest_Enabled`**: in c0.30 or
+  CPE-server maps, block id 51 is whatever the server defines and must
+  keep engine behaviour (Builder.c's fire renderer + SurvivalTest's fire
+  contact damage previously matched bare id 51 in every mode).
+
+### Rig-verified (Xvfb)
+Fire placed on stone: burns with rising dark largesmoke, NO selection
+wireframe with the crosshair inside the flames; one left-click through
+the fire onto its supporting stone extinguishes it instantly (stone
+intact, wireframe then lands on the stone). Fire against the spawn-house
+wall spread through the planks and burnt the house down with smoke
+everywhere (genuine spread pace). Torch on the floor emits rising smoke
+wisps above the head. Sounds untestable headless (no OpenAL on the rig) —
+constants transcribed verbatim; user to verify crackle/fizz/ignite by ear.
+
+### Known gaps / follow-ups
+- Fluid randomDisplayTick ambience (water splash edges, lava pops + the
+  dead-code liquid.lava/water sound roll) left for the polish batch.
+- Genuine clickMouse re-fires every 250 ms while the button is held;
+  our extinguish fires on each press event only (idempotent — re-press
+  for fire that spawned after the click).
+- Indev smoke collision approximated by point-solidity per axis (genuine
+  moveEntity sweeps a 0.2-wide AABB); visually indistinguishable at puff
+  sizes.
+
+---
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.

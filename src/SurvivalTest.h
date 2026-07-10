@@ -136,6 +136,12 @@ void SurvivalTest_RestorePainting(int tileX, int tileY, int tileZ, int dir, cons
 /* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount);
 void SurvivalTest_ConsumeHeld(void);
+/* World.playSoundAtPlayer for a block-centre sound source (Indev only). */
+void SurvivalTest_PlaySoundAtBlock(int x, int y, int z, int type, float vol, float pitch);
+/* Indev particle effects: EntitySmokeFX ("smoke" mul 1 / "largesmoke" */
+/*  mul 2.5) and EntityFlameFX ("flame") - torch/furnace/fire ambience. */
+void SurvivalTest_SpawnSmokeFX(float x, float y, float z, float scaleMul);
+void SurvivalTest_SpawnFlameFX(float x, float y, float z);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 /* Arms a TNT block's fuse (fire consuming TNT calls this). */

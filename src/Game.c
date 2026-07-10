@@ -43,6 +43,7 @@
 #include "EntityRenderers.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "IndevFire.h"
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -239,6 +240,10 @@ void Game_ChangeBlock(int x, int y, int z, BlockID block) {
 
 cc_bool Game_CanPick(BlockID block) {
 	if (Blocks.Draw[block] == DRAW_GAS)    return false;
+	/* BlockFire.isCollidable() is false: the pick ray passes straight */
+	/*  through fire (no selection box, can't be punched out - left-clicking */
+	/*  its supporting face extinguishes it instead, see IndevFire.c) */
+	if (IndevFire_IsFire(block))           return false;
 	if (Blocks.Draw[block] == DRAW_SPRITE) return true;
 	return Blocks.Collide[block] != COLLIDE_LIQUID || Game_BreakableLiquids;
 }

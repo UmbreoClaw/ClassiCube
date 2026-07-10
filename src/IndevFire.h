@@ -42,6 +42,9 @@ void IndevFire_BlockChanged(IVec3 coords, BlockID oldBlock, BlockID newBlock);
 /* ItemFlintAndSteel.onItemUse: places fire in the air cell on the clicked */
 /*  face (interior cells only), wearing the item. True = click consumed. */
 cc_bool IndevFire_UseFlintSteel(IVec3 clickedPos, Face face);
+/* World.extinguishFire: left-clicking a block fizzes out fire resting on */
+/*  the clicked face (the click still punches the block afterwards). */
+cc_bool IndevFire_Extinguish(IVec3 clickedPos, Face face);
 /* BlockFlowing/BlockFluid's lava ignition: when lava tries to flow into a */
 /*  flammable block, fire spreads around/into it instead. True = handled */
 /*  (the lava must not flow this tick). */

@@ -164,6 +164,11 @@ int  IndevTest_CurSkyLight(void);
     per game tick via the genuine LCG. Replaces the engine's much sparser
     3-per-chunk loop while Indev mode is on (see Physics_Tick). */
 void IndevTest_TickRandomBlocks(void);
+/* World.randomDisplayUpdates: 1000 random cells in the 33^3 cube around
+    the player each tick, running the visual-only randomDisplayTick of
+    what it lands on (fire crackle + largesmoke, torch/furnace smoke and
+    flame flecks). Client ambience - separate RNG, no world-state effect. */
+void IndevTest_RandomDisplayTicks(void);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);

@@ -26,6 +26,7 @@
 #include "AxisLinesRenderer.h"
 #include "Picking.h"
 #include "SurvivalTest.h"
+#include "IndevFire.h"
 
 static cc_bool input_buttonsDown[3];
 static int input_pickingId = -1;
@@ -412,6 +413,11 @@ static void InputHandler_DeleteBlock(void) {
 	pos = Game_SelectedPos.pos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
 
+	/* Minecraft.clickMouse: every left click that lands on a block first */
+	/*  tries World.extinguishFire on the clicked face, then punches the */
+	/*  block as normal (fire never occludes the pick ray) */
+	IndevFire_Extinguish(pos, Game_SelectedPos.closest);
+
 	old = World_GetBlock(pos.x, pos.y, pos.z);
 	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) return;
 	/* In survival, blocks with hardness only break through the continuous */
@@ -444,6 +450,9 @@ static void InputHandler_PlaceBlock(void) {
 	if (AutoRotate_Enabled) block = AutoRotate_RotateBlock(block);
 
 	if (Game_CanPick(old) || !Blocks.CanPlace[block]) return;
+	/* fire is unpickable but not replaceable - genuine only places into */
+	/*  air cells (ItemBlock.onItemUse's getBlockId == 0 check) */
+	if (IndevFire_IsFire(old)) return;
 	/* air-ish blocks can only replace over other air-ish blocks */
 	if (Blocks.Draw[block] == DRAW_GAS && Blocks.Draw[old] != DRAW_GAS) return;
 

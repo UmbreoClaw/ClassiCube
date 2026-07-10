@@ -64,7 +64,8 @@ static RNGState sounds_rnd;
     which is the block dig/step material list). Loaded from mob_* files. */
 static const char* const mobSnd_names[MOBSND_COUNT] = {
 	"pig", "pigdeath", "sheep", "hurt", "bow",
-	"fuse", "drr", "pop", "explode", "fizz"
+	"fuse", "drr", "pop", "explode", "fizz",
+	"fire", "ignite"
 };
 static struct SoundGroup mobSnd_groups[MOBSND_COUNT];
 

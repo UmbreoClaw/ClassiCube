@@ -1395,6 +1395,150 @@ void IndevTest_TickRandomBlocks(void) {
 	}
 }
 
+/*########################################################################################################################*
+*--------------------------------------Random display ticks (client ambience)---------------------------------------------*
+*#########################################################################################################################*/
+static cc_bool Indev_NormalCube(int x, int y, int z);
+static RNGState indev_dispRng;
+static cc_bool  indev_dispRngInited;
+
+/* BlockFire.randomDisplayTick: the ambient "fire.fire" crackle roll plus
+    the large smoke plumes - hugging each burnable neighbour face when the
+    fire clings to walls, or pouring out the top when it sits on fuel. */
+static void Indev_FireDisplayTick(int x, int y, int z) {
+	RNGState* r = &indev_dispRng;
+	float fx, fy, fz;
+	int i;
+
+	if (Random_Next(r, 24) == 0) {
+		SurvivalTest_PlaySoundAtBlock(x, y, z, MOBSND_FIRE,
+			1.0f + Random_Float(r), Random_Float(r) * 0.7f + 0.3f);
+	}
+
+	if (!Indev_NormalCube(x, y - 1, z) &&
+		!IndevFire_CanCatch(World_GetBlock(x, y - 1, z))) {
+		if (IndevFire_CanCatch(World_GetBlock(x - 1, y, z))) {
+			for (i = 0; i < 2; i++) {
+				fx = (float)x + Random_Float(r) * 0.1f;
+				fy = (float)y + Random_Float(r);
+				fz = (float)z + Random_Float(r);
+				SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+			}
+		}
+		if (IndevFire_CanCatch(World_GetBlock(x + 1, y, z))) {
+			for (i = 0; i < 2; i++) {
+				fx = (float)(x + 1) - Random_Float(r) * 0.1f;
+				fy = (float)y + Random_Float(r);
+				fz = (float)z + Random_Float(r);
+				SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+			}
+		}
+		if (IndevFire_CanCatch(World_GetBlock(x, y, z - 1))) {
+			for (i = 0; i < 2; i++) {
+				fx = (float)x + Random_Float(r);
+				fy = (float)y + Random_Float(r);
+				fz = (float)z + Random_Float(r) * 0.1f;
+				SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+			}
+		}
+		if (IndevFire_CanCatch(World_GetBlock(x, y, z + 1))) {
+			for (i = 0; i < 2; i++) {
+				fx = (float)x + Random_Float(r);
+				fy = (float)y + Random_Float(r);
+				fz = (float)(z + 1) - Random_Float(r) * 0.1f;
+				SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+			}
+		}
+		if (IndevFire_CanCatch(World_GetBlock(x, y + 1, z))) {
+			for (i = 0; i < 2; i++) {
+				fx = (float)x + Random_Float(r);
+				fy = (float)(y + 1) - Random_Float(r) * 0.1f;
+				fz = (float)z + Random_Float(r);
+				SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+			}
+		}
+	} else {
+		for (i = 0; i < 3; i++) {
+			fx = (float)x + Random_Float(r);
+			fy = (float)y + Random_Float(r) * 0.5f + 0.5f;
+			fz = (float)z + Random_Float(r);
+			SurvivalTest_SpawnSmokeFX(fx, fy, fz, 2.5f);
+		}
+	}
+}
+
+/* BlockTorch.randomDisplayTick: one smoke wisp + one flame fleck above the
+    torch head, offset toward the wall for the hanging metas. */
+static void Indev_TorchDisplayTick(int x, int y, int z, int meta) {
+	float fx = (float)x + 0.5f;
+	float fy = (float)y + 0.7f;
+	float fz = (float)z + 0.5f;
+
+	switch (meta) {
+	case 1: fx -= 0.27f; fy += 0.22f; break;
+	case 2: fx += 0.27f; fy += 0.22f; break;
+	case 3: fz -= 0.27f; fy += 0.22f; break;
+	case 4: fz += 0.27f; fy += 0.22f; break;
+	}
+	SurvivalTest_SpawnSmokeFX(fx, fy, fz, 1.0f);
+	SurvivalTest_SpawnFlameFX(fx, fy, fz);
+}
+
+/* BlockFurnace.randomDisplayTick (lit only): smoke + flame licking out of
+    the front face, at a random height along the mouth. */
+static void Indev_FurnaceDisplayTick(int x, int y, int z, int meta) {
+	RNGState* r = &indev_dispRng;
+	float fx = (float)x + 0.5f;
+	float fy = (float)y + Random_Float(r) * 6.0f / 16.0f;
+	float fz = (float)z + 0.5f;
+	float o  = Random_Float(r) * 0.6f - 0.3f;
+
+	switch (meta) {
+	case 4:  fx -= 0.52f; fz += o; break;
+	case 5:  fx += 0.52f; fz += o; break;
+	case 2:  fx += o; fz -= 0.52f; break;
+	case 3:  fx += o; fz += 0.52f; break;
+	default: return;
+	}
+	SurvivalTest_SpawnSmokeFX(fx, fy, fz, 1.0f);
+	SurvivalTest_SpawnFlameFX(fx, fy, fz);
+}
+
+void IndevTest_RandomDisplayTicks(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	RNGState* r = &indev_dispRng;
+	int i, px, py, pz, x, y, z;
+	BlockID b;
+	if (!IndevTest_Enabled || !World.Blocks || !p) return;
+
+	if (!indev_dispRngInited) {
+		Random_SeedFromCurrentTime(&indev_dispRng);
+		indev_dispRngInited = true;
+	}
+
+	px = (int)p->Base.Position.x;
+	py = (int)p->Base.Position.y;
+	pz = (int)p->Base.Position.z;
+
+	for (i = 0; i < 1000; i++) {
+		x = px + Random_Next(r, 16) - Random_Next(r, 16);
+		y = py + Random_Next(r, 16) - Random_Next(r, 16);
+		z = pz + Random_Next(r, 16) - Random_Next(r, 16);
+		if (!World_Contains(x, y, z)) continue;
+
+		b = World_GetBlock(x, y, z);
+		if (b == INDEV_BLOCK_FIRE) {
+			Indev_FireDisplayTick(x, y, z);
+		} else if (b == INDEV_BLOCK_TORCH) {
+			Indev_TorchDisplayTick(x, y, z, 5);
+		} else if (Indev_IsWallTorch(b)) {
+			Indev_TorchDisplayTick(x, y, z, IndevTest_WallTorchMeta(b));
+		} else if (Indev_IsFurnaceLit(b)) {
+			Indev_FurnaceDisplayTick(x, y, z, IndevTest_BlockFacingMeta(b));
+		}
+	}
+}
+
 /* ItemHoe.onItemUse: turns grass (with non-solid above) or dirt into dry */
 /*  farmland, wearing the tool; hoed GRASS has a 1-in-8 seed drop. */
 /* ItemSeeds.onItemUse: plants stage-0 crops above farmland. */

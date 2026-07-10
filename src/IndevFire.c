@@ -12,15 +12,19 @@
 #include "String_.h"
 #include "Audio.h"
 
-/* BlockFire (in-20100223), transcribed line for line. Fire lives at our
-   custom id 98 (genuine 51), ages 0-15 in a per-map nibble store, and is
-   driven by a port of World.java's scheduled-update list (tickRate 20,
-   at most 200 entries processed per game tick) plus the random updateTick
-   coverage every block gets from World.tick.
+/* BlockFire (in-20100223), transcribed line for line. Fire lives at the
+   genuine id 51, ages 0-15 in a per-map nibble store, and is driven by a
+   port of World.java's scheduled-update list (tickRate 20, at most 200
+   entries processed per game tick) plus the random updateTick coverage
+   every block gets from World.tick.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
-cc_bool IndevFire_IsFire(BlockID b) { return b == INDEV_BLOCK_FIRE; }
+/* Gated on Indev mode: in c0.30/creative maps id 51 belongs to whatever
+    CPE decoration the server defines, which must keep engine behaviour. */
+cc_bool IndevFire_IsFire(BlockID b) {
+	return IndevTest_Enabled && b == INDEV_BLOCK_FIRE;
+}
 
 /*########################################################################################################################*
 *-----------------------------------------------------Burn rate tables---------------------------------------------------*
@@ -334,11 +338,43 @@ cc_bool IndevFire_UseFlintSteel(IVec3 clickedPos, Face face) {
 		return false;
 
 	if (World_GetBlock(x, y, z) == BLOCK_AIR) {
+		/* "fire.ignite", 1.0F, rand * 0.4F + 0.8F */
+		SurvivalTest_PlaySoundAtBlock(x, y, z, MOBSND_IGNITE, 1.0f,
+			Random_Float(&fire_rng) * 0.4f + 0.8f);
 		Fire_Set(x, y, z, INDEV_BLOCK_FIRE);
 		Fire_Schedule(World_Pack(x, y, z));
 	}
 	/* the item wears by 1 whether or not fire was actually placed */
 	SurvivalTest_DamageHeldItem(1);
+	return true;
+}
+
+/* World.extinguishFire: on EVERY left click that hits a block (before the
+    dig even starts), step one cell out of the clicked face - if that cell
+    holds fire, fizz it out. The click then proceeds to punch the block as
+    usual, exactly like Minecraft.clickMouse. Fire itself is never in the
+    pick ray (isCollidable false), so this is the only way to put it out. */
+cc_bool IndevFire_Extinguish(IVec3 clickedPos, Face face) {
+	int x = clickedPos.x, y = clickedPos.y, z = clickedPos.z;
+	if (!IndevTest_Enabled) return false;
+	Fire_InitTables();
+
+	switch (face) {
+	case FACE_YMIN: y--; break;
+	case FACE_YMAX: y++; break;
+	case FACE_ZMIN: z--; break;
+	case FACE_ZMAX: z++; break;
+	case FACE_XMIN: x--; break;
+	case FACE_XMAX: x++; break;
+	}
+
+	if (!World_Contains(x, y, z)) return false;
+	if (World_GetBlock(x, y, z) != INDEV_BLOCK_FIRE) return false;
+
+	/* "random.fizz", 0.5F, 2.6F + (rand - rand) * 0.8F */
+	SurvivalTest_PlaySoundAtBlock(x, y, z, MOBSND_FIZZ, 0.5f,
+		2.6f + (Random_Float(&fire_rng) - Random_Float(&fire_rng)) * 0.8f);
+	Fire_Set(x, y, z, BLOCK_AIR);
 	return true;
 }
 

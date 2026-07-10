@@ -1271,38 +1271,54 @@ static struct TntFuse st_tnt[TNT_MAX];
 /*  smokes; we keep the block static (see above) but reproduce the smoke as a */
 /*  small self-contained particle pool, rendered as billboards off the shared */
 /*  particles.png atlas - the same texture and frames the real client used. */
-#define TNT_SMOKE_MAX 96
+#define TNT_SMOKE_MAX 192
+/* what a pool slot is imitating - the constants differ per class */
+#define PUFF_C030_SMOKE 0 /* c0.30 SmokeParticle (TNT fuse puffs) */
+#define PUFF_INDEV_SMOKE 1 /* Indev EntitySmokeFX ("smoke"/"largesmoke") */
+#define PUFF_INDEV_FLAME 2 /* Indev EntityFlameFX ("flame") */
 struct TntSmoke {
 	Vec3  pos, prevPos;
 	Vec3  vel;        /* per-tick displacement, exactly as in Particle.java */
 	int   age, life;  /* in ticks; tex frame = 7 - (age*8)/life */
 	float gray;       /* SmokeParticle's random 0..0.3 grey tint */
+	float scale;      /* EntityFX.particleScale (quad half-size = 0.1 * this) */
+	cc_uint8 kind;
 	cc_bool active;
 };
 static struct TntSmoke st_tntSmoke[TNT_SMOKE_MAX];
 
-/* Particle.java's constructor, with the (0,0,0) base velocity SmokeParticle */
-/*  passes in, then SmokeParticle's own *0.1 damping and grey/lifetime setup. */
-static void SurvivalTest_SpawnTntSmoke(float x, float y, float z) {
-	struct TntSmoke* s = NULL;
-	float xd, yd, zd, mag, scale;
+static struct TntSmoke* TntSmoke_FreeSlot(void) {
 	int i;
-
 	for (i = 0; i < TNT_SMOKE_MAX; i++) {
-		if (!st_tntSmoke[i].active) { s = &st_tntSmoke[i]; break; }
+		if (!st_tntSmoke[i].active) return &st_tntSmoke[i];
 	}
-	if (!s) return; /* pool full - skip this puff, oldest keep playing out */
+	return NULL; /* pool full - skip this puff, oldest keep playing out */
+}
 
+/* Particle.java / EntityFX's shared constructor velocity: a random direction
+    scaled by (r+r+1)*0.15 with a +0.1 upward bias, from a (0,0,0) base. */
+static void TntSmoke_BaseVel(Vec3* vel) {
+	float xd, yd, zd, mag, scale;
 	xd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
 	yd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
 	zd = (Random_Float(&st_dropRng) * 2.0f - 1.0f) * 0.4f;
 	scale = (Random_Float(&st_dropRng) + Random_Float(&st_dropRng) + 1.0f) * 0.15f;
 	mag   = Math_SqrtF(xd * xd + yd * yd + zd * zd);
 	if (mag < 0.0001f) mag = 0.0001f;
+	vel->x = xd / mag * scale * 0.4f;
+	vel->y = yd / mag * scale * 0.4f + 0.1f;
+	vel->z = zd / mag * scale * 0.4f;
+}
+
+/* Particle.java's constructor, with the (0,0,0) base velocity SmokeParticle */
+/*  passes in, then SmokeParticle's own *0.1 damping and grey/lifetime setup. */
+static void SurvivalTest_SpawnTntSmoke(float x, float y, float z) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	TntSmoke_BaseVel(&s->vel);
 	/* Particle base velocity, then SmokeParticle multiplies x/y/z by 0.1. */
-	s->vel.x = (xd / mag * scale * 0.4f)         * 0.1f;
-	s->vel.y = (yd / mag * scale * 0.4f + 0.1f)  * 0.1f;
-	s->vel.z = (zd / mag * scale * 0.4f)         * 0.1f;
+	s->vel.x *= 0.1f; s->vel.y *= 0.1f; s->vel.z *= 0.1f;
 
 	s->pos.x = x; s->pos.y = y; s->pos.z = z;
 	s->prevPos = s->pos;
@@ -1310,15 +1326,70 @@ static void SurvivalTest_SpawnTntSmoke(float x, float y, float z) {
 	s->life = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
 	if (s->life < 1) s->life = 1;
 	s->age  = 0;
+	s->scale = 1.0f;
+	s->kind  = PUFF_C030_SMOKE;
 	s->active = true;
 }
 
-/* SmokeParticle.tick()/Particle.tick() with noPhysics=true (smoke ignores */
-/*  block collision): integrate position, gently accelerate upward, damp. */
-/* Particle.tick tests age++ >= lifetime (old value) and still runs the move */
-/*  on its removal tick, so a puff gets lifetime+1 movement ticks in total. */
+/* EntitySmokeFX: Indev's "smoke" (torches, furnaces; scaleMul 1) and
+    "largesmoke" (fire; scaleMul 2.5). Compared to the c0.30 puff it keeps
+    a particleScale ((r*0.5+0.5)*2 * 12/16 * mul), stretches its lifetime
+    by the multiplier, collides with blocks and grows in when spawned. */
+void SurvivalTest_SpawnSmokeFX(float x, float y, float z, float scaleMul) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	TntSmoke_BaseVel(&s->vel);
+	s->vel.x *= 0.1f; s->vel.y *= 0.1f; s->vel.z *= 0.1f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray  = Random_Float(&st_dropRng) * 0.3f;
+	s->scale = (Random_Float(&st_dropRng) * 0.5f + 0.5f) * 2.0f
+	           * (12.0f / 16.0f) * scaleMul;
+	s->life  = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f));
+	s->life  = (int)((float)s->life * scaleMul);
+	if (s->life < 1) s->life = 1;
+	s->age   = 0;
+	s->kind  = PUFF_INDEV_SMOKE;
+	s->active = true;
+}
+
+/* EntityFlameFX: the tiny flame flecks torches and lit furnaces emit.
+    Nearly stationary (velocity * 0.01), white, fades from fullbright to
+    world lighting and shrinks over its life. noClip - never collides. */
+void SurvivalTest_SpawnFlameFX(float x, float y, float z) {
+	struct TntSmoke* s = TntSmoke_FreeSlot();
+	if (!s) return;
+
+	TntSmoke_BaseVel(&s->vel);
+	s->vel.x *= 0.01f; s->vel.y *= 0.01f; s->vel.z *= 0.01f;
+
+	s->pos.x = x; s->pos.y = y; s->pos.z = z;
+	s->prevPos = s->pos;
+	s->gray  = 1.0f; /* particleRed/Green/Blue = 1 */
+	s->scale = (Random_Float(&st_dropRng) * 0.5f + 0.5f) * 2.0f;
+	s->life  = (int)(8.0f / (Random_Float(&st_dropRng) * 0.8f + 0.2f)) + 4;
+	s->age   = 0;
+	s->kind  = PUFF_INDEV_FLAME;
+	s->active = true;
+}
+
+/* Point solidity test for the Indev smoke's moveEntity approximation */
+static cc_bool TntSmoke_Solid(float x, float y, float z) {
+	int bx = (int)Math_Floor(x), by = (int)Math_Floor(y), bz = (int)Math_Floor(z);
+	if (!World_Contains(bx, by, bz)) return false;
+	return Blocks.Collide[World_GetBlock(bx, by, bz)] == COLLIDE_SOLID;
+}
+
+/* SmokeParticle.tick()/Particle.tick() (c0.30, noPhysics=true) and Indev's
+    EntitySmokeFX/EntityFlameFX.onEntityUpdate: integrate position, damp.
+    Particle.tick tests age++ >= lifetime (old value) and still runs the move
+    on its removal tick, so a puff gets lifetime+1 movement ticks in total. */
 static void SurvivalTest_TickTntSmoke(void) {
 	struct TntSmoke* s;
+	cc_bool onGround;
+	float ny;
 	int i;
 	for (i = 0; i < TNT_SMOKE_MAX; i++) {
 		s = &st_tntSmoke[i];
@@ -1327,7 +1398,44 @@ static void SurvivalTest_TickTntSmoke(void) {
 		s->prevPos = s->pos;
 		if (s->age++ >= s->life) s->active = false;
 
+		if (s->kind == PUFF_INDEV_FLAME) {
+			/* EntityFlameFX: no rise, noClip move, damp (never on ground) */
+			s->pos.x += s->vel.x;
+			s->pos.y += s->vel.y;
+			s->pos.z += s->vel.z;
+			s->vel.x *= 0.96f; s->vel.y *= 0.96f; s->vel.z *= 0.96f;
+			continue;
+		}
+
 		s->vel.y += 0.004f;
+
+		if (s->kind == PUFF_INDEV_SMOKE) {
+			/* EntitySmokeFX has noClip=false: blocked vertical movement
+			    (a ceiling above a fire, the floor) makes the puff crawl
+			    sideways (*1.1) and ground contact adds friction (*0.7) */
+			onGround = false;
+			if (!TntSmoke_Solid(s->pos.x + s->vel.x, s->pos.y, s->pos.z))
+				s->pos.x += s->vel.x;
+			ny = s->pos.y + s->vel.y;
+			if (TntSmoke_Solid(s->pos.x, ny, s->pos.z)) {
+				if (s->vel.y < 0.0f) onGround = true;
+				s->vel.y = 0.0f;
+			} else {
+				s->pos.y = ny;
+			}
+			if (!TntSmoke_Solid(s->pos.x, s->pos.y, s->pos.z + s->vel.z))
+				s->pos.z += s->vel.z;
+
+			if (s->pos.y == s->prevPos.y) {
+				s->vel.x *= 1.1f;
+				s->vel.z *= 1.1f;
+			}
+			s->vel.x *= 0.96f; s->vel.y *= 0.96f; s->vel.z *= 0.96f;
+			if (onGround) { s->vel.x *= 0.7f; s->vel.z *= 0.7f; }
+			continue;
+		}
+
+		/* c0.30 SmokeParticle: noPhysics, no collision at all */
 		s->pos.x += s->vel.x;
 		s->pos.y += s->vel.y;
 		s->pos.z += s->vel.z;
@@ -1816,27 +1924,62 @@ static void SurvivalTest_RenderTntSmoke(float t) {
 	data = (struct VertexTextured*)Gfx_LockDynamicVb(st_tntSmokeVB, VERTEX_FORMAT_TEXTURED, TNT_SMOKE_MAX_VERTICES);
 	ptr  = data;
 	for (i = 0; i < TNT_SMOKE_MAX; i++) {
+		float ageT, quadHalf, fade;
 		s = &st_tntSmoke[i];
 		if (!s->active) continue;
 
 		Vec3_Lerp(&pos, &s->prevPos, &s->pos, t);
+		ageT = ((float)s->age + t) / (float)s->life;
+		if (ageT < 0.0f) ageT = 0.0f;
+		if (ageT > 1.0f) ageT = 1.0f;
 
-		/* SmokeParticle: tex = 7 - (age*8)/life, walking the 8 smoke frames in */
-		/*  the top row of the 16-wide atlas from densest puff (7) to wisp (0). */
-		frame = 7 - (s->age * 8) / s->life;
-		if (frame < 0) frame = 0;
-		rec.u1 = frame / 16.0f;
-		rec.u2 = rec.u1 + 0.0624375f;
-		rec.v1 = 0.0f;
-		rec.v2 = 0.0624375f;
+		if (s->kind == PUFF_INDEV_FLAME) {
+			/* EntityFlameFX: fixed atlas index 48 (row 3, column 0) */
+			rec.u1 = 0.0f;
+			rec.u2 = 0.0624375f;
+			rec.v1 = 3.0f / 16.0f;
+			rec.v2 = rec.v1 + 0.0624375f;
+		} else {
+			/* SmokeParticle: tex = 7 - (age*8)/life, walking the 8 smoke frames in */
+			/*  the top row of the 16-wide atlas from densest puff (7) to wisp (0). */
+			frame = 7 - (s->age * 8) / s->life;
+			if (frame < 0) frame = 0;
+			rec.u1 = frame / 16.0f;
+			rec.u2 = rec.u1 + 0.0624375f;
+			rec.v1 = 0.0f;
+			rec.v2 = 0.0624375f;
+		}
 
-		/* rCol=gCol=bCol (the random 0..0.3 grey) * the block's brightness. */
 		lit = DropItem_WorldColor(&pos);
-		col = PackedCol_Make((cc_uint8)(PackedCol_R(lit) * s->gray),
-							 (cc_uint8)(PackedCol_G(lit) * s->gray),
-							 (cc_uint8)(PackedCol_B(lit) * s->gray), 255);
+		switch (s->kind) {
+		case PUFF_INDEV_SMOKE:
+			/* renderParticle: scale grows in fast, clamp01(ageT * 32) */
+			fade = ageT * 32.0f;
+			if (fade > 1.0f) fade = 1.0f;
+			quadHalf = 0.1f * s->scale * fade;
+			col = PackedCol_Make((cc_uint8)(PackedCol_R(lit) * s->gray),
+								 (cc_uint8)(PackedCol_G(lit) * s->gray),
+								 (cc_uint8)(PackedCol_B(lit) * s->gray), 255);
+			break;
+		case PUFF_INDEV_FLAME:
+			/* shrinks (1 - t^2 * 0.5); brightness lerps from fullbright at */
+			/*  birth to the world's lighting at expiry (getEntityBrightness) */
+			quadHalf = 0.1f * s->scale * (1.0f - ageT * ageT * 0.5f);
+			col = PackedCol_Make(
+				(cc_uint8)(PackedCol_R(lit) * ageT + 255.0f * (1.0f - ageT)),
+				(cc_uint8)(PackedCol_G(lit) * ageT + 255.0f * (1.0f - ageT)),
+				(cc_uint8)(PackedCol_B(lit) * ageT + 255.0f * (1.0f - ageT)), 255);
+			break;
+		default:
+			/* rCol=gCol=bCol (the random 0..0.3 grey) * the block's brightness. */
+			quadHalf = 0.15f;
+			col = PackedCol_Make((cc_uint8)(PackedCol_R(lit) * s->gray),
+								 (cc_uint8)(PackedCol_G(lit) * s->gray),
+								 (cc_uint8)(PackedCol_B(lit) * s->gray), 255);
+			break;
+		}
 
-		size.x = 0.15f; size.y = 0.15f;
+		size.x = quadHalf; size.y = quadHalf;
 		Particle_DoRender(&size, &pos, &rec, col, ptr);
 		ptr   += 4;
 		count += 4;
@@ -2035,6 +2178,14 @@ static void Indev_PlaySoundAt(Vec3 pos, int type, float vol, float pitch) {
 
 static void Mob_PlaySound(struct Mob* m, int type, float vol, float pitch) {
 	Indev_PlaySoundAt(m->Base.Position, type, vol, pitch);
+}
+
+/* World.playSoundAtPlayer for a sound at a block's centre - the form the
+    block-driven sounds (fire crackle/ignite/fizz) use. */
+void SurvivalTest_PlaySoundAtBlock(int x, int y, int z, int type, float vol, float pitch) {
+	Vec3 pos;
+	pos.x = (float)x + 0.5f; pos.y = (float)y + 0.5f; pos.z = (float)z + 0.5f;
+	Indev_PlaySoundAt(pos, type, vol, pitch);
 }
 
 static int SurvivalTest_CountMobs(void) {
@@ -6059,6 +6210,10 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 
 	/* TNT -------------------------------------------------------------------- */
 	SurvivalTest_TickTnt();
+
+	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */
+	/*  smoke, torch/furnace flames) - visual only, runs its own RNG */
+	IndevTest_RandomDisplayTicks();
 }
 
 

@@ -142,6 +142,7 @@ void Sounds_LoadDefault(void);
 enum MobSoundType {
 	MOBSND_PIG, MOBSND_PIGDEATH, MOBSND_SHEEP,   MOBSND_HURT, MOBSND_BOW,
 	MOBSND_FUSE, MOBSND_DRR,     MOBSND_POP,     MOBSND_EXPLODE, MOBSND_FIZZ,
+	MOBSND_FIRE, MOBSND_IGNITE,
 	MOBSND_COUNT
 };
 /* Plays an Indev mob/entity sound. volume/pitch are the genuine float
