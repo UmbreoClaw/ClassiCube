@@ -155,6 +155,11 @@ static RNGState st_mobRng;
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static cc_bool SurvivalTest_AddItem(cc_uint16 id);
 #define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
+/* Paintings (defined later, used by render/attack/arrow code above them) */
+static void SurvivalTest_RenderPaintings(void);
+static void SurvivalTest_TickPaintings(void);
+static cc_bool SurvivalTest_TryPunchPainting(Vec3 eyePos, Vec3 dir, float maxDist);
+static cc_bool SurvivalTest_ArrowHitPainting(Vec3 pos);
 /* Defined in the Mining section - forward declared for the melee attack path */
 static void SurvivalTest_DamageHeldTool(int amount);
 static void SurvivalTest_ConsumeSelected(void);
@@ -4015,6 +4020,7 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 		IndevArmor_Render(&Entities.CurPlayer->Base);
 	}
 
+	SurvivalTest_RenderPaintings();
 	SurvivalTest_RenderMobFires();
 	Gfx_SetAlphaTest(false);
 }
@@ -4053,6 +4059,13 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/*  mob. Only if it's closer than the best mob though (cap the reach at that */
 	/*  mob's distance), so whichever the crosshair actually lands on wins. */
 	if (SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
+		HeldBlockRenderer_ClickAnim(true);
+		return true;
+	}
+	/* paintings are attackable too (EntityPainting.attackEntityFrom pops
+	    them off as an item on ANY hit) - closest target wins */
+	if (IndevTest_Enabled &&
+		SurvivalTest_TryPunchPainting(eyePos, dir, best ? bestT : p->ReachDistance)) {
 		HeldBlockRenderer_ClickAnim(true);
 		return true;
 	}
@@ -4409,6 +4422,12 @@ static void SurvivalTest_TickArrows(void) {
 		}
 
 		Arrow_Tick(a);
+		/* EntityPainting.canBeCollidedWith: a flying arrow that enters a
+		    painting's box pops it (attackEntityFrom) and is consumed */
+		if (a->active && !a->hasHit && IndevTest_Enabled &&
+			SurvivalTest_ArrowHitPainting(a->pos)) {
+			a->active = false;
+		}
 		if (a->active) Arrow_TryPickup(a);
 	}
 }
@@ -4642,6 +4661,380 @@ cc_bool SurvivalTest_TryUseBow(void) {
 	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
 							 INDEV_ARROW_FIRE_FORCE, INDEV_ARROW_DAMAGE, 0, true, -1);
 	return true;
+}
+
+
+/*########################################################################################################################*
+*------------------------------------------------------Paintings----------------------------------------------------------*
+*#########################################################################################################################*/
+/* in-20100223 EntityPainting + ItemPainting + RenderPainting, ported with
+    the genuine geometry to the pixel: the painting plane hangs 1/16 in
+    front of the clicked wall block (tile centre - 9/16 along the facing),
+    half-extents sizeX/32 x sizeY/32 with a 1/64 half-thickness, the odd
+    +-0.5 re-centring for 32px-AND-64px-wide art (which leaves the 64px
+    Fighters/Pointer genuinely off-centre), and the bounding box's MAX
+    corner shrunk by 0.1/16 on all three axes. Genuine quirk kept: the
+    "still on a wall?" check runs ONCE, at tickCounter == 100 - a painting
+    whose wall is later mined stays floating (punch it to pop it). */
+#define PAINTING_MAX 64
+#define INDEV_ITEM_PAINTING (256 + 65)
+
+struct PaintingArt { const char* title; cc_uint8 sizeX, sizeY, offX, offY; };
+static const struct PaintingArt paintingArts[] = {
+	{ "Kebab",     16,16,  0,  0 }, { "Aztec",   16,16, 16,  0 },
+	{ "Alban",     16,16, 32,  0 }, { "Aztec2",  16,16, 48,  0 },
+	{ "Bomb",      16,16, 64,  0 }, { "Plant",   16,16, 80,  0 },
+	{ "Wasteland", 16,16, 96,  0 }, { "Pool",    32,16,  0, 32 },
+	{ "Courbet",   32,16, 32, 32 }, { "Sea",     32,16, 64, 32 },
+	{ "Sunset",    32,16, 96, 32 }, { "Wanderer",16,32,  0, 64 },
+	{ "Match",     32,32,  0,128 }, { "Bust",    32,32, 32,128 },
+	{ "Stage",     32,32, 64,128 }, { "Void",    32,32, 96,128 },
+	{ "SkullAndRoses", 32,32,128,128 },
+	{ "Fighters",  64,32,  0, 96 }, { "Pointer", 64,64,  0,192 },
+};
+
+struct PaintingEntity {
+	cc_bool active;
+	cc_uint8 dir, art;      /* dir 0..3 (yaw = dir * 90) */
+	cc_int16 tileX, tileY, tileZ;
+	Vec3 pos;               /* genuine posX/Y/Z - the painting centre */
+	struct AABB bb;
+	int tickCounter;
+};
+static struct PaintingEntity st_paintings[PAINTING_MAX];
+
+/* EntityPainting.getArtSize: 0.5 for BOTH 32px and 64px - the genuine
+    source of the off-centre large paintings */
+static float Painting_ArtSize(int px) { return px >= 32 ? 0.5f : 0.0f; }
+
+static void Painting_SetDirection(struct PaintingEntity* pt) {
+	const struct PaintingArt* a = &paintingArts[pt->art];
+	float w2 = (float)a->sizeX, h2 = (float)a->sizeY, d2 = (float)a->sizeX;
+	float x, y, z;
+
+	if (pt->dir != 0 && pt->dir != 2) w2 = 0.5f; else d2 = 0.5f;
+	w2 /= 32.0f; h2 /= 32.0f; d2 /= 32.0f;
+
+	x = pt->tileX + 0.5f; y = pt->tileY + 0.5f; z = pt->tileZ + 0.5f;
+	if (pt->dir == 0) z -= 9.0f / 16.0f;
+	if (pt->dir == 1) x -= 9.0f / 16.0f;
+	if (pt->dir == 2) z += 9.0f / 16.0f;
+	if (pt->dir == 3) x += 9.0f / 16.0f;
+
+	if (pt->dir == 0) x -= Painting_ArtSize(a->sizeX);
+	if (pt->dir == 1) z += Painting_ArtSize(a->sizeX);
+	if (pt->dir == 2) x += Painting_ArtSize(a->sizeX);
+	if (pt->dir == 3) z -= Painting_ArtSize(a->sizeX);
+	y += Painting_ArtSize(a->sizeY);
+
+	pt->pos.x = x; pt->pos.y = y; pt->pos.z = z;
+	Vec3_Set(pt->bb.Min, x - w2, y - h2, z - d2);
+	/* genuine shrinks only the MAX corner by 0.1/16 */
+	Vec3_Set(pt->bb.Max, x + w2 - 0.1f/16.0f, y + h2 - 0.1f/16.0f, z + d2 - 0.1f/16.0f);
+}
+
+/* EntityPainting.onValidSurface */
+static cc_bool Painting_ValidSurface(struct PaintingEntity* pt) {
+	const struct PaintingArt* a = &paintingArts[pt->art];
+	struct AABB blockBB;
+	int x, y, z, i, j;
+	int cellsX = a->sizeX / 16, cellsY = a->sizeY / 16;
+	int bx = pt->tileX, bz = pt->tileZ, by;
+	BlockID b;
+
+	/* 1. no solid block collision boxes intersecting the painting box */
+	for (y = (int)pt->bb.Min.y; y <= (int)pt->bb.Max.y; y++) {
+		for (z = (int)pt->bb.Min.z; z <= (int)pt->bb.Max.z; z++) {
+			for (x = (int)pt->bb.Min.x; x <= (int)pt->bb.Max.x; x++) {
+				if (!World_Contains(x, y, z)) continue;
+				b = World_GetBlock(x, y, z);
+				if (Blocks.Collide[b] != COLLIDE_SOLID) continue;
+				Vec3_Set(blockBB.Min, x + Blocks.MinBB[b].x, y + Blocks.MinBB[b].y, z + Blocks.MinBB[b].z);
+				Vec3_Set(blockBB.Max, x + Blocks.MaxBB[b].x, y + Blocks.MaxBB[b].y, z + Blocks.MaxBB[b].z);
+				if (AABB_Intersects(&pt->bb, &blockBB)) return false;
+			}
+		}
+	}
+
+	/* 2. every 16px cell must be backed by a solid-material wall block */
+	if (pt->dir == 0 || pt->dir == 2) bx = (int)(pt->pos.x - a->sizeX / 32.0f);
+	else                              bz = (int)(pt->pos.z - a->sizeX / 32.0f);
+	by = (int)(pt->pos.y - a->sizeY / 32.0f);
+
+	for (i = 0; i < cellsX; i++) {
+		for (j = 0; j < cellsY; j++) {
+			if (pt->dir != 0 && pt->dir != 2) {
+				b = World_Contains(pt->tileX, by + j, bz + i) ?
+					World_GetBlock(pt->tileX, by + j, bz + i) : BLOCK_AIR;
+			} else {
+				b = World_Contains(bx + i, by + j, pt->tileZ) ?
+					World_GetBlock(bx + i, by + j, pt->tileZ) : BLOCK_AIR;
+			}
+			/* Material.isSolid - liquids and plants are not */
+			if (Blocks.Collide[b] != COLLIDE_SOLID) return false;
+		}
+	}
+
+	/* 3. no other painting overlapping */
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active || &st_paintings[i] == pt) continue;
+		if (AABB_Intersects(&pt->bb, &st_paintings[i].bb)) return false;
+	}
+	return true;
+}
+
+static void Painting_PopOff(struct PaintingEntity* pt) {
+	pt->active = false;
+	SurvivalTest_SpawnDropAt(pt->pos, INDEV_ITEM_PAINTING, 1);
+}
+
+/* ItemPainting.onItemUse: side faces only, interior blocks only; tries
+    every art on this wall spot and picks a random one that fits. */
+cc_bool SurvivalTest_TryPlacePainting(IVec3 wall, Face face) {
+	struct PaintingEntity probe;
+	cc_uint8 valid[Array_Elems(paintingArts)];
+	int i, validCount = 0, slot = -1, dir;
+
+	if (!IndevTest_Enabled) return false;
+	if (st_inv[Inventory.SelectedIndex].id != INDEV_ITEM_PAINTING) return false;
+	if (st_inv[Inventory.SelectedIndex].count <= 0)                return false;
+
+	switch (face) {
+	case FACE_ZMIN: dir = 0; break;
+	case FACE_XMIN: dir = 1; break;
+	case FACE_ZMAX: dir = 2; break;
+	case FACE_XMAX: dir = 3; break;
+	default: return false; /* genuine rejects floors/ceilings */
+	}
+	if (!(wall.x > 0 && wall.y > 0 && wall.z > 0 &&
+		wall.x < World.Width - 1 && wall.y < World.Height - 1 && wall.z < World.Length - 1))
+		return false;
+
+	Mem_Set(&probe, 0, sizeof(probe));
+	probe.dir   = (cc_uint8)dir;
+	probe.tileX = (cc_int16)wall.x;
+	probe.tileY = (cc_int16)wall.y;
+	probe.tileZ = (cc_int16)wall.z;
+
+	for (i = 0; i < (int)Array_Elems(paintingArts); i++) {
+		probe.art = (cc_uint8)i;
+		Painting_SetDirection(&probe);
+		if (Painting_ValidSurface(&probe)) valid[validCount++] = (cc_uint8)i;
+	}
+	/* click is consumed for any side face, like genuine onItemUse */
+	if (!validCount) return true;
+
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active) { slot = i; break; }
+	}
+	if (slot < 0) return true;
+
+	probe.art = valid[Random_Next(&st_dropRng, validCount)];
+	Painting_SetDirection(&probe);
+	probe.active      = true;
+	probe.tickCounter = 0;
+	st_paintings[slot] = probe;
+
+	SurvivalTest_ConsumeHeld();
+	return true;
+}
+
+/* the genuine once-at-100-ticks surface check (see the header comment) */
+static void SurvivalTest_TickPaintings(void) {
+	int i;
+	for (i = 0; i < PAINTING_MAX; i++) {
+		struct PaintingEntity* pt = &st_paintings[i];
+		if (!pt->active) continue;
+		if (pt->tickCounter++ == 100 && !Painting_ValidSurface(pt)) {
+			Painting_PopOff(pt);
+		}
+	}
+}
+
+/* melee/arrow hits: any hit pops the painting off as an item (genuine
+    attackEntityFrom). Ray test = simple slab test against the (axis-
+    aligned) painting box. */
+static cc_bool Painting_RayHit(struct PaintingEntity* pt, Vec3 origin, Vec3 dir, float* tHit) {
+	float tmin = 0.0f, tmax = 1.0e30f;
+	float o[3], d[3], mn[3], mx[3];
+	int i;
+	o[0]=origin.x; o[1]=origin.y; o[2]=origin.z;
+	d[0]=dir.x;    d[1]=dir.y;    d[2]=dir.z;
+	mn[0]=pt->bb.Min.x; mn[1]=pt->bb.Min.y; mn[2]=pt->bb.Min.z;
+	mx[0]=pt->bb.Max.x; mx[1]=pt->bb.Max.y; mx[2]=pt->bb.Max.z;
+
+	for (i = 0; i < 3; i++) {
+		float t1, t2, tmp;
+		if (d[i] == 0.0f) {
+			if (o[i] < mn[i] || o[i] > mx[i]) return false;
+			continue;
+		}
+		t1 = (mn[i] - o[i]) / d[i];
+		t2 = (mx[i] - o[i]) / d[i];
+		if (t1 > t2) { tmp = t1; t1 = t2; t2 = tmp; }
+		if (t1 > tmin) tmin = t1;
+		if (t2 < tmax) tmax = t2;
+		if (tmin > tmax) return false;
+	}
+	*tHit = tmin;
+	return true;
+}
+
+static cc_bool SurvivalTest_TryPunchPainting(Vec3 eyePos, Vec3 dir, float maxDist) {
+	struct PaintingEntity* best = NULL;
+	float t, bestT = maxDist;
+	int i;
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active) continue;
+		if (!Painting_RayHit(&st_paintings[i], eyePos, dir, &t)) continue;
+		if (t < bestT) { bestT = t; best = &st_paintings[i]; }
+	}
+	if (!best) return false;
+	Painting_PopOff(best);
+	return true;
+}
+
+static cc_bool SurvivalTest_ArrowHitPainting(Vec3 pos) {
+	int j;
+	for (j = 0; j < PAINTING_MAX; j++) {
+		if (!st_paintings[j].active) continue;
+		if (pos.x < st_paintings[j].bb.Min.x || pos.x > st_paintings[j].bb.Max.x) continue;
+		if (pos.y < st_paintings[j].bb.Min.y || pos.y > st_paintings[j].bb.Max.y) continue;
+		if (pos.z < st_paintings[j].bb.Min.z || pos.z > st_paintings[j].bb.Max.z) continue;
+		Painting_PopOff(&st_paintings[j]);
+		return true;
+	}
+	return false;
+}
+
+/* .mclevel: iterate live paintings / restore one */
+int SurvivalTest_PaintingNext(int prev, IVec3* tile, int* dir, const char** motive, Vec3* pos) {
+	int i;
+	for (i = prev + 1; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active) continue;
+		tile->x = st_paintings[i].tileX;
+		tile->y = st_paintings[i].tileY;
+		tile->z = st_paintings[i].tileZ;
+		*dir    = st_paintings[i].dir;
+		*motive = paintingArts[st_paintings[i].art].title;
+		*pos    = st_paintings[i].pos;
+		return i;
+	}
+	return -1;
+}
+
+void SurvivalTest_RestorePainting(int tileX, int tileY, int tileZ, int dir, const cc_string* motive) {
+	struct PaintingEntity* pt = NULL;
+	int i;
+	if (!IndevTest_Enabled) return;
+
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active) { pt = &st_paintings[i]; break; }
+	}
+	if (!pt) return;
+
+	Mem_Set(pt, 0, sizeof(*pt));
+	pt->tileX = (cc_int16)tileX; pt->tileY = (cc_int16)tileY; pt->tileZ = (cc_int16)tileZ;
+	pt->dir   = (cc_uint8)(dir & 3);
+	pt->art   = 0; /* genuine falls back to Kebab on unknown titles */
+	for (i = 0; i < (int)Array_Elems(paintingArts); i++) {
+		if (String_CaselessEqualsConst(motive, paintingArts[i].title)) pt->art = (cc_uint8)i;
+	}
+	Painting_SetDirection(pt);
+	pt->active = true;
+}
+
+/* RenderPainting: one 16px cell at a time - the front quad samples the art
+    (u mirrored, right to left like genuine), the back the canvas cell at
+    (192..208, 0..16), and the four edges the thin strip at u=385/512.
+    Every cell is lit individually from the block it hangs over. */
+#define PAINTING_CELL_VERTS (6 * 4)
+#define PAINTING_MAX_CELL_QUADS (4 * 4)
+static GfxResourceID st_paintingVB;
+
+static void SurvivalTest_RenderPaintings(void) {
+	struct VertexTextured verts[PAINTING_CELL_VERTS * PAINTING_MAX_CELL_QUADS];
+	struct VertexTextured* v;
+	const struct PaintingArt* a;
+	Vec3 along, up, norm;
+	int i, cx, cy, count;
+	GfxResourceID tex = IndevTest_KzTex();
+	if (!IndevTest_Enabled || !tex) return;
+
+	if (!st_paintingVB) {
+		st_paintingVB = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED,
+							PAINTING_CELL_VERTS * PAINTING_MAX_CELL_QUADS);
+		if (!st_paintingVB) return;
+	}
+	Gfx_BindTexture(tex);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+
+	for (i = 0; i < PAINTING_MAX; i++) {
+		struct PaintingEntity* pt = &st_paintings[i];
+		float halfW, halfH;
+		if (!pt->active) continue;
+		a = &paintingArts[pt->art];
+
+		/* local +x (along wall), +y (up), local -z (out of the wall) */
+		switch (pt->dir) {
+		case 0:  Vec3_Set(along,  1,0,0); Vec3_Set(norm, 0,0,-1); break;
+		case 1:  Vec3_Set(along,  0,0,-1); Vec3_Set(norm, -1,0,0); break;
+		case 2:  Vec3_Set(along, -1,0,0); Vec3_Set(norm, 0,0, 1); break;
+		default: Vec3_Set(along,  0,0,1); Vec3_Set(norm,  1,0,0); break;
+		}
+		Vec3_Set(up, 0,1,0);
+		halfW = a->sizeX / 32.0f;
+		halfH = a->sizeY / 32.0f;
+
+		v = verts; count = 0;
+		for (cx = 0; cx < a->sizeX / 16; cx++) {
+			for (cy = 0; cy < a->sizeY / 16; cy++) {
+				/* cell corners in local units (blocks) */
+				float x1 = -halfW + (cx + 1),  x0 = -halfW + cx;
+				float y1 = -halfH + (cy + 1),  y0 = -halfH + cy;
+				float zF = -0.5f/16.0f, zB = 0.5f/16.0f;
+				/* genuine art UVs: right-to-left across the art region */
+				float uA1 = (a->offX + a->sizeX - (cx << 4))       / 256.0f;
+				float uA0 = (a->offX + a->sizeX - ((cx + 1) << 4)) / 256.0f;
+				float vA1 = (a->offY + a->sizeY - (cy << 4))       / 256.0f;
+				float vA0 = (a->offY + a->sizeY - ((cy + 1) << 4)) / 256.0f;
+				/* per-cell lighting from the block the cell centres on */
+				float ccx = (x0 + x1) * 0.5f, ccy = (y0 + y1) * 0.5f;
+				int lx = (int)pt->pos.x, ly = (int)(pt->pos.y + ccy), lz = (int)pt->pos.z;
+				float br;
+				PackedCol col;
+				if (pt->dir == 0) lx = (int)(pt->pos.x + ccx);
+				if (pt->dir == 1) lz = (int)(pt->pos.z - ccx);
+				if (pt->dir == 2) lx = (int)(pt->pos.x - ccx);
+				if (pt->dir == 3) lz = (int)(pt->pos.z + ccx);
+				br  = Indev_LightBrightness(lx, ly, lz);
+				col = PackedCol_Make((cc_uint8)(br * 255), (cc_uint8)(br * 255),
+				                     (cc_uint8)(br * 255), 255);
+
+				/* world = centre + X*along + Y*up + Z*(local z axis = -norm) */
+				#define PV(X, Y, Z, PU, PVV) \
+					v->x = pt->pos.x + (X)*along.x + (Y)*up.x - (Z)*norm.x; \
+					v->y = pt->pos.y + (X)*along.y + (Y)*up.y - (Z)*norm.y; \
+					v->z = pt->pos.z + (X)*along.z + (Y)*up.z - (Z)*norm.z; \
+					v->Col = col; v->U = (PU); v->V = (PVV); v++;
+				/* front (toward the room) */
+				PV(x1,y0,zF, uA0,vA1) PV(x0,y0,zF, uA1,vA1) PV(x0,y1,zF, uA1,vA0) PV(x1,y1,zF, uA0,vA0)
+				/* back canvas */
+				PV(x1,y1,zB, 12.0f/16,0.0f) PV(x0,y1,zB, 13.0f/16,0.0f) PV(x0,y0,zB, 13.0f/16,1.0f/16) PV(x1,y0,zB, 12.0f/16,1.0f/16)
+				/* top edge */
+				PV(x1,y1,zF, 12.0f/16,0.001953125f) PV(x0,y1,zF, 13.0f/16,0.001953125f) PV(x0,y1,zB, 13.0f/16,0.001953125f) PV(x1,y1,zB, 12.0f/16,0.001953125f)
+				/* bottom edge */
+				PV(x1,y0,zB, 12.0f/16,0.001953125f) PV(x0,y0,zB, 13.0f/16,0.001953125f) PV(x0,y0,zF, 13.0f/16,0.001953125f) PV(x1,y0,zF, 12.0f/16,0.001953125f)
+				/* left/right edges (the 385/512 strip) */
+				PV(x1,y1,zB, 385.0f/512,0.0f) PV(x1,y0,zB, 385.0f/512,1.0f/16) PV(x1,y0,zF, 385.0f/512,1.0f/16) PV(x1,y1,zF, 385.0f/512,0.0f)
+				PV(x0,y1,zF, 385.0f/512,0.0f) PV(x0,y0,zF, 385.0f/512,1.0f/16) PV(x0,y0,zB, 385.0f/512,1.0f/16) PV(x0,y1,zB, 385.0f/512,0.0f)
+				#undef PV
+				count += PAINTING_CELL_VERTS;
+			}
+		}
+		Gfx_SetDynamicVbData(st_paintingVB, verts, count);
+		Gfx_DrawVb_IndexedTris(count);
+	}
 }
 
 
@@ -5046,7 +5439,9 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 		return true;
 	}
 
-	/* Item.onItemUse comes after blockActivated: hoe tilling, seed planting */
+	/* Item.onItemUse comes after blockActivated: hoe tilling, seed planting, */
+	/*  and hanging paintings on the clicked wall face */
+	if (SurvivalTest_TryPlacePainting(pos, Game_SelectedPos.closest)) return true;
 	if (IndevTest_UseHeldItem(st_inv[Inventory.SelectedIndex].id, pos)) return true;
 	return false;
 }
@@ -5595,6 +5990,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/* Arrows ----------------------------------------------------------------- */
 	SurvivalTest_TickArrows();
 
+	/* Paintings (Indev) ------------------------------------------------------ */
+	if (IndevTest_Enabled) SurvivalTest_TickPaintings();
+
 	/* TNT -------------------------------------------------------------------- */
 	SurvivalTest_TickTnt();
 }
@@ -5690,6 +6088,9 @@ static void SurvivalTest_ResetState(void) {
 	for (i = 0; i < ARROW_MAX; i++) {
 		st_arrows[i].active = false;
 	}
+	for (i = 0; i < PAINTING_MAX; i++) {
+		st_paintings[i].active = false;
+	}
 	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
 
 	for (i = 0; i < TNT_MAX; i++) {
@@ -5712,6 +6113,7 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 	Gfx_DeleteDynamicVb(&st_fireVB);
+	Gfx_DeleteDynamicVb(&st_paintingVB);
 	if (!Gfx.ManagedTextures) {
 		Gfx_DeleteTexture(&st_arrowsTexId);
 		Gfx_DeleteTexture(&st_cracksTexId);
@@ -5762,6 +6164,7 @@ static void SurvivalTest_Free(void) {
 	Gfx_DeleteDynamicVb(&st_tntSmokeVB);
 	Gfx_DeleteDynamicVb(&st_cracksVB);
 	Gfx_DeleteDynamicVb(&st_fireVB);
+	Gfx_DeleteDynamicVb(&st_paintingVB);
 }
 
 static void SurvivalTest_OnNewMap(void) {

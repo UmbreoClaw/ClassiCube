@@ -28,6 +28,8 @@ extern cc_bool IndevTest_Enabled;
 /* The items.png atlas texture (0 until a texture pack supplies it). Item */
 /*  sprite rendering (hotbar/hand/drops) bails gracefully while it's 0. */
 GfxResourceID IndevTest_ItemsTex(void);
+/* The painting art atlas texture (art/kz.png), 0 until a pack provides it. */
+GfxResourceID IndevTest_KzTex(void);
 /* The genuine gui/inventory.png (0 until loaded) - the Indev inventory */
 /*  screen draws its whole panel from this 176x166 region. */
 GfxResourceID IndevTest_InvGuiTex(void);

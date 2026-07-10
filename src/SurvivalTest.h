@@ -127,6 +127,12 @@ void SurvivalTest_RestoreStats(int health, int score);
     consuming one arrow ITEM from the inventory. Returns whether the click
     was handled (i.e. the bow was held - even if no arrows were left). */
 cc_bool SurvivalTest_TryUseBow(void);
+/* ItemPainting.onItemUse: hangs a painting on the clicked wall face (side
+    faces of interior blocks only), choosing a random art that fits. */
+cc_bool SurvivalTest_TryPlacePainting(IVec3 wall, Face face);
+/* .mclevel painting persistence: iterate live paintings / restore one. */
+int  SurvivalTest_PaintingNext(int prev, IVec3* tile, int* dir, const char** motive, Vec3* pos);
+void SurvivalTest_RestorePainting(int tileX, int tileY, int tileZ, int dir, const cc_string* motive);
 /* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount);
 void SurvivalTest_ConsumeHeld(void);

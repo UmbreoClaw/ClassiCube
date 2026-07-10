@@ -1,6 +1,83 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Bow item + Indev HUD cleanup (roadmap stage 3) (latest)
+## SESSION LOG - Paintings (EntityPainting port) (latest)
+
+User: "work on paintings next, try to remember box bounds and such as well
+as like with farmland" - i.e. the bounding-box math must be EXACT (the
+farmland-height lesson). Everything Indev-gated; c0.30 untouched.
+
+### What landed
+- **Painting item** (id 321 = 256+65, "Painting", icon 26) + the genuine
+  Indev RecipesArt recipe: 8 planks ringing a cloth block -> 1 painting.
+- **19 EnumArt entries** (Kebab..Fighters/Skeleton/DonkeyKong etc) with the
+  genuine sizeX/sizeY/offsetX/offsetY atlas table from EnumArt.java.
+- **Genuine EntityPainting geometry, verbatim** (Painting_SetDirection):
+  yaw = dir*90; center starts at tile center, pushed 0.5 - 1/16 toward the
+  wall along the facing axis; half-extents sizeX/32 x sizeY/32 x 0.5/32
+  (a 1/16-thick slab); arts with a dimension >= 32px get the genuine +0.5
+  recentring - and because `func_190_a(px)` returns 0.5 for BOTH 32 and
+  64, the 64px-wide arts (Fighters, Pointer, Pigscene, BurningSkull era
+  sheet has Fighters only) sit genuinely OFF-CENTRE. Kept, it's source
+  behaviour. Finally the bbox MAX corner is shrunk by 0.1/16 on ALL axes
+  (genuine asymmetric shrink - min corner untouched). None of this is
+  "cleaned up"; it is a line-for-line transcription.
+- **onValidSurface, all 3 genuine checks**: (1) no solid-block collision
+  inside the painting bbox, (2) EVERY 16px cell must be backed by a solid
+  block in the wall behind, (3) no overlap with another painting.
+- **Placement** (ItemPainting.onItemUse): right-click a wall face with the
+  painting held; Y faces rejected; face->dir map ZMIN->0 XMIN->1 ZMAX->2
+  XMAX->3; tries every art, picks a RANDOM valid one (genuine random
+  choice among the arts that fit that wall spot); consumes the item.
+  Interior (in-map) blocks only. Hooked before block placement.
+- **The genuine tick-100 quirk**: EntityPainting.onUpdate re-checks
+  onValidSurface ONCE, at tickCounter == 100 exactly (then never again -
+  the counter keeps incrementing past it). If invalid, pops off as an
+  item. Kept as-is: break the wall behind a painting and it hangs there
+  until its own tick counter happens to cross 100, exactly like genuine.
+- **Any hit pops it off** as a painting item drop: melee punch (ray-vs-
+  slab test capped by the mob/TNT pick distance so you can't punch a
+  painting through a zombie) and arrows (arrow is consumed, genuine
+  attackEntityFrom path).
+- **Renderer** (RenderPainting port): per-16px-cell quads - front face
+  samples the art region RIGHT-TO-LEFT (genuine u-mirror), back face is
+  the canvas-back cell (u 192..208 px), 1px edge strips around the rim,
+  each cell lit individually with the block light AT that cell's world
+  position (genuine getEntityBrightness-per-cell look). /256-atlas UVs.
+  Basis vectors per dir: 0 along +X normal -Z; 1 along -Z normal -X;
+  2 along -X normal +Z; 3 along +Z normal +X.
+- **art/kz.png shipping** (Resources.c): pulled from the b1.7.3 jar like
+  the other assets, BUT b1.7.3 redrew exactly two regions vs authentic
+  in-20100223 (Sea 64,32 32x16 - later split into Sea+Plant; Stage 64,128
+  32x32 - the Graham cell art changed). The authentic cells are embedded
+  as PNG byte arrays and composited over the beta sheet at decode time,
+  so the shipped kz.png is pixel-identical to in-20100223's. New
+  TextureEntry in IndevTest.c (IndevTest_KzTex). Users must delete
+  texpacks/default.zip once to pick the new asset up.
+- **.mclevel persistence**: paintings save as genuine "Painting" entity
+  compounds (Dir byte, Motive string, TileX/TileY/TileZ ints + the
+  standard Pos/Rotation/Motion entity fields, Rotation = dir*90) and load
+  back through the same parser as mobs/items; unknown Motive strings fall
+  back to Kebab. Round-trips with genuine Indev saves' painting format.
+
+### Verification status
+- Compiles clean (-Werror). Armor/bow/generator regression: untouched
+  paths, same build. NOT yet rig-tested in-game (user asked to ship
+  without the headless pass this session - usage constraints); next
+  session: inject painting items into a save, hang several art sizes,
+  verify orientation/lighting/pop-off/save round-trip on the rig.
+
+### Traps hit (for future reference)
+- The renderer's per-vertex macro originally named its params U/V - and
+  `v->U` expanded the MEMBER access too (macro capture). Params renamed.
+- The lazily-created painting dynamic VB must be registered in BOTH
+  SurvivalTest_OnContextLost and SurvivalTest_Free like every other
+  dynamic VB (caught in the pre-commit audit - a context loss would have
+  left a stale handle).
+- Painting helpers are used by earlier code in SurvivalTest.c (RenderMobs
+  tail, TryAttackMob, the arrow loop) - forward decls live next to the
+  SurvivalTest_AddItem decl block.
+
+## SESSION LOG - Bow item + Indev HUD cleanup (roadmap stage 3)
 
 User: implement the bow, remove Tab-firing and the score count (Indev).
 

@@ -1493,6 +1493,9 @@ static struct {
 	int dropId, dropCount;
 	float px, py, pz, yaw, pitch;
 	int health, score;
+	cc_bool isPainting;
+	int paintDir, tileX, tileY, tileZ;
+	char motiveBuf[32]; cc_string motive;
 	/* main inventory, then the 4 armor slots (saved as Slot 100..103) */
 	cc_uint16 ids[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
 	cc_int16  counts[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
@@ -1582,6 +1585,9 @@ static void MCLevel_CommitEntity(void) {
 		if (mcl_ent.mobType >= 0) {
 			SurvivalTest_RestoreMob(mcl_ent.mobType, p, mcl_ent.yaw,
 				mcl_ent.health ? mcl_ent.health : 10); /* genuine default */
+		} else if (mcl_ent.isPainting) {
+			SurvivalTest_RestorePainting(mcl_ent.tileX, mcl_ent.tileY, mcl_ent.tileZ,
+										 mcl_ent.paintDir, &mcl_ent.motive);
 		} else if (mcl_ent.isItem && mcl_ent.dropId > 0 && mcl_ent.dropCount > 0) {
 			int bid = mcl_ent.dropId;
 			if (bid > 0 && bid < 256 && IndevTest_Enabled) bid = IndevTest_BlockFromIndev((BlockRaw)bid);
@@ -1632,8 +1638,9 @@ static cc_bool MCLevel_ParseSurvival(struct NbtTag* tag) {
 		if (IsTag(tag, "id")) {
 			int mi;
 			str = NbtTag_String(tag);
-			mcl_ent.isPlayer = String_CaselessEqualsConst(&str, "LocalPlayer");
-			mcl_ent.isItem   = String_CaselessEqualsConst(&str, "Item");
+			mcl_ent.isPlayer   = String_CaselessEqualsConst(&str, "LocalPlayer");
+			mcl_ent.isItem     = String_CaselessEqualsConst(&str, "Item");
+			mcl_ent.isPainting = String_CaselessEqualsConst(&str, "Painting");
 			for (mi = 0; mi < Array_Elems(mcl_mobNames); mi++) {
 				if (String_CaselessEqualsConst(&str, mcl_mobNames[mi])) mcl_ent.mobType = mi;
 			}
@@ -1641,6 +1648,17 @@ static cc_bool MCLevel_ParseSurvival(struct NbtTag* tag) {
 		}
 		if (IsTag(tag, "Health")) { mcl_ent.health = NbtTag_I16(tag); return true; }
 		if (IsTag(tag, "Score"))  { mcl_ent.score  = NbtTag_I32(tag); return true; }
+		/* genuine EntityPainting.writeEntityToNBT extras */
+		if (IsTag(tag, "Dir"))    { mcl_ent.paintDir = NbtTag_U8(tag);  return true; }
+		if (IsTag(tag, "TileX"))  { mcl_ent.tileX    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "TileY"))  { mcl_ent.tileY    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "TileZ"))  { mcl_ent.tileZ    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "Motive")) {
+			str = NbtTag_String(tag);
+			String_InitArray(mcl_ent.motive, mcl_ent.motiveBuf);
+			String_AppendString(&mcl_ent.motive, &str);
+			return true;
+		}
 		return true;
 	}
 	/* item drop payload: [field] -> "Item" compound -> [unnamed] -> Entities */
@@ -1870,6 +1888,11 @@ cc_result MCLevel_Save(struct Stream* stream) {
 			 n = SurvivalTest_MobNext(n,  &mt, &mp, &myaw, &mh)) count++;
 		for (n = SurvivalTest_DropNext(-1, &mp, &mt, &mh); n >= 0;
 			 n = SurvivalTest_DropNext(n,  &mp, &mt, &mh)) count++;
+		{
+			IVec3 pt; int pd; const char* pm;
+			for (n = SurvivalTest_PaintingNext(-1, &pt, &pd, &pm, &mp); n >= 0;
+				 n = SurvivalTest_PaintingNext(n,  &pt, &pd, &pm, &mp)) count++;
+		}
 	}
 	cur = Nbt_WriteList(cur, "Entities", NBT_DICT, count);
 	if (SurvivalTest_Enabled) {
@@ -1975,6 +1998,35 @@ cc_result MCLevel_Save(struct Stream* stream) {
 					cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)dcount);
 					cur = Nbt_WriteUInt16(cur, "Damage", 0);
 				} *cur++ = NBT_END;
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+
+		/* paintings: genuine EntityPainting.writeEntityToNBT */
+		{
+			static const cc_string paintingName = String_FromConst("Painting");
+			IVec3 pt; int pd; const char* pm; Vec3 pp;
+			for (n = SurvivalTest_PaintingNext(-1, &pt, &pd, &pm, &pp); n >= 0;
+				 n = SurvivalTest_PaintingNext(n,  &pt, &pd, &pm, &pp)) {
+				cc_string motive = String_FromReadonly(pm);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &paintingName);
+				fv[0] = pp.x; fv[1] = pp.y; fv[2] = pp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = (float)(pd * 90); fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt8 (cur, "Dir",  (cc_uint8)pd);
+				cur = Nbt_WriteString(cur, "Motive", &motive);
+				cur = Nbt_WriteInt32 (cur, "TileX", pt.x);
+				cur = Nbt_WriteInt32 (cur, "TileY", pt.y);
+				cur = Nbt_WriteInt32 (cur, "TileZ", pt.z);
 				*cur++ = NBT_END;
 				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
 			}

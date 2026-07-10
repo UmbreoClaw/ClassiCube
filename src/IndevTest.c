@@ -44,6 +44,16 @@ static struct TextureEntry items_entry = { "items.png", ItemsPngProcess };
 
 GfxResourceID IndevTest_ItemsTex(void) { return indev_itemsTexId; }
 
+/* art/kz.png - the painting art atlas (the authentic in-20100223 sheet:
+    Resources.c composites the two cells b1.7.3 later redrew back over it) */
+static GfxResourceID indev_kzTexId;
+static void KzPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&indev_kzTexId, stream, name, NULL, NULL);
+}
+static struct TextureEntry kz_entry = { "kz.png", KzPngProcess };
+
+GfxResourceID IndevTest_KzTex(void) { return indev_kzTexId; }
+
 /* gui/inventory.png - the genuine 176x166 inventory/crafting GUI texture */
 static GfxResourceID indev_invGuiTexId;
 static void InvGuiPngProcess(struct Stream* stream, const cc_string* name) {
@@ -1511,6 +1521,7 @@ static void OnInit(void) {
 	IndevBlocks_Define();
 	IndevArmor_Register();
 	TextureEntry_Register(&items_entry);
+	TextureEntry_Register(&kz_entry);
 	TextureEntry_Register(&invgui_entry);
 	TextureEntry_Register(&craftgui_entry);
 	TextureEntry_Register(&furngui_entry);
