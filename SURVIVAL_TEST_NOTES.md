@@ -1,6 +1,57 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Wall torches + held-item mirror fix (latest)
+## SESSION LOG - Held items: genuine ItemRenderer chain, re-derived (latest)
+
+User (after the u-unflip round): "the axe shaft is facing leftwards rather
+than in the hand... would you be willing to reread how indev handles it".
+Correct call - the sign-patching approach was chasing symptoms.
+
+### What was actually wrong, in full
+The first-person item was rendered by BAKING genuine's item-local
+transforms into the mesh and then pushing it through the ENGINE's
+held-block entity pipeline (Entity_GetTransform on held_entity with
+Yaw/RotY -45). That pipeline's model-yaw convention is mirrored relative
+to genuine's plain GL chain, so every rotation came out sign-flipped and
+the sprite plane appeared mirrored. Each patch (-50 yaw, u-unflip, +eu
+strips) fixed one symptom and exposed the next: after the unflip the
+plane read unmirrored but the ROLL (RotZ 335) still leaned the wrong way
+-> "shaft facing leftwards".
+
+### The fix: run genuine's chain in genuine's frame
+Numerically simulated the genuine GL chain (T(0.56,-0.52,-0.72) - RotY 45
+- [swing rots] - S(0.4) - T(0,-0.3,0) - S(1.5) - RotY 50 - RotZ 335 -
+T(-15/16,-1/16,0), column convention) to get the expected screen layout
+of the mesh corners, then reimplemented it verbatim:
+- The engine held pass ALREADY renders in genuine's frame: SetMatrix uses
+  an identity-orientation camera at the eye, projection is the fixed 70
+  degrees, SetBaseOffset's itemOffset IS genuine's hand anchor, and
+  DoAnimation's dig translate / equip dip match genuine's swing translate
+  exactly. Only Entity_GetTransform was the alien piece.
+- HeldItem_Render now composes (row-major, reverse GL order):
+  mesh chain [T(-15/16,-1/16,0), RotZ 335, RotY +50, S(1.5), T(0,-0.3,0),
+  S(0.4)] then [genuine dig rotations RotX(-80 s5), RotZ(-20 s5),
+  RotY(-20 sin(t^2 pi)) while breaking] then RotY(45) then
+  T(held_entity.Position) then Gfx.View. No Entity_GetTransform.
+- Mesh restored to VERBATIM genuine: u-mirrored plane (x=0 samples u2),
+  v-flipped, edge strips -eu/-ev. All previous sign adaptations deleted.
+- ClassiCube Matrix_RotateY/Z row-major matrices are exact transposes of
+  glRotatef's column-major ones, so same-sign angles behave identically
+  once Entity_GetTransform is out of the loop.
+- The dig swing is genuine's chop again - through the correct pipeline
+  this time (the earlier "fucked mining up massively" was these same
+  rotations running on top of the mirrored entity transform).
+
+### Rig verification (zoomed crops vs the simulated corner layout)
+- Iron axe: fills the lower right, head upper-left with the blade facing
+  LEFT into the scene, handle descending into the hand anchor - matches
+  the simulation and genuine screenshots.
+- Torch: single solid stick bottom-right -> upper-left, flame cap on the
+  top end, clean extrusion shading, no missing pixels.
+- Mid-dig frame: the item arcs down-forward (edge-on at the swing
+  bottom) - the genuine chop.
+- Held BLOCKS (non-extruded) untouched - still the engine block path.
+
+## SESSION LOG - Wall torches + held-item mirror fix
 
 User: "now we should work on torch hanging to walls" + spotted that held
 items rendered left-right mirrored ("items in hand are mirrored lol").

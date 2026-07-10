@@ -64,24 +64,25 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	struct Matrix m, r;
 	float x, u, y, vv, eu, ev;
 	int i;
-	/* genuine builds the plane u-mirrored (model x=0 samples u2) because
-	    ITS camera views the plane's back. Our -50 yaw (see below, opposite
-	    apparent sign) shows the camera the FRONT face instead - so the u
-	    mirror must be dropped here or every held item reads left-right
-	    flipped (user-spotted on the iron axe). The v flip stays: model
-	    y=0 is the sprite's bottom row (v2) in both engines. */
-	float u1 = rec.u1, u2 = rec.u2, v1 = rec.v2, v2 = rec.v1;
+	/* verbatim genuine renderItemInFirstPerson mapping: model x=0 samples
+	    the icon's RIGHT edge (u2) and y=0 its BOTTOM row (v2). No sign
+	    adaptations anywhere any more - the whole transform chain below and
+	    in HeldItem_Render is now the genuine one applied in the genuine
+	    frame, so the mesh must be genuine too. */
+	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
 
+	/* genuine ItemRenderer's item-local chain, composed row-major in
+	    reverse GL order: T(-15/16,-1/16,0) <- RotZ 335 <- RotY 50 <-
+	    S(1.5) <- T(0,-0.3,0) <- S(0.4). The 0.4 scale is genuine's
+	    step just inside the swing rotations, so it lives at the end of
+	    the mesh-side chain and HeldItem_Render applies swing rotations,
+	    the 45-degree base yaw and the hand translate after it. */
 	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
-	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
-	/* genuine is rotY +50 on top of the +45 base = the sprite plane yawed
-	    ~95 degrees, slicing INTO the scene. The engine's held-entity chain
-	    contributes its 45 with the OPPOSITE apparent sign, so +50 here left
-	    the face flat toward the camera (the "pickaxe facing the player"
-	    report) - the genuine oblique needs -50 in this pipeline. */
-	Matrix_RotateY(&r, -50.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD);  Matrix_MulBy(&m, &r);
+	Matrix_RotateY(&r, 50.0f * MATH_DEG2RAD);   Matrix_MulBy(&m, &r);
 	Matrix_Scale(&r, 1.5f, 1.5f, 1.5f);         Matrix_MulBy(&m, &r);
 	Matrix_Translate(&r, 0.0f, -0.3f, 0.0f);    Matrix_MulBy(&m, &r);
+	Matrix_Scale(&r, 0.4f, 0.4f, 0.4f);         Matrix_MulBy(&m, &r);
 
 	eu = (rec.u2 - rec.u1) * (0.5f / 16.0f); /* the genuine 0.001953125 half-texel */
 	ev = (rec.v2 - rec.v1) * (0.5f / 16.0f);
@@ -91,21 +92,15 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	HI_V(0,0,0, u1,v1) HI_V(1,0,0, u2,v1) HI_V(1,1,0, u2,v2) HI_V(0,1,0, u1,v2)
 	HI_V(0,1,-1.0f/16, u1,v2) HI_V(1,1,-1.0f/16, u2,v2) HI_V(1,0,-1.0f/16, u2,v1) HI_V(0,0,-1.0f/16, u1,v1)
 
-	/* Each 1px edge strip must sample the CENTER of its own texel column.
-	    The u mapping now INCREASES with x (the mirror was dropped, see
-	    above), so the half-texel nudge is +eu - keeping genuine's -eu
-	    with the flipped mapping sampled the NEIGHBOURING column, alpha-
-	    testing away the sprite's outline ("missing pixels" report). The
-	    v mapping still decreases with y, so those strips keep -ev. */
 	for (i = 0; i < 16; i++) {
 		x = i / 16.0f;
-		u = u1 + (u2 - u1) * x + eu;
+		u = u1 + (u2 - u1) * x - eu;
 		/* -X edge strips */
 		HI_V(x,0,-1.0f/16, u,v1) HI_V(x,0,0, u,v1) HI_V(x,1,0, u,v2) HI_V(x,1,-1.0f/16, u,v2)
 	}
 	for (i = 0; i < 16; i++) {
 		x = i / 16.0f + 1.0f/16.0f;
-		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) + eu;
+		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) - eu;
 		/* +X edge strips */
 		HI_V(x,1,-1.0f/16, u,v2) HI_V(x,1,0, u,v2) HI_V(x,0,0, u,v1) HI_V(x,0,-1.0f/16, u,v1)
 	}
@@ -125,10 +120,10 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 }
 
 static void HeldItem_Render(int heldId) {
-	struct Matrix transform, m;
+	struct Matrix m, r, final;
 	TextureRec rec;
 	PackedCol col;
-	Vec3 scale;
+	float t, s4, s5;
 
 	if (!IndevTest_BindHeldTexture(heldId, &rec)) return;
 	col = HeldBlockRenderer_GetCol(&held_entity);
@@ -143,11 +138,31 @@ static void HeldItem_Render(int heldId) {
 		if (!helditem_vb) return;
 	}
 
-	/* same placement/animation transform the block-in-hand path gets */
-	Vec3_Set(scale, 0.4f, 0.4f, 0.4f);
-	Entity_GetTransform(&held_entity, held_entity.Position, scale, &transform);
-	Matrix_Mul(&m, &transform, &Gfx.View);
-	Gfx_LoadMatrix(MATRIX_VIEW, &m);
+	/* The genuine renderItemInFirstPerson outer chain, NOT the engine's
+	    held-block entity transform (whose model-yaw conventions mirror the
+	    sprite and flip every rotation - the source of the old -50/unflip
+	    workarounds). The held pass already renders in genuine's frame: an
+	    identity-orientation camera at the eye (SetMatrix) with the fixed
+	    70-degree projection, and held_entity.Position already carries the
+	    genuine hand anchor (0.56,-0.52,-0.72 via SetBaseOffset) plus the
+	    genuine swing translate / equip dip (DoAnimation). So all that is
+	    left is: [dig rotations] <- RotY 45 <- T(hand position). */
+	m = Matrix_Identity;
+	if (held_animating && held_breaking && !held_swinging) {
+		/* genuine swing rotations, GL order RotY(-20*sin(t*t*pi)),
+		    RotZ(-20*s5), RotX(-80*s5) - reversed here for row-major */
+		t  = held_time / held_period;
+		s4 = Math_SinF(t * t * MATH_PI);
+		s5 = Math_SinF(Math_SqrtF(t) * MATH_PI);
+		Matrix_RotateX(&r, -s5 * 80.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+		Matrix_RotateZ(&r, -s5 * 20.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+		Matrix_RotateY(&r, -s4 * 20.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	}
+	Matrix_RotateY(&r, 45.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	Matrix_Translate(&r, held_entity.Position.x, held_entity.Position.y, held_entity.Position.z);
+	Matrix_MulBy(&m, &r);
+	Matrix_Mul(&final, &m, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_VIEW, &final);
 
 	Gfx_SetAlphaTest(true);
 	Gfx_SetFaceCulling(false); /* thin shell; winding varies per strip */
