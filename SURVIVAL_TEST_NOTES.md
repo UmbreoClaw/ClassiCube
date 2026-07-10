@@ -2,6 +2,29 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### Crop render deep-verification (round 4 - renderer confirmed correct)
+Full instrumented investigation after the user still saw sparse stage-0
+sprouts on the stamped build. Method: debug prints in AddSpriteVertices/
+Builder_DrawSprite + a full vertex dump from Builder_DrawCrops, plus a
+minimal all-stages test world (scratchpad gen_croptest3.py). Findings:
+- Planted crops DO reach Builder_DrawCrops (count + draw both isCrop=1);
+  the emitted vertices are exact: 4 full-span planes at +-0.25, both
+  windings, u 0..1, y sunk 1/16, banks laid out to spec.
+- The view-bank conditions split at the chunk CENTRE (drawXMin = camera
+  west of centre etc, MapRenderer.c:707), not the chunk bounds - the
+  complementary bank pairing still guarantees every plane renders from
+  every camera position.
+- MATURE stages (3-7) visually verified: dense parallel wheat rows
+  spanning the block, matching genuine.
+- Stage 0's texture (identical in indev and b1.7.3 terrain.png -
+  compared pixel-level) is just 3-4 tiny 1-2px dots at the tile bottom;
+  on the sunken (-1/16) planes those dots sit below the neighbouring
+  grass block's lip, so edge dots hide and only the centre cluster
+  reads - a faithful consequence of the genuine geometry, not a bug we
+  could find. If genuine side-by-side at the SAME stage/surroundings
+  still shows more, revisit with that exact A/B.
+Debug instrumentation removed; tree matches the verified commit.
+
 ### Build stamp + crop outline actually-fix (user report round 3)
 User still saw sparse sprouts on their Windows build after the bank fix.
 Re-derived the whole chain against the engine: chunk faces render with
