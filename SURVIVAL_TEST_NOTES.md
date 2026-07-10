@@ -1,27 +1,37 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Held pickaxe orientation + held torch fixes (latest)
+## SESSION LOG - Held pickaxe swing + held torch fixes (latest)
 
-User reports: the first-person pickaxe looked flipped while mining (the swing
-angle read wrong), and a held torch floated at arm's length.
+User reports: the first-person pickaxe looked flipped while MINING (the
+swing angle read wrong), and a held torch floated at arm's length.
 
-- **Pickaxe/item sprite orientation** (HeldBlockRenderer.c): the extruded
-  item mesh sampled the sprite u-mirrored + v-flipped "like genuine".
-  Genuine's mirroring is relative to ITS raw camera transform chain; our
-  mesh rides the ENGINE's held-entity transform, whose handedness differs -
-  the correct sampling here is u and v both UNflipped (verified empirically:
-  head-up handle-down idle pose, and the head leads the swing arc into the
-  block crack, matching genuine screenshots).
-- **Held torch** (HeldBlockRenderer.c + IndevTest.c): genuine ItemRenderer
-  holds only renderType 0 blocks as 3D blocks; torches (renderType 2) and
-  flowers/mushrooms/saplings (renderType 1) use the SAME extruded sprite
-  path as items, drawn from their terrain tile. Added the
+- **The real pickaxe bug was the SWING, not the sprite.** The extruded
+  mesh's original u-mirrored + v-flipped sampling IS the correct genuine
+  idle pose (head top-left, tip toward the screen centre, handle into the
+  fist) - an intermediate "fix" that unflipped the UVs rendered it upside
+  down and was reverted (lesson relearned: judge orientation from ZOOMED
+  crops, 1x rig screenshots misread easily; see icon98.png vs tl*/tm*
+  zooms). The actual fix: the engine's dig animation uses the CLASSIC
+  c0.30 swing - translate identical to genuine, but the dominant 80-degree
+  rotation around Y/yaw (sideways sweep, fine for a cube in hand). Genuine
+  Indev ItemRenderer chops 80 degrees around X (pitch-down), with
+  20-degree yaw/roll accents (glRotatef -sin(t^2 pi)*20 y,
+  -sin(sqrt(t) pi)*20 z, -sin(sqrt(t) pi)*80 x). HeldBlockRenderer's
+  DigAnimation now applies the genuine axes in Indev mode (classic mode
+  keeps the classic sweep) - the tool now chops DOWN head-first into the
+  block.
+- **Held torch** (HeldBlockRenderer.c): genuine ItemRenderer holds only
+  renderType 0 blocks as 3D blocks; torches (renderType 2) and flowers/
+  mushrooms/saplings (renderType 1) use the SAME extruded sprite path as
+  items, drawn from their terrain tile. Added the
   IndevTest_HeldIsExtruded(block) branch to the held renderer (the block
-  model path had drawn the torch at the block-in-hand anchor - the floating
-  look). The terrain-atlas TexRec comes out upside-down relative to
-  items.png rects, so IndevTest_BindHeldTexture swaps v for block tiles.
-- Both verified on the rig with an injected pickaxe/torch save: idle pose,
-  mid-swing arc, and the torch flame-up in the fist.
+  model path had drawn the torch at the block-in-hand anchor - the
+  floating look). With the genuine v-flipped mesh mapping the terrain
+  TexRec needs NO extra flip (flame up verified zoomed).
+- Verified on the rig with an injected pickaxe/torch save: genuine idle
+  pose, the chop swing arcing head-first into the crack, torch flame-up
+  in the fist. Equip-dip frames right after slot switch look odd in
+  stills - wait for the dip to settle before judging screenshots.
 
 ## SESSION LOG - Armor part 2: worn-armor rendering + fuzz-verified math
 

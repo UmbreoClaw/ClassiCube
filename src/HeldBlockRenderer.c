@@ -64,11 +64,8 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 	struct Matrix m, r;
 	float x, u, y, vv, eu, ev;
 	int i;
-	/* NOTE: genuine mirrors u (x=0 samples the sprite's right edge), but our
-	    mesh rides the engine's held-entity transform whose handedness differs
-	    from genuine's raw camera chain - matching genuine's ON-SCREEN result
-	    (head up, blade toward the screen centre) needs u unmirrored here. */
-	float u1 = rec.u1, u2 = rec.u2, v1 = rec.v1, v2 = rec.v2;
+	/* mirrored like genuine: model x=0 samples u2, x=1 samples u1 */
+	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
 
 	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
 	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
@@ -281,6 +278,17 @@ static void HeldBlockRenderer_DigAnimation(void) {
 	held_entity.Position.z -= sinHalfCircle            * 0.2f;
 
 	sinHalfCircleWeird = Math_SinF(t * t * MATH_PI);
+	if (IndevTest_Enabled) {
+		/* genuine Indev ItemRenderer swing: a downward CHOP - the dominant
+		    80 degrees is around X (pitch), plus 20-degree yaw/roll accents
+		    (glRotatef -20 y, -20 z, -80 x after the base rotY 45). The
+		    classic-mode branch below instead yaws the held block sideways,
+		    which read wrong for directional tools like the pickaxe. */
+		held_entity.RotY -= sinHalfCircleWeird    * 20.0f;
+		held_entity.RotZ -= Math_SinF(sqrtLerpPI) * 20.0f;
+		held_entity.RotX -= Math_SinF(sqrtLerpPI) * 80.0f;
+		return;
+	}
 	held_entity.RotY  -= Math_SinF(sqrtLerpPI) * 80.0f;
 	held_entity.Yaw   -= Math_SinF(sqrtLerpPI) * 80.0f;
 	held_entity.RotX  += sinHalfCircleWeird    * 20.0f;
