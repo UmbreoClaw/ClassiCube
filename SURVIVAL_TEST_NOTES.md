@@ -1,6 +1,85 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Generator round 2: Assembling pass, floating basin, spawn height (latest)
+## SESSION LOG - Generator round 3: BIT-EXACT parity with genuine Java (latest)
+
+User asked to perfect the generator "to a tee". The standard adopted: for the
+same seed, the C port must produce a BYTE-IDENTICAL block array to the genuine
+in-20100223 LevelGenerator at every phase boundary. It now does.
+
+### Verification harness (how to reproduce)
+- **Java oracle**: the genuine LevelGenerator/World/Light/Block classes from
+  /tmp/indev_eagler compiled standalone with entity/item stubs, at
+  scratchpad/oracle (`java -cp out Main <seed> <type> <theme> <W> <L> <H> <dir>`).
+  Three patches only, all seed-determinism: LevelGenerator.setSeed(seed),
+  World.load()'s `new Random()` -> seed+1, findSpawn's `new Random()` -> seed+2.
+  A Dump IProgressUpdate snapshots blocksByteArray at every
+  displayLoadingString - 13 phase dumps per run (more on multi-layer floating).
+- **C side**: linux-only env hooks in IndevGen.c - CC_INDEVGEN_SEED forces the
+  seed in Prepare, CC_INDEVGEN_DUMP=dir snapshots Gen_Blocks at every
+  IndevGen_SetState in the same numbering. scratchpad/parity_run.sh drives the
+  rig (xdotool) per config; parity_diff.py compares (remapping engine torch
+  70->genuine 50, diamond 93->56).
+- **Results**: ALL PHASES IDENTICAL for island/12345, inland/777,
+  floating/4242, flat/555, hell-island/666, paradise-inland/888,
+  woods-island/999 (51 tree passes), deep-floating 64x64x256/31337
+  (5 stacked layers, 29 phase dumps). Raising through Spawning, byte for byte.
+
+### Bugs found and fixed to get there
+1. **min() macro re-evaluation in LavaGen** - `min(Random_Next(..),
+   Random_Next(..))` expands both args twice, drawing 6-7 ints instead of
+   genuine's strict left-to-right 4. Desynced the stream from Melting onward.
+   Now draws d1..d4 explicitly.
+2. **MathHelper sine table** - carve/ore worms now use the genuine 65536-entry
+   float table (sin(f)=table[(int)(f*10430.378F)&0xFFFF], cos +16384) instead
+   of libm sinf/cosf. TRAPS: ExtMath's Math_Sin is a float-precision fake
+   (wraps Math_SinF), and MATH_PI is a FLOAT literal - the table init needs
+   __builtin_sin with a true double pi or entries differ by 1 ulp (seen as a
+   single flipped cave-boundary cell on seed 777). Verified glibc sin ==
+   OpenJDK StrictMath.sin == Math.sin bit-exactly across all 65536 entries.
+3. **Double vs float precision** in Raising/Soiling: genuine Math.abs/
+   Math.sqrt/Math.signum run in DOUBLE (island edge falloff, floating
+   cliff cut) with the quirky `(double)1.2F` constant; float versions shifted
+   (int) casts off by one occasionally. Also all pi-in-float-chains use
+   (float)Math.PI = 3.1415927f, not double MATH_PI.
+4. **defaultFluid is the MOVING liquid** - Assembling's border fluid band is
+   waterMoving(8)/lavaMoving(10), not the still ids.
+5. **Three RNG streams like genuine**: the seeded generator rand (terrain,
+   positions); World.random, recreated in load() at the END of Assembling
+   (one nextInt burned for randId) - drives tree SHAPES and item-drop rolls;
+   findSpawn's own fresh Random. Previously one stream did everything, so
+   findSpawn perturbed the tree/flower sequence.
+6. **Genuine World-semantics replica (WR_* in IndevGen.c)** for Building/
+   Planting: World.generate()'s one-time light init (heightMap by
+   lightOpacity scan - water 3, lava 255, leaves 1, opaque 255; light nibble
+   = y>=heightMap ? skylightSubtracted : 0, max blockLightValue; theme
+   skylight hell 7 / woods 12 / else 15) - light updates after that are only
+   QUEUED until the Lighting phase, so every planting pass reads this static
+   snapshot. setBlock refuses the outermost map shell; setBlockWithNotify
+   fires the neighbour reactions that matter during gen: sand/gravel
+   tryToFall (with genuine's coordinate-CLAMPING getBlockId reads and the
+   fall-out-of-world vanish), flowers/mushrooms popping when canBlockStay
+   fails (burning 4 World.random floats each), still liquid waking to MOVING
+   liquid (canFlow + sponge scan) and water<->lava contact turning to stone.
+   growGrassOnDirt converts EVERY lit dirt in the volume (not just surface).
+   Flowers use canBlockStay (light>=8, or >=4 with sky; mushrooms light<=13
+   on opaque) - a fresh tree canopy does NOT block them because the light
+   snapshot predates the trees, a genuine quirk faithfully preserved.
+7. **findSpawn clearance/foundation** use genuine Material.isSolid /
+   opaqueCubeLookup with CLAMPED out-of-range reads (not skip-as-air).
+8. Ores run under the "Carving.." banner (no separate "Mining.." phase);
+   Lighting/Spawning announced for phase parity.
+
+### Still intentionally different from genuine (documented, gameplay-level)
+- Engine block ids: torch 70 (genuine 50), diamond ore 93 (genuine 56) -
+  remapped at .mclevel save/load; block ARRAYS otherwise identical.
+- Classic cross-mode substitutions remain: coal for diamond ore, no house
+  torches (c0.30 purity).
+- House torches are floor-model; genuine metadata would wall-mount them
+  (onBlockPlaced picks metadata 1/2 against the house wall) - cosmetic,
+  metadata is outside the block array.
+- Mob spawning (1000 MobSpawner passes) is entities only, runs post-load.
+
+## SESSION LOG - Generator round 2: Assembling pass, floating basin, spawn height
 
 User reports after testing the generator: floating maps still had "dirt at the
 bottom" instead of an empty basin with bedrock, and the spawn put your head
