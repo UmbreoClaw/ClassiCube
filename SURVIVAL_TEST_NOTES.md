@@ -2,6 +2,23 @@
 
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
+### SOLVED: farmland was full-height, burying the crop planes' bottom row
+The user called it: genuine BlockFarmland is setBlockBounds(0,0,0, 1,
+15/16, 1) - the block sits 1/16 LOW, and the crop planes sink that same
+1/16 to rest flush on it. Our farmland was a full cube, so the bottom
+1/16 of every crop plane - the texture row holding stage 0's tiny
+sprout dots - rendered INSIDE the farmland block. That's exactly why
+freshly planted seeds showed ~5 centre marks instead of genuine's ~12
+spread ones (only the taller centre cluster cleared the surface).
+Fix: farmland (83/84) MaxBB.y = 15/16 (re-registered after define).
+Bonus fidelity: farmland now renders recessed with the neighbour lip,
+and walking on it sits you 1/16 lower, like genuine.
+Rig-verified with a 3x3 stage-0 patch: dense even sprout grid across
+every block, matching the genuine reference screenshot; a solid
+red/yellow tracer tile also confirmed all four "#" planes render
+full-span from every angle (the earlier "half-width single wall"
+reads were corner-view foreshortening of the symmetric planes).
+
 ### Crop render deep-verification (round 4 - renderer confirmed correct)
 Full instrumented investigation after the user still saw sparse stage-0
 sprouts on the stamped build. Method: debug prints in AddSpriteVertices/

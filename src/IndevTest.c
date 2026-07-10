@@ -581,8 +581,18 @@ static void IndevBlocks_Define(void) {
 	/*  hardness dirt-like (0.6s). Only obtainable by hoeing - not placeable. */
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND,     "Farmland", 116, 2, 2, 2, SOUND_GRAVEL, 12);
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND_WET, "Farmland", 115, 2, 2, 2, SOUND_GRAVEL, 12);
-	Blocks.CanPlace[INDEV_BLOCK_FARMLAND]     = false;
-	Blocks.CanPlace[INDEV_BLOCK_FARMLAND_WET] = false;
+	/* BlockFarmland.setBlockBounds(0, 0, 0, 1, 15/16, 1): genuine farmland
+	    sits 1/16 LOWER than a full block. The crop planes sink that same
+	    1/16 to rest flush on it - with a full-cube farmland, the bottom
+	    texture row of every crop plane (where stage 0's tiny sprout dots
+	    live) was buried inside the block, which is why freshly planted
+	    seeds looked half-missing compared to genuine (user-diagnosed!). */
+	for (k = 0; k < 2; k++) {
+		BlockID id = (BlockID)(INDEV_BLOCK_FARMLAND + k);
+		Blocks.MaxBB[id].y  = 15.0f / 16.0f;
+		Blocks.CanPlace[id] = false;
+		Block_DefineCustom(id, false);
+	}
 
 	/* Indev rebalanced the CLASSIC blocks' hardness (Block.java setHardness
 	    registrations, x20 = our tick units). Applied only here - the c0.30
