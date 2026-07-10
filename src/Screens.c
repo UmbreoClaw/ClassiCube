@@ -2479,7 +2479,7 @@ void InventoryScreen_Hide(void) {
 
 /* Displayed block-picture slots: storage + hotbar row + craft grid + open */
 /*  container (chest 27/furnace 3) + result + cursor. */
-#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_SLOTS + 2)
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_SLOTS + SURVIVAL_ARMOR_SLOTS + 2)
 #define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
 #define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
@@ -2585,6 +2585,23 @@ static void SurvivalInv_ContainerSlotXY(struct SurvivalInvScreen* s, int i, int*
 	*oy = s->panelY + (int)((18 + (i / 9) * 18) * f);
 }
 
+/* Armor slots exist on the pocket inventory only (genuine GuiInventory) - */
+/*  the workbench/chest/furnace screens have none. */
+static int SurvivalInv_ArmorCells(void) {
+	if (!IndevTest_Enabled)                           return 0;
+	if (IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return 0;
+	if (SurvivalTest_CraftDim() != 2)                 return 0;
+	return SURVIVAL_ARMOR_SLOTS;
+}
+
+/* Genuine GuiInventory: x=8, y=8+row*18 with the HELMET on top. The armor */
+/*  array is [0] boots .. [3] helmet, so screen row = 3 - array index. */
+static void SurvivalInv_ArmorSlotXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	float f = s->texF;
+	*ox = s->panelX + (int)(8 * f);
+	*oy = s->panelY + (int)((8 + (3 - i) * 18) * f);
+}
+
 /* Slot under (mx,my): storage 9..35, craft 36.., container 45.., the result */
 /*  sentinel, or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
@@ -2602,6 +2619,10 @@ static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 		SurvivalInv_ContainerSlotXY(s, i, &x, &y);
 		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CONTAINER_BASE + i;
 	}
+	for (i = 0; i < SurvivalInv_ArmorCells(); i++) {
+		SurvivalInv_ArmorSlotXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_ARMOR_BASE + i;
+	}
 	if (craft > 0 &&
 		SurvivalInv_InSlot(mx, my, s->resultX, s->resultY, s->slotSize)) return SURVINV_RESULT_HIT;
 	return -1;
@@ -2611,6 +2632,9 @@ static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
 	if (slot == SURVINV_RESULT_HIT) {
 		*id = SurvivalTest_CraftResult(count);
+	} else if (slot >= SURVIVAL_ARMOR_BASE) {
+		*id    = SurvivalTest_ArmorId(slot - SURVIVAL_ARMOR_BASE);
+		*count = SurvivalTest_ArmorCount(slot - SURVIVAL_ARMOR_BASE);
 	} else if (slot >= SURVIVAL_CONTAINER_BASE) {
 		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
 		*id    = p->id;
@@ -2627,6 +2651,7 @@ static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
 /* Pixel origin of any displayed slot index (storage/craft/container/result). */
 static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x, int* y) {
 	if (slot == SURVINV_RESULT_HIT)            { *x = s->resultX; *y = s->resultY; }
+	else if (slot >= SURVIVAL_ARMOR_BASE)      SurvivalInv_ArmorSlotXY(s, slot - SURVIVAL_ARMOR_BASE, x, y);
 	else if (slot >= SURVIVAL_CONTAINER_BASE)  SurvivalInv_ContainerSlotXY(s, slot - SURVIVAL_CONTAINER_BASE, x, y);
 	else if (slot >= SURVIVAL_CRAFT_BASE)      SurvivalInv_CraftXY(s, slot - SURVIVAL_CRAFT_BASE, x, y);
 	else                                       SurvivalInv_SlotXY(s, slot, x, y);
@@ -2643,7 +2668,7 @@ static int SurvivalInv_DisplayCount(void) {
 	int n = SURVIVAL_HOTBAR_SLOTS + SURVINV_STORAGE_SLOTS;
 	if (!IndevTest_Enabled) return n;
 	if (SurvivalInv_ContainerCells()) return n + SurvivalInv_ContainerCells();
-	return n + SurvivalInv_CraftCells() + 1;
+	return n + SurvivalInv_CraftCells() + 1 + SurvivalInv_ArmorCells();
 }
 static int SurvivalInv_DisplaySlot(int n) {
 	int cells = SurvivalInv_CraftCells(), cont = SurvivalInv_ContainerCells();
@@ -2653,7 +2678,9 @@ static int SurvivalInv_DisplaySlot(int n) {
 	n -= SURVINV_STORAGE_SLOTS;
 	if (cont)                              return SURVIVAL_CONTAINER_BASE + n;
 	if (n < cells)                         return SURVIVAL_CRAFT_BASE + n;
-	return SURVINV_RESULT_HIT;
+	n -= cells;
+	if (n == 0)                            return SURVINV_RESULT_HIT;
+	return SURVIVAL_ARMOR_BASE + (n - 1);
 }
 
 /* Rendered pixel width of a stack count - summed from the atlas' per-glyph */
@@ -2671,7 +2698,11 @@ static void SurvivalInv_SlotDamage(int slot, int* dmg, int* maxDmg) {
 	*dmg = 0; *maxDmg = 0;
 	if (slot == SURVINV_RESULT_HIT) return;
 
-	if (slot >= SURVIVAL_CONTAINER_BASE) {
+	if (slot >= SURVIVAL_ARMOR_BASE) {
+		id     = SurvivalTest_ArmorId(slot - SURVIVAL_ARMOR_BASE);
+		count  = SurvivalTest_ArmorCount(slot - SURVIVAL_ARMOR_BASE);
+		*dmg   = SurvivalTest_ArmorDamage(slot - SURVIVAL_ARMOR_BASE);
+	} else if (slot >= SURVIVAL_CONTAINER_BASE) {
 		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
 		id = p->id; count = p->count; *dmg = p->damage;
 	} else if (slot >= SURVIVAL_CRAFT_BASE) {
@@ -2682,6 +2713,7 @@ static void SurvivalInv_SlotDamage(int slot, int* dmg, int* maxDmg) {
 	}
 	if (count <= 0) { *dmg = 0; return; }
 	*maxDmg = IndevTest_ToolMaxDamage(id);
+	if (!*maxDmg) *maxDmg = IndevTest_ArmorMaxDamage(id);
 }
 
 /* The paperdoll is a static, unlit preview - just needs a constant base color. */
@@ -3079,6 +3111,22 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
 
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			itex.x = (short)(slotX + inset);
+			itex.y = (short)(slotY + inset);
+			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
+			Texture_Render(&itex);
+		}
+
+		/* Slot.getBackgroundIconIndex: empty armor slots show their piece
+		    silhouette from items.png (icon 15 + (piece << 4)) */
+		for (i = 0; i < SurvivalInv_ArmorCells(); i++) {
+			int icon;
+			if (SurvivalTest_ArmorCount(i) > 0) continue;
+			icon = 15 + ((3 - i) << 4);
+			itex.uv.u1 = (icon % 16)     / 16.0f; itex.uv.v1 = (icon / 16)     / 16.0f;
+			itex.uv.u2 = (icon % 16 + 1) / 16.0f; itex.uv.v2 = (icon / 16 + 1) / 16.0f;
+
+			SurvivalInv_ArmorSlotXY(s, i, &slotX, &slotY);
 			itex.x = (short)(slotX + inset);
 			itex.y = (short)(slotY + inset);
 			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;

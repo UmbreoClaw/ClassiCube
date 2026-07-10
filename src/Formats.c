@@ -1493,7 +1493,10 @@ static struct {
 	int dropId, dropCount;
 	float px, py, pz, yaw, pitch;
 	int health, score;
-	cc_uint16 ids[SURVIVAL_INV_SLOTS]; cc_int16 counts[SURVIVAL_INV_SLOTS], dmg[SURVIVAL_INV_SLOTS];
+	/* main inventory, then the 4 armor slots (saved as Slot 100..103) */
+	cc_uint16 ids[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
+	cc_int16  counts[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
+	cc_int16  dmg[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
 } mcl_ent;
 static struct {
 	int kind; /* INDEV_CONTAINER_* resolved from the id string */
@@ -1532,8 +1535,11 @@ static void MCLevel_CommitItem(cc_bool toEntity) {
 		mcl_item.id = IndevTest_BlockFromIndev((BlockRaw)mcl_item.id);
 	}
 	if (toEntity) {
-		/* armor slots are saved as 100-103; no armor system yet - skipped */
-		if (slot >= 0 && slot < SURVIVAL_INV_SLOTS) {
+		/* armor slots are saved as 100-103, stored after the main slots */
+		if (slot >= 100 && slot < 100 + SURVIVAL_ARMOR_SLOTS) {
+			slot = SURVIVAL_INV_SLOTS + (slot - 100);
+		}
+		if (slot >= 0 && slot < SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS) {
 			mcl_ent.ids[slot]    = (cc_uint16)mcl_item.id;
 			mcl_ent.counts[slot] = (cc_int16)mcl_item.count;
 			mcl_ent.dmg[slot]    = (cc_int16)mcl_item.damage;
@@ -1553,6 +1559,10 @@ static void MCLevel_CommitEntity(void) {
 	if (mcl_ent.isPlayer && SurvivalTest_Enabled) {
 		for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 			SurvivalTest_RestoreSlot(i, mcl_ent.ids[i], mcl_ent.counts[i], mcl_ent.dmg[i]);
+		}
+		for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+			SurvivalTest_RestoreSlot(100 + i, mcl_ent.ids[SURVIVAL_INV_SLOTS + i],
+				mcl_ent.counts[SURVIVAL_INV_SLOTS + i], mcl_ent.dmg[SURVIVAL_INV_SLOTS + i]);
 		}
 		SurvivalTest_RestoreStats(mcl_ent.health, mcl_ent.score);
 		/* Reappear exactly where the level was saved (entity Pos is at eye */
@@ -1868,6 +1878,9 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		for (n = 0; n < SURVIVAL_INV_SLOTS; n++) {
 			if (SurvivalTest_SlotCount(n) > 0) invCount++;
 		}
+		for (n = 0; n < SURVIVAL_ARMOR_SLOTS; n++) {
+			if (SurvivalTest_ArmorCount(n) > 0) invCount++;
+		}
 
 		cur = Nbt_WriteString(cur, "id", &localPlayer);
 		fv[0] = p->Base.Position.x; fv[1] = p->Base.Position.y + 1.62f; fv[2] = p->Base.Position.z;
@@ -1892,6 +1905,12 @@ cc_result MCLevel_Save(struct Stream* stream) {
 			if (SurvivalTest_SlotCount(n) <= 0) continue;
 			cur = MCLevel_WriteItem(cur, n, SurvivalTest_SlotId(n),
 					SurvivalTest_SlotCount(n), SurvivalTest_SlotDamage(n));
+		}
+		/* worn armor uses the genuine Slot 100+index numbering */
+		for (n = 0; n < SURVIVAL_ARMOR_SLOTS; n++) {
+			if (SurvivalTest_ArmorCount(n) <= 0) continue;
+			cur = MCLevel_WriteItem(cur, 100 + n, SurvivalTest_ArmorId(n),
+					SurvivalTest_ArmorCount(n), SurvivalTest_ArmorDamage(n));
 		}
 		*cur++ = NBT_END; /* close player compound */
 		if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;

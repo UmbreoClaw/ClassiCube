@@ -1,6 +1,64 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Generator round 3: BIT-EXACT parity with genuine Java (latest)
+## SESSION LOG - Armor system part 1: mechanics + slots + GUI + persistence (latest)
+
+Roadmap stage 2. Everything below is Indev-gated; c0.30 mode untouched.
+
+### What landed
+- **ItemArmor helpers** (IndevTest.c): the 20 armor items already existed in
+  the item table (local ids 42-61, param = piece 0 helmet..3 boots).
+  IndevTest_ArmorPiece/ArmorMaxDamage/ArmorReduce implement genuine
+  ItemArmor: reduce {3,8,6,3} by piece, maxDamage {11,16,15,13}[piece]*3<<tier
+  with set tiers cloth 0 / chain 1 / iron 2 / diamond 3 / GOLD 1 (gold armor
+  genuinely has chain-tier durability).
+- **Armor slots**: st_armor[4] in genuine armorInventory order ([0] boots ..
+  [3] helmet, piece = 3-index), addressed as extended slots 72-75
+  (SURVIVAL_ARMOR_BASE). SlotPtr/SlotClick route them; SlotArmor.isItemValid
+  is enforced in SlotClick (placement/swap needs the matching piece; taking
+  out is always allowed). ResetState/Respawn clear them; death drops them
+  (genuine dropAllItems includes armor).
+- **Damage absorption** (SurvivalTest_Damage, Indev branch): genuine
+  EntityPlayer.attackEntityFrom - NO delta damage during the invulnerability
+  window (c0.30's ghost-heart delta stays c0.30-only), armorValue =
+  (sumReduce-1)*remainingDurability/totalMax+1 (getPlayerArmorValue), scaled
+  = dmg*(25-armorValue)+remainder, applied dmg = scaled/25 with scaled%25
+  carried in damageRemainder. Every worn piece takes the RAW damage as wear
+  (breaking at maxDamage), even when the final result rounds to 0.
+  Difficulty scaling is skipped (fixed normal difficulty).
+- **Recipes**: RecipesArmor generated family - helmet "XXX/X X", chest
+  "X X/XXX/XXX", legs "XXX/X X/X X", boots "X X/X X" from gray cloth/iron
+  ingot/diamond/gold ingot. CHAIN armor (genuinely crafted from FIRE blocks)
+  is deferred until BlockFire exists.
+- **GUI** (SurvivalInvScreen): 4 armor slots at genuine GuiInventory
+  positions (x=8, y=8+row*18, helmet on top) on the POCKET inventory only
+  (workbench/chest/furnace GUIs have none, like genuine); empty slots draw
+  the items.png piece silhouettes (Slot.getBackgroundIconIndex = 15+(piece
+  <<4)); durability bars work on armor; full drag/drop with the type gate.
+- **.mclevel persistence**: armor saved/loaded as the genuine Slot 100+index
+  numbering under the player's Inventory list, both directions.
+
+### Rig verification
+- NBT-injected a full iron set + spare diamond chestplate into a save:
+  loaded correctly into the slots (gdb-verified st_armor contents), sprites
+  + silhouettes render at genuine positions, helmet picked up onto cursor,
+  dropping it on the chest slot REJECTED (state unchanged), resave
+  round-trips Slot 100-103 byte-correctly.
+- Absorption: TNT blast dealing 8 raw damage against full pristine iron
+  (armorValue 20) cost exactly 1 HP with damageRemainder 15 and +8 wear on
+  all four pieces - matching the genuine 25ths math to the digit.
+- Rig texpack default.zip was missing items.png/inventory.png etc (why item
+  sprites looked absent in earlier screenshots) - now added to the rig copy.
+
+### Still to do (armor part 2)
+- Worn-armor RENDERING: paperdoll + third-person overlay boxes with the
+  armor textures (armor/{cloth,chain,iron,diamond,gold}_1/_2.png from the
+  b1.7.3 jar, same 64x32 layout Indev uses), helmet=head, chest=body+arms,
+  legs=legs (layer _2), boots=inflated legs. Needs texpack asset patches +
+  a per-piece humanoid overlay model.
+- Genuine chain-armor recipe once BlockFire lands (stage 4).
+- HUD: genuine in-20100223 GuiIngame has NO armor bar - nothing to add.
+
+## SESSION LOG - Generator round 3: BIT-EXACT parity with genuine Java
 
 User asked to perfect the generator "to a tee". The standard adopted: for the
 same seed, the C port must produce a BYTE-IDENTICAL block array to the genuine

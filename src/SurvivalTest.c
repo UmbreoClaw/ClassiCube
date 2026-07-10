@@ -140,6 +140,10 @@ static int ST_MaxStack(cc_uint16 id) {
 	return id < ST_MAX_IDS ? st_maxStack[id] : 1;
 }
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
+/* InventoryPlayer.armorInventory: [0] boots .. [3] helmet (piece = 3-index) */
+static struct SurvivalSlot st_armor[SURVIVAL_ARMOR_SLOTS];
+/* EntityPlayer.damageRemainder - the sub-1HP carry of armor-scaled damage */
+static int st_damageRemainder;
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
 static int st_invVersion;
 static RNGState st_dropRng;
@@ -1007,6 +1011,12 @@ static void SurvivalTest_DropInventory(void) {
 		if (st_inv[i].id == BLOCK_AIR || st_inv[i].count <= 0) continue;
 		SurvivalTest_SpawnDropAt(pos, st_inv[i].id, st_inv[i].count);
 	}
+	/* genuine dropAllItems drops the worn armor too */
+	for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+		if (st_armor[i].id == BLOCK_AIR || st_armor[i].count <= 0) continue;
+		SurvivalTest_SpawnDropAt(pos, st_armor[i].id, st_armor[i].count);
+		st_armor[i].id = BLOCK_AIR; st_armor[i].count = 0; st_armor[i].damage = 0;
+	}
 }
 
 /* Mob.knockback(cause, ...): halve the current velocity, then shove 0.4 */
@@ -1031,12 +1041,52 @@ static void SurvivalTest_Knockback(struct Entity* e, const Vec3* attackerPos) {
 /*  full and re-opens the window. attackerPos is NULL for environmental damage */
 /*  (fall/lava/drown/poison/explosion), matching hurt(null, damage) - which */
 /*  also means no knockback and a random 0/180 hurtDir. */
+/* InventoryPlayer.getPlayerArmorValue: the summed damageReduceAmount of worn
+    pieces, weighted by their remaining durability: (sum-1)*remaining/max + 1 */
+static int SurvivalTest_ArmorValue(void) {
+	int reduce = 0, remain = 0, max = 0, i, m;
+	for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+		if (st_armor[i].count <= 0) continue;
+		m = IndevTest_ArmorMaxDamage(st_armor[i].id);
+		if (!m) continue;
+		remain += m - st_armor[i].damage;
+		max    += m;
+		reduce += IndevTest_ArmorReduce(st_armor[i].id);
+	}
+	return max == 0 ? 0 : (reduce - 1) * remain / max + 1;
+}
+
 static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	if (!SurvivalTest_Enabled || !p) return;
 	if (st_isDead)             return;
 	if (st_godMode)            return; /* debug invincibility - blocks every damage source */
 	if (damage <= 0)           return;
+
+	if (IndevTest_Enabled) {
+		/* EntityPlayer.attackEntityFrom: unlike c0.30 there is NO delta
+		    damage during the invulnerability window - hits simply miss - and
+		    armor absorbs in 25ths with the remainder carried between hits.
+		    Every worn piece is worn down by the raw damage, even when the
+		    final result rounds to zero. */
+		int scaled, k;
+		if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) return;
+
+		scaled = damage * (25 - SurvivalTest_ArmorValue()) + st_damageRemainder;
+		for (k = 0; k < SURVIVAL_ARMOR_SLOTS; k++) {
+			if (st_armor[k].count <= 0) continue;
+			if (IndevTest_ArmorPiece(st_armor[k].id) < 0) continue;
+			st_armor[k].damage += (cc_int16)damage;
+			if (st_armor[k].damage > IndevTest_ArmorMaxDamage(st_armor[k].id)) {
+				st_armor[k].id = BLOCK_AIR; st_armor[k].count = 0; st_armor[k].damage = 0;
+			}
+		}
+		st_invVersion++;
+
+		damage             = scaled / 25;
+		st_damageRemainder = scaled % 25;
+		if (damage == 0) return;
+	}
 
 	if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) {
 		if (st_lastHealth - damage >= SurvivalTest_Health) return;
@@ -4558,14 +4608,23 @@ void    SurvivalTest_InvChanged(void)  { st_invVersion++; }
 static void SurvivalTest_SyncHotbar(void);
 
 /* .mclevel load: restores one inventory slot (id 0 clears the slot). */
+/* Slots 100..103 are the genuine armor numbering (armorInventory[slot-100]). */
 void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage) {
+	struct SurvivalSlot* p;
 	if (!SurvivalTest_Enabled) return;
-	if (slot < 0 || slot >= SURVIVAL_INV_SLOTS) return;
 	if (count <= 0) id = 0;
 
-	st_inv[slot].id     = (cc_uint16)id;
-	st_inv[slot].count  = (cc_int16)(id ? count : 0);
-	st_inv[slot].damage = (cc_int16)damage;
+	if (slot >= 100 && slot < 100 + SURVIVAL_ARMOR_SLOTS) {
+		p = &st_armor[slot - 100];
+	} else if (slot >= 0 && slot < SURVIVAL_INV_SLOTS) {
+		p = &st_inv[slot];
+	} else {
+		return;
+	}
+
+	p->id     = (cc_uint16)id;
+	p->count  = (cc_int16)(id ? count : 0);
+	p->damage = (cc_int16)damage;
 	SurvivalTest_SyncHotbar();
 }
 
@@ -4618,12 +4677,18 @@ void SurvivalTest_SetCraftDim(int dim) {
 /*  (chest/furnace tile entity). (The result slot is virtual and handled by */
 /*  SurvivalTest_CraftTake, not this.) */
 static struct SurvivalSlot* SurvivalTest_SlotPtr(int idx) {
+	if (idx >= SURVIVAL_ARMOR_BASE && idx < SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS)
+		return &st_armor[idx - SURVIVAL_ARMOR_BASE];
 	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_SLOTS)
 		return IndevTest_ContainerSlot(idx - SURVIVAL_CONTAINER_BASE);
 	if (idx >= SURVIVAL_CRAFT_BASE && idx < SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
 		return &st_craft[idx - SURVIVAL_CRAFT_BASE];
 	return &st_inv[idx];
 }
+
+int SurvivalTest_ArmorId(int i)     { return st_armor[i].id; }
+int SurvivalTest_ArmorCount(int i)  { return st_armor[i].count; }
+int SurvivalTest_ArmorDamage(int i) { return st_armor[i].damage; }
 
 /* The cursor-held stack (InventoryPlayer.itemStack) - what the mouse is */
 /*  carrying between slot clicks in the inventory/crafting screen. */
@@ -4641,6 +4706,14 @@ void SurvivalTest_SlotClick(int idx, cc_bool rightClick) {
 	struct SurvivalSlot tmp;
 	int space, moved;
 	if (!SurvivalTest_Enabled) return;
+
+	/* SlotArmor.isItemValid: an armor slot only ACCEPTS its matching piece
+	    (array index 0 boots .. 3 helmet, piece type = 3 - index). Taking
+	    out is always allowed. */
+	if (idx >= SURVIVAL_ARMOR_BASE && idx < SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS &&
+		st_cursor.count > 0 &&
+		IndevTest_ArmorPiece(st_cursor.id) != 3 - (idx - SURVIVAL_ARMOR_BASE)) return;
+
 	p = SurvivalTest_SlotPtr(idx);
 
 	if (st_cursor.count <= 0) {
@@ -5489,6 +5562,12 @@ void SurvivalTest_Respawn(void) {
 		st_inv[i].id = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
+	for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+		st_armor[i].id = BLOCK_AIR;
+		st_armor[i].count = 0;
+		st_armor[i].damage = 0;
+	}
+	st_damageRemainder = 0;
 	SurvivalTest_SyncHotbar();
 
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
@@ -5531,6 +5610,12 @@ static void SurvivalTest_ResetState(void) {
 		st_inv[i].id = BLOCK_AIR;
 		st_inv[i].count = 0;
 	}
+	for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+		st_armor[i].id = BLOCK_AIR;
+		st_armor[i].count = 0;
+		st_armor[i].damage = 0;
+	}
+	st_damageRemainder = 0;
 	/* SurvivalGameMode.apply(Player): the player always starts with 10 TNT */
 	/*  in the last hotbar slot - this was missing entirely before. */
 	st_inv[8].id = BLOCK_TNT;

@@ -43,6 +43,11 @@ cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v
 int IndevTest_ItemFoodHeal(int id);
 /* ItemTool.maxDamage (32 << tier) for damageable tools, else 0. */
 int IndevTest_ToolMaxDamage(int id);
+/* ItemArmor: piece worn (0 helmet / 1 chest / 2 legs / 3 boots), or -1 when
+    the id is not armor. MaxDamage/Reduce return 0 for non-armor ids. */
+int IndevTest_ArmorPiece(int id);
+int IndevTest_ArmorMaxDamage(int id);
+int IndevTest_ArmorReduce(int id);
 /* Mining speed multiplier of the held id against a block ((tier+1)*2 when */
 /*  the tool class is effective vs the block's material, else 1). */
 int IndevTest_MiningSpeed(int id, BlockID block);

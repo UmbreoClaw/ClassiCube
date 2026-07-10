@@ -198,6 +198,29 @@ int IndevTest_ToolMaxDamage(int id) {
 	return 0;
 }
 
+/* ItemArmor(id, tier, renderIndex, type): reduce {3,8,6,3} by piece and
+    maxDamage {11,16,15,13}[piece] * 3 << tier. Set tiers are cloth 0,
+    chain 1, iron 2, diamond 3, GOLD 1 (gold really has chain durability). */
+int IndevTest_ArmorPiece(int id) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	return (d && d->kind == ITEM_KIND_ARMOR) ? d->param : -1;
+}
+
+int IndevTest_ArmorMaxDamage(int id) {
+	static const cc_uint8 base[]  = { 11, 16, 15, 13 };
+	static const cc_uint8 tiers[] = { 0, 1, 2, 3, 1 };
+	int piece = IndevTest_ArmorPiece(id);
+	if (piece < 0) return 0;
+	return base[piece] * 3 << tiers[(id - 256 - 42) / 4];
+}
+
+int IndevTest_ArmorReduce(int id) {
+	static const cc_uint8 reduce[] = { 3, 8, 6, 3 };
+	int piece = IndevTest_ArmorPiece(id);
+	return piece < 0 ? 0 : reduce[piece];
+}
+
+
 /* ItemTool.getStrVsBlock: (tier+1)*2 against the tool's effective materials */
 /*  (approximated by dig-sound class), otherwise 1 - note gold tools are tier */
 /*  0 in Indev, i.e. WOOD speed. Returns 1 for non-tools/ineffective pairs. */
@@ -377,6 +400,35 @@ cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId,
 			if (Recipe_Matches(&r, grid, gw, gh)) {
 				*outId = r.result; *outCount = 1;
 				return true;
+			}
+		}
+	}
+
+	/* RecipesArmor (X = material): helmet "XXX/X X", chest "X X/XXX/XXX",
+	    legs "XXX/X X/X X", boots "X X/X X", from gray cloth / iron ingot /
+	    diamond / gold ingot. (Genuine chain armor is crafted from FIRE
+	    blocks - deferred until BlockFire exists in the Indev layer.) */
+	{
+		static const cc_uint16 armorMaterial[4] = { BLOCK_GRAY, R_ITEM(9), R_ITEM(8), R_ITEM(10) };
+		static const cc_uint8  armorSet[4]  = { 42, 50, 54, 58 }; /* cloth iron diamond gold */
+		static const cc_uint8  armorPatW[4] = { 3, 3, 3, 3 };
+		static const cc_uint8  armorPatH[4] = { 2, 3, 3, 2 };
+		for (m = 0; m < 4; m++) {
+			cc_uint16 X = armorMaterial[m];
+			const cc_uint16 pats[4][9] = {
+				{ X,X,X, X,0,X },        /* helmet 3x2 */
+				{ X,0,X, X,X,X, X,X,X }, /* chestplate 3x3 */
+				{ X,X,X, X,0,X, X,0,X }, /* leggings 3x3 */
+				{ X,0,X, X,0,X },        /* boots 3x2 */
+			};
+			for (t = 0; t < 4; t++) {
+				Mem_Copy(r.cells, pats[t], sizeof(r.cells));
+				r.w = armorPatW[t]; r.h = armorPatH[t];
+				r.result = (cc_uint16)R_ITEM(armorSet[m] + t); r.count = 1;
+				if (Recipe_Matches(&r, grid, gw, gh)) {
+					*outId = r.result; *outCount = 1;
+					return true;
+				}
 			}
 		}
 	}

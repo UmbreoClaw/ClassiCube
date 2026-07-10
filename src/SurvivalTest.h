@@ -56,6 +56,11 @@ extern int SurvivalTest_Health;
 /*  slots 45..71 (chest all 27; furnace uses 0=input 1=fuel 2=output). */
 #define SURVIVAL_CONTAINER_SLOTS 27
 #define SURVIVAL_CONTAINER_BASE  (SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
+/* Worn armor (InventoryPlayer.armorInventory), addressed as extended slots */
+/*  72..75 in genuine array order: [0] boots, [1] legs, [2] chest, [3] helmet */
+/*  (piece type = 3 - array index). Saved to .mclevel as Slot 100+index. */
+#define SURVIVAL_ARMOR_SLOTS 4
+#define SURVIVAL_ARMOR_BASE  (SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_SLOTS)
 
 /* One ItemStack: block id 0-255 / item id 256+ (shiftedIndex), count, and */
 /*  accumulated damage (tool wear). Shared with the Indev tile entity store. */
@@ -110,7 +115,12 @@ int SurvivalTest_HotbarCount(int slot);
 int SurvivalTest_InvVersion(void);
 /* Bumps the inventory version (for external mutators like the furnace tick). */
 void SurvivalTest_InvChanged(void);
+/* Worn armor piece in array slot 0..3 (0 boots .. 3 helmet). */
+int SurvivalTest_ArmorId(int i);
+int SurvivalTest_ArmorCount(int i);
+int SurvivalTest_ArmorDamage(int i);
 /* .mclevel load: restore one inventory slot / the saved player stats. */
+/* Slots 100..103 restore the armor array (the genuine save numbering). */
 void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage);
 void SurvivalTest_RestoreStats(int health, int score);
 /* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
