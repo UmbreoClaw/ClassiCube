@@ -59,10 +59,21 @@ inside the house ceiling.
   random-tick sand DOES rain and liberated pockets DO flood the basin over
   minutes - that is classic physics faithfully applied to a foreign map type,
   left as-is by the mode-purity mandate.
-- KNOWN MINOR: ~500 of ~2000 floating sand/gravel blocks still drop once
-  during world load in Indev mode (something activates them between EndGeneration
-  and the first saved frame - not the random tick loop, 0 diffs after). Track
-  down the load-time activation source later.
+- FOLLOW-UP RESOLVED: the "~500 sand/gravel drop once at load" artifact was
+  an artifact of the rig itself - the Indev-mode test ran a STALE binary (a
+  failed `sed && grep && cp` chain skipped the copy), confirmed by gdb:
+  Physics_DoFalling was reached from IndevTest_TickRandomBlocks, i.e. the
+  skip-list fix wasn't in the running build. Re-run with the checksummed
+  current binary: y=0 and y=1 completely EMPTY immediately after generation
+  and still empty ~2 minutes later; the only diffs in that window were 7
+  surface mushrooms dying in sunlight (authentic - mushrooms need darkness).
+  Nothing falls at load at all.
+- Genuine-authentic oddity seen while retesting: a Floating seed exhausted
+  findSpawn's 1,000,000 attempts (no 7x9 opaque foundation + clear interior
+  anywhere), so it used the genuine fallback ySpawn = height+100 - you
+  skydive onto the islands (and can die of fall damage or miss entirely).
+  Genuine does exactly this; generateHouse is bounds-checked/skipped for the
+  sky spawn, so nothing corrupts.
 - The earlier "255/garbage block ids in saves" scare was a parser off-by-one
   in my own analysis script (+14 instead of +13 after the 13-byte
   '\x07\x00\nBlockArray' tag), reading NBT metadata as blocks. Saves clean.
