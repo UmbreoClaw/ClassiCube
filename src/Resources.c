@@ -838,6 +838,13 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "furnace.png",   RESOURCE_TYPE_DATA }, /* gui/furnace.png from the beta jar (Indev furnace GUI) */
 	{ "container.png", RESOURCE_TYPE_DATA }, /* gui/container.png from the beta jar (Indev chest GUI) */
 	{ "sun.png",       RESOURCE_TYPE_DATA }, /* terrain/sun.png from the beta jar (Indev sky) */
+	/* armor/*.png from the beta jar (byte-identical to the authentic
+	    in-20100223 armor overlays) - the Indev worn-armor renderer */
+	{ "armor_cloth_1.png",   RESOURCE_TYPE_DATA }, { "armor_cloth_2.png",   RESOURCE_TYPE_DATA },
+	{ "armor_chain_1.png",   RESOURCE_TYPE_DATA }, { "armor_chain_2.png",   RESOURCE_TYPE_DATA },
+	{ "armor_iron_1.png",    RESOURCE_TYPE_DATA }, { "armor_iron_2.png",    RESOURCE_TYPE_DATA },
+	{ "armor_diamond_1.png", RESOURCE_TYPE_DATA }, { "armor_diamond_2.png", RESOURCE_TYPE_DATA },
+	{ "armor_gold_1.png",    RESOURCE_TYPE_DATA }, { "armor_gold_2.png",    RESOURCE_TYPE_DATA },
 	{ "moon.png",      RESOURCE_TYPE_DATA }, /* terrain/moon.png from the beta jar (Indev sky) */
 	{ "animations.txt", RESOURCE_TYPE_CONST, sizeof(ANIMS_TXT) - 1, (cc_uint8*)ANIMS_TXT },
 #ifdef CC_BUILD_MOBILE
@@ -958,6 +965,8 @@ static cc_result ClassicPatcher_ExtractFiles(struct HttpRequest* req) {
 /*  from its terrain.png into the FREE atlas cells reserved for them (rows */
 /*  6-7, indices 96+ - see SURVIVAL_TEST_NOTES.md's reservation table). */
 static cc_bool BetaPatcher_SelectEntry(const cc_string* path) {
+	static const cc_string armorPrefix = String_FromConst("armor/");
+	if (String_CaselessStarts(path, &armorPrefix)) return true;
 	return String_CaselessEqualsConst(path, "gui/items.png")
 		|| String_CaselessEqualsConst(path, "gui/inventory.png")
 		|| String_CaselessEqualsConst(path, "gui/crafting.png")
@@ -989,11 +998,17 @@ static const struct BetaTile { cc_uint8 sx, sy, dx, dy; } beta_tiles[] = {
 };
 
 static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* data, struct ZipEntry* source) {
-	static const cc_string itemsPng = String_FromConst("items.png");
+	static const cc_string itemsPng    = String_FromConst("items.png");
+	static const cc_string armorPrefix = String_FromConst("armor/");
+	cc_string basename = *path;
 	struct ResourceZipEntry* e;
 	struct Bitmap bmp;
 	cc_result res;
 	int i;
+
+	if ((i = String_LastIndexOf(&basename, '/')) >= 0) {
+		basename = String_UNSAFE_SubstringAt(&basename, i + 1);
+	}
 
 	if (String_CaselessEqualsConst(path, "terrain.png")) {
 		res = Png_Decode(&bmp, data);
@@ -1010,6 +1025,15 @@ static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* 
 		return 0;
 	}
 
+	/* armor/cloth_1.png etc -> armor_cloth_1.png (flat names in the pack) */
+	if (String_CaselessStarts(path, &armorPrefix)) {
+		cc_string name; char nameBuffer[64];
+		String_InitArray(name, nameBuffer);
+		String_Format1(&name, "armor_%s", &basename);
+		e = ZipEntries_Find(&name);
+		if (!e) return 0; /* power.png and other unclaimed armor entries */
+		return ZipEntry_ExtractData(e, data, source);
+	}
 	if (String_CaselessEqualsConst(path, "gui/inventory.png")) {
 		static const cc_string invPng = String_FromConst("inventory.png");
 		e = ZipEntries_Find(&invPng);

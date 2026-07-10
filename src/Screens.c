@@ -26,6 +26,7 @@
 #include "Protocol.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "IndevArmor.h"
 #include "IndevGen.h"
 #include "IsometricDrawer.h"
 
@@ -2825,6 +2826,8 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	Gfx_SetFaceCulling(true);
 
 	Model_Render(s->doll.Model, &s->doll);
+	/* the paperdoll wears the player's armor, like genuine GuiInventory */
+	IndevArmor_Render(&s->doll);
 
 	Gfx_SetFaceCulling(false);
 	Gfx_SetAlphaBlending(true);

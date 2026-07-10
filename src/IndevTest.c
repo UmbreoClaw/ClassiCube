@@ -3,6 +3,7 @@
 #include "Options.h"
 #include "Chat.h"
 #include "SurvivalTest.h"
+#include "IndevArmor.h"
 #include "Funcs.h"
 #include "Graphics.h"
 #include "TexturePack.h"
@@ -1503,6 +1504,7 @@ static void OnInit(void) {
 
 	IndevItems_Seed();
 	IndevBlocks_Define();
+	IndevArmor_Register();
 	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&invgui_entry);
 	TextureEntry_Register(&craftgui_entry);

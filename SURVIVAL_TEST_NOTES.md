@@ -1,6 +1,60 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Armor system part 1: mechanics + slots + GUI + persistence (latest)
+## SESSION LOG - Armor part 2: worn-armor rendering + fuzz-verified math (latest)
+
+### Damage/wear calcs FORMALLY VERIFIED (user asked for this explicitly)
+scratchpad/ArmorFuzz.java pits a verbatim port of the genuine decompiled
+logic (EntityPlayer.attackEntityFrom + InventoryPlayer.getPlayerArmorValue +
+ItemStack.damageItem) against an exact transcription of our C implementation:
+random loadouts over all 5 sets with random pre-wear and missing pieces,
+random 1-30 hit sequences of 1-20 damage, comparing health, damageRemainder,
+per-piece wear and breakage after every hit. **6,000,000 trials across 3
+seeds: zero mismatches.** (Breakage semantics included: a piece survives at
+wear == maxDamage exactly and breaks only when EXCEEDED, like damageItem.)
+Plus the earlier live test: 8-damage TNT vs full pristine iron = 1 HP lost,
+remainder 15, +8 wear on all four pieces.
+
+### Worn-armor renderer (src/IndevArmor.c, new)
+Genuine RenderPlayer.shouldRenderPass: up to four overlay passes per player -
+pass 0 helmet = head + headwear, 1 chest = torso + both arms, 2 legs = torso
++ legs on the _2 texture at HALF inflation (ModelBiped(0.5F)), 3 boots =
+legs at full inflation; armorInventory indexed [3 - pass]; texture picked by
+ItemArmor.renderIndex (cloth/chain/iron/diamond/gold).
+- Implemented as two engine models ("indev_armor" 1.0-inflated,
+  "indev_armor2" 0.5-inflated) whose boxes are the ENGINE humanoid's boxes
+  (same pivots, same swapped-coordinate UV mirroring for left limbs)
+  expanded via the Dims/Bounds pattern the engine's hat layer uses - UVs
+  stay the unexpanded skin cells. Headwear box gets f+0.5 like genuine.
+- Draw binds the armor texture itself and forces uScale/vScale to the 64x32
+  layout (the wearer's skin may be 64x64); Models.Active->index reset like
+  the c0.30 MobArmor overlay.
+- **TRAP: Model MakeParts only runs lazily via Model_Get(name)** - a model
+  rendered directly with Model_Render never inits, and draws stale VB
+  garbage that can look deceptively like armor (re-textured copies of the
+  previous model's vertices). IndevArmor_Register Model_Gets both models
+  once to force part building.
+- Textures: armor_{cloth,chain,iron,diamond,gold}_{1,2}.png in the texture
+  pack, registered as ModelTex entries. Resources.c BetaPatcher pulls them
+  from the beta jar's /armor/*.png - VERIFIED byte-identical to the
+  authentic in-20100223 assets in the EaglerPorts resources tree.
+- Hooks: third-person local player at the end of SurvivalTest_RenderMobs
+  (never in first person, like genuine), and the inventory paperdoll right
+  after its Model_Render.
+
+### Rig verification
+- Full iron set renders on the third-person player (helmet enclosing the
+  head, chestplate with shoulder-pad arms, leggings, chunky boots), poses
+  tracking the body. Swapped the diamond chestplate in through the GUI:
+  mixed set renders each piece with its own texture (gdb-confirmed slot
+  state through the swap).
+- KNOWN RIG ARTIFACTS (not code bugs): the paperdoll window renders black
+  on the headless software-GL rig (predates the armor work - the doll armor
+  hook is in place and shows wherever the doll shows); the rig texpack's
+  stale terrain.png had a magenta placeholder in the torch cell - patched
+  the rig copy (real installs build default.zip through Resources.c which
+  patches it properly).
+
+## SESSION LOG - Armor system part 1: mechanics + slots + GUI + persistence
 
 Roadmap stage 2. Everything below is Indev-gated; c0.30 mode untouched.
 

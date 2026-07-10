@@ -25,6 +25,7 @@
 #include "HeldBlockRenderer.h"
 #include "Camera.h"
 #include "IndevTest.h"
+#include "IndevArmor.h"
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
@@ -4008,6 +4009,12 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 			st_mobFlashPass = false;
 		}
 	}
+	/* the local player's worn armor (third person only - genuine renders no
+	    armor on the first-person arm) */
+	if (IndevTest_Enabled && Camera.Active->isThirdPerson && Entities.CurPlayer) {
+		IndevArmor_Render(&Entities.CurPlayer->Base);
+	}
+
 	SurvivalTest_RenderMobFires();
 	Gfx_SetAlphaTest(false);
 }
