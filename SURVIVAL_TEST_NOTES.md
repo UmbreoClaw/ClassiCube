@@ -32,6 +32,16 @@ swing angle read wrong), and a held torch floated at arm's length.
   pose, the chop swing arcing head-first into the crack, torch flame-up
   in the fist. Equip-dip frames right after slot switch look odd in
   stills - wait for the dip to settle before judging screenshots.
+- **Round 2 (user: "the pickaxe FACE is facing you rather than mining")**:
+  the sprite PLANE's yaw was wrong - genuine stacks rotY 45 (base) + 50
+  (sprite chain) so the plane slices INTO the scene at ~95 degrees (near
+  edge-on; the 1/16 extrusion is what you actually see - that IS the b1.x
+  3D-item look). The engine's held-entity chain contributes its 45 with
+  the opposite apparent sign in this pipeline, so the literal +50 nearly
+  cancelled and the item faced the camera flat-on. Empirically swept the
+  yaw via a temporary env knob: -50 (net ~-95) reproduces genuine's
+  oblique; +140 and +50 do not. Hardcoded -50 with a comment. All
+  extruded held items (tools + torch + flowers) get the genuine slice.
 
 ## SESSION LOG - Armor part 2: worn-armor rendering + fuzz-verified math
 

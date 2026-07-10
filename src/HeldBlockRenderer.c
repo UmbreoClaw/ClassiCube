@@ -69,7 +69,12 @@ static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
 
 	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
 	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
-	Matrix_RotateY(&r,  50.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	/* genuine is rotY +50 on top of the +45 base = the sprite plane yawed
+	    ~95 degrees, slicing INTO the scene. The engine's held-entity chain
+	    contributes its 45 with the OPPOSITE apparent sign, so +50 here left
+	    the face flat toward the camera (the "pickaxe facing the player"
+	    report) - the genuine oblique needs -50 in this pipeline. */
+	Matrix_RotateY(&r, -50.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
 	Matrix_Scale(&r, 1.5f, 1.5f, 1.5f);         Matrix_MulBy(&m, &r);
 	Matrix_Translate(&r, 0.0f, -0.3f, 0.0f);    Matrix_MulBy(&m, &r);
 
