@@ -433,6 +433,8 @@ static void InputHandler_PlaceBlock(void) {
 	if (SurvivalTest_TryEat()) return;
 	/* Right-clicking a workbench opens the 3x3 crafting grid (Indev) */
 	if (SurvivalTest_TryUseBlock()) return;
+	/* ItemBow.onItemRightClick: fires whether or not a block is targeted */
+	if (SurvivalTest_TryUseBow()) return;
 
 	pos = Game_SelectedPos.translatedPos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;

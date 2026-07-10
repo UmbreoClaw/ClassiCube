@@ -4294,7 +4294,11 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 
 	if (a->hasHit) {
 		a->stickTime++;
-		if (a->type == 0) {
+		if (IndevTest_Enabled) {
+			/* genuine EntityArrow: ANY stuck arrow dies at exactly
+			    ticksInGround == 1200, no random roll, player and mob alike */
+			if (a->stickTime >= 1200) a->active = false;
+		} else if (a->type == 0) {
 			if (a->stickTime >= ARROW_STICK_PLAYER_MIN_TICKS &&
 				Random_Float(&st_arrowRng) < ARROW_STICK_PLAYER_DESPAWN_CHANCE) a->active = false;
 		} else {
@@ -4353,7 +4357,7 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 	struct LocalPlayer* p;
 	struct AABB arrowBB, playerBB;
 	if (!a->hasHit || !a->ownerIsPlayer)      return;
-	if (st_playerArrows >= ARROW_PLAYER_MAX)  return;
+	if (!IndevTest_Enabled && st_playerArrows >= ARROW_PLAYER_MAX) return;
 
 	p = Entities.CurPlayer;
 	if (!p) return;
@@ -4364,6 +4368,11 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 	playerBB.Min.z -= 1.0f; playerBB.Max.z += 1.0f;
 	if (!AABB_Intersects(&arrowBB, &playerBB)) return;
 
+	if (IndevTest_Enabled) {
+		/* Indev arrows are ITEMS - picked back up into the inventory (and
+		    left stuck when it is full, like genuine playerTouch) */
+		if (!SurvivalTest_AddItem(256 + 6)) return;
+	} else
 	st_playerArrows++;
 	/* Arrow.playerTouch: arrows++ happens immediately, then a TakeEntityAnim */
 	/*  zips the arrow into the player before the entity is removed. */
@@ -4571,6 +4580,9 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 	struct Entity* e;
 	Vec3 eye;
 	if (!SurvivalTest_Enabled) return false;
+	/* Indev has no Tab-fire - arrows are items fired by the BOW's right
+	    click (SurvivalTest_TryUseBow) */
+	if (IndevTest_Enabled)     return false;
 	if (st_playerArrows <= 0)  return false;
 
 	p = Entities.CurPlayer;
@@ -4593,6 +4605,44 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 }
 
 int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
+
+/* ItemBow.onItemRightClick: consumeInventoryItem(arrow) - the FIRST slot
+    holding arrows, in inventory order - then the bow twang and an arrow at
+    the genuine 1.5 speed / 4 damage. The bow itself has NO durability in
+    in-20100223, and the click is handled either way (a dry bow just does
+    nothing, it never falls through to block placement). */
+#define INDEV_ITEM_ARROW (256 + 6)
+#define INDEV_ARROW_FIRE_FORCE 1.5f
+#define INDEV_ARROW_DAMAGE     4
+
+static void SurvivalTest_SyncHotbar(void);
+
+cc_bool SurvivalTest_TryUseBow(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Entity* e;
+	Vec3 eye;
+	int i;
+	if (!IndevTest_Enabled || !p)                              return false;
+	if (!IndevTest_IsBow(st_inv[Inventory.SelectedIndex].id))  return false;
+	if (st_inv[Inventory.SelectedIndex].count <= 0)            return false;
+
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		if (st_inv[i].id == INDEV_ITEM_ARROW && st_inv[i].count > 0) break;
+	}
+	if (i == SURVIVAL_INV_SLOTS) return true; /* no arrows - click still handled */
+
+	if (--st_inv[i].count == 0) { st_inv[i].id = BLOCK_AIR; st_inv[i].damage = 0; }
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+
+	e   = &p->Base;
+	eye = Entity_GetEyePosition(e);
+	Indev_PlaySoundAt(e->Position, MOBSND_BOW, 1.0f,
+		1.0f / (Random_Float(&st_arrowRng) * 0.4f + 0.8f));
+	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
+							 INDEV_ARROW_FIRE_FORCE, INDEV_ARROW_DAMAGE, 0, true, -1);
+	return true;
+}
 
 
 /*########################################################################################################################*
@@ -5583,7 +5633,7 @@ void SurvivalTest_Respawn(void) {
 	st_hurtTicks    = 0;
 	st_falling      = false;
 	st_airTimer     = 20.0f / 20.0f; /* airSupply = 20 ticks, not 300 */
-	st_playerArrows = ARROW_PLAYER_START;
+	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
 	st_isDead       = false;
 	st_deathTicks   = 0;
 	Camera_UpdateProjection(); /* undo the death FOV zoom immediately */
@@ -5624,9 +5674,12 @@ static void SurvivalTest_ResetState(void) {
 	}
 	st_damageRemainder = 0;
 	/* SurvivalGameMode.apply(Player): the player always starts with 10 TNT */
-	/*  in the last hotbar slot - this was missing entirely before. */
-	st_inv[8].id = BLOCK_TNT;
-	st_inv[8].count = 10;
+	/*  in the last hotbar slot. That kit (and the 20 free arrows below) is
+	    c0.30's - genuine Indev starts with an EMPTY inventory. */
+	if (!IndevTest_Enabled) {
+		st_inv[8].id = BLOCK_TNT;
+		st_inv[8].count = 10;
+	}
 
 	for (i = 0; i < DROP_MAX; i++) {
 		st_drops[i].active = false;
@@ -5637,7 +5690,7 @@ static void SurvivalTest_ResetState(void) {
 	for (i = 0; i < ARROW_MAX; i++) {
 		st_arrows[i].active = false;
 	}
-	st_playerArrows = ARROW_PLAYER_START;
+	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
 
 	for (i = 0; i < TNT_MAX; i++) {
 		st_tnt[i].active = false;

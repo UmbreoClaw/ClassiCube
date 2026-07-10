@@ -1,6 +1,40 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Held pickaxe swing + held torch fixes (latest)
+## SESSION LOG - Bow item + Indev HUD cleanup (roadmap stage 3) (latest)
+
+User: implement the bow, remove Tab-firing and the score count (Indev).
+
+### What landed (all Indev-gated; c0.30 keeps its Tab-fire/score/arrow kit)
+- **ItemBow.onItemRightClick** (SurvivalTest_TryUseBow): right-click while
+  holding the bow consumes ONE arrow item - consumeInventoryItem semantics,
+  the FIRST slot holding arrows in inventory order - plays random.bow at
+  the genuine 1/(rand*0.4+0.8) pitch and looses an arrow from eye height at
+  the genuine 1.5 speed / 4 damage (genuine EntityArrow hits for a flat 4).
+  A dry bow handles the click but does nothing. The bow has NO durability
+  in in-20100223. Hooked into InputHandler_PlaceBlock after TryUseBlock, so
+  chests/workbenches still open and it fires with or without a block
+  targeted. (Bow + arrow crafting recipes already existed.)
+- **Tab-fire disabled in Indev** (gate inside SurvivalTest_TryShootArrow -
+  covers every caller); arrows are items fired only by the bow.
+- **HUD**: the "Score: &eN" top-right label and the "Arrows: N" counter are
+  c0.30-only now - genuine in-20100223 GuiIngame draws neither. The death
+  screen keeps its score line (genuine GuiGameOver has it).
+- **Start kit**: the 10 TNT + 20 arrows are SurvivalGameMode.apply (c0.30);
+  genuine Indev starts with an EMPTY inventory - both gated to classic.
+- **Arrow pickup**: stuck player arrows return to the inventory as arrow
+  ITEMS (left stuck when the inventory is full, like genuine playerTouch).
+- **Stuck-arrow lifetime**: genuine EntityArrow dies at EXACTLY
+  ticksInGround == 1200 (player and mob arrows alike) - replaces c0.30's
+  1%-per-tick-after-300 roll in Indev mode.
+- Skeleton deaths already dropped arrow ITEMS in Indev (earlier session).
+
+### Rig verification (injected bow + 5 arrows save)
+- No Score label, no Arrows counter, empty start inventory on a fresh
+  Indev world; Tab does nothing; three right-clicks fired three arrows
+  (count 5 -> 2, arrows visibly stuck in the wall at the crosshair);
+  fired one more and walked over it - count restored (pickup as item).
+
+## SESSION LOG - Held pickaxe swing + held torch fixes
 
 User reports: the first-person pickaxe looked flipped while MINING (the
 swing angle read wrong), and a held torch floated at arm's length.

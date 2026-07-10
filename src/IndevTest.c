@@ -221,6 +221,11 @@ int IndevTest_ArmorReduce(int id) {
 	return piece < 0 ? 0 : reduce[piece];
 }
 
+cc_bool IndevTest_IsBow(int id) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	return IndevTest_Enabled && d && d->kind == ITEM_KIND_BOW;
+}
+
 
 /* ItemTool.getStrVsBlock: (tier+1)*2 against the tool's effective materials */
 /*  (approximated by dig-sound class), otherwise 1 - note gold tools are tier */

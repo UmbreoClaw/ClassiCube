@@ -123,6 +123,10 @@ int SurvivalTest_ArmorDamage(int i);
 /* Slots 100..103 restore the armor array (the genuine save numbering). */
 void SurvivalTest_RestoreSlot(int slot, int id, int count, int damage);
 void SurvivalTest_RestoreStats(int health, int score);
+/* ItemBow.onItemRightClick: fires an arrow when holding the bow (Indev),
+    consuming one arrow ITEM from the inventory. Returns whether the click
+    was handled (i.e. the bow was held - even if no arrows were left). */
+cc_bool SurvivalTest_TryUseBow(void);
 /* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount);
 void SurvivalTest_ConsumeHeld(void);

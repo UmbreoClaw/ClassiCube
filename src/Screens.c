@@ -756,7 +756,9 @@ static void HUDScreen_BuildMesh(void* screen) {
 	/*  stack-count digits - so they track the hotbar at any scale/DPI. Built as */
 	/*  a scaled copy of the widget's texture rather than mutating the widget */
 	/*  (which persists across frames and would compound the scaling). */
-	if (SurvivalTest_Enabled) {
+	/* Genuine in-20100223's GuiIngame draws NEITHER label: no score HUD and
+	    arrows are ordinary inventory items - both are c0.30-only. */
+	if (SurvivalTest_Enabled && !IndevTest_Enabled) {
 		struct Texture lbl;
 		float labelH = s->hotbar.height * (8.0f / 22.0f);
 		scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
@@ -894,11 +896,12 @@ static void HUDScreen_Render(void* screen, float delta) {
 		}
 
 		/* Draw survival Score / Arrows labels (each binds its own text texture) */
-		if (SurvivalTest_Enabled && s->score.tex.ID) {
+		/* c0.30 only - genuine Indev's GuiIngame has neither */
+		if (SurvivalTest_Enabled && !IndevTest_Enabled && s->score.tex.ID) {
 			Gfx_BindDynamicVb(s->vb);
 			Widget_Render2(&s->score, HUD_OFS_SCORE);
 		}
-		if (SurvivalTest_Enabled && s->arrows.tex.ID) {
+		if (SurvivalTest_Enabled && !IndevTest_Enabled && s->arrows.tex.ID) {
 			Gfx_BindDynamicVb(s->vb);
 			Widget_Render2(&s->arrows, HUD_OFS_ARROWS);
 		}

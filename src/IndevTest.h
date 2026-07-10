@@ -48,6 +48,8 @@ int IndevTest_ToolMaxDamage(int id);
 int IndevTest_ArmorPiece(int id);
 int IndevTest_ArmorMaxDamage(int id);
 int IndevTest_ArmorReduce(int id);
+/* Whether the id is the bow item (fires arrows on right-click). */
+cc_bool IndevTest_IsBow(int id);
 /* Mining speed multiplier of the held id against a block ((tier+1)*2 when */
 /*  the tool class is effective vs the block's material, else 1). */
 int IndevTest_MiningSpeed(int id, BlockID block);
