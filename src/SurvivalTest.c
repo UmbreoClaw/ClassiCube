@@ -6473,6 +6473,7 @@ static void GiveCommand_Execute(const cc_string* args, int argsCount) {
 		}
 	} else {
 		id = IndevTest_FindItemByName(&name);
+		if (id == -1) id = IndevTest_FindBlockByName(&name);
 		if (id == -1) id = Block_Parse(&name);
 		if (id == -1) {
 			Chat_Add1("&e/client give: &cunknown item/block \"%s\"", &name);

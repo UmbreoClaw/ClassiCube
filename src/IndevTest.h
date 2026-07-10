@@ -49,6 +49,7 @@ cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v
 /*  Both are debug/chat helpers for the /client give command. */
 const char* IndevTest_ItemName(int id);
 int IndevTest_FindItemByName(const cc_string* name);
+int IndevTest_FindBlockByName(const cc_string* name);
 /* Heal amount when id is an edible Indev item (apple/soup/bread/porkchops), */
 /*  else 0. Always 0 while Indev mode is off. */
 int IndevTest_ItemFoodHeal(int id);

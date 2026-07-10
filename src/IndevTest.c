@@ -184,6 +184,21 @@ static cc_bool Indev_ItemNameMatches(const char* name, const cc_string* query) {
 	}
 }
 
+/* Finds an Indev-layer BLOCK by display name, canonicalised - checked
+    before the engine's own name lookup so the functional Indev blocks
+    shadow same-named classic/CPE decoration (the engine ships an inert
+    CPE "Fire" at 54; /client give fire must resolve to the real one). */
+int IndevTest_FindBlockByName(const cc_string* name) {
+	int b;
+	cc_string bn;
+	if (!IndevTest_Enabled) return -1;
+	for (b = 98; b >= 66; b--) { /* our custom-id range, newest first */
+		bn = Block_UNSAFE_GetName((BlockID)b);
+		if (String_CaselessEquals(&bn, name)) return IndevTest_CanonicalBlock((BlockID)b);
+	}
+	return -1;
+}
+
 /* Finds an item by display name (see the matcher above for the accepted */
 /*  spellings). Returns the full 256+ id, or -1 when nothing matches or */
 /*  Indev mode is off (items don't exist in plain c0.30). */
