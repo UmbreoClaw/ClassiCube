@@ -283,17 +283,6 @@ static void HeldBlockRenderer_DigAnimation(void) {
 	held_entity.Position.z -= sinHalfCircle            * 0.2f;
 
 	sinHalfCircleWeird = Math_SinF(t * t * MATH_PI);
-	if (IndevTest_Enabled) {
-		/* genuine Indev ItemRenderer swing: a downward CHOP - the dominant
-		    80 degrees is around X (pitch), plus 20-degree yaw/roll accents
-		    (glRotatef -20 y, -20 z, -80 x after the base rotY 45). The
-		    classic-mode branch below instead yaws the held block sideways,
-		    which read wrong for directional tools like the pickaxe. */
-		held_entity.RotY -= sinHalfCircleWeird    * 20.0f;
-		held_entity.RotZ -= Math_SinF(sqrtLerpPI) * 20.0f;
-		held_entity.RotX -= Math_SinF(sqrtLerpPI) * 80.0f;
-		return;
-	}
 	held_entity.RotY  -= Math_SinF(sqrtLerpPI) * 80.0f;
 	held_entity.Yaw   -= Math_SinF(sqrtLerpPI) * 80.0f;
 	held_entity.RotX  += sinHalfCircleWeird    * 20.0f;
