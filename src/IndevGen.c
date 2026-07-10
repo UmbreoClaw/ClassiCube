@@ -613,6 +613,47 @@ static cc_bool IndevGen_SkyExposed(int x, int y, int z) {
 	return true;
 }
 
+/* "Assembling.." - World.generate()'s floor/border fill. Interior columns
+    only touch y=0, y=1 and the very top layer (the genuine y-skip quirk at
+    World.java:118); border columns are rebuilt top to bottom: bedrock shell
+    below groundLevel-1 (still lava at y<=1 under air gaps), a dirt/grass cap
+    at groundLevel-1, then fluid up to waterLevel. On Floating maps
+    groundLevel=-128 makes every branch miss, so everything this pass touches
+    becomes air - that is what hollows out the basin under the islands */
+static void IndevGen_Assemble(void) {
+	int width = World.Width, length = World.Length, height = World.Height;
+	int x, y, z, id, index;
+	cc_bool border;
+	BlockRaw fluid = indevgen_theme == 1 ? BLOCK_STILL_LAVA : BLOCK_STILL_WATER;
+	int cap = (gen_groundLevel > gen_waterLevel && indevgen_theme != 1) ? BLOCK_GRASS : BLOCK_DIRT;
+
+	IndevGen_SetState("Assembling..", 0.0f);
+	for (x = 0; x < width; x++) {
+		Gen_CurrentProgress = (float)x / (width - 1);
+
+		for (z = 0; z < length; z++) {
+			border = x == 0 || z == 0 || x == width - 1 || z == length - 1;
+
+			for (y = 0; y < height; y++) {
+				index = (y * length + z) * width + x;
+				id    = 0;
+				if (y <= 1 && y < gen_groundLevel - 1 && Gen_Blocks[index + width * length] == 0) {
+					id = BLOCK_STILL_LAVA;
+				} else if (y < gen_groundLevel - 1) {
+					id = BLOCK_BEDROCK;
+				} else if (y < gen_groundLevel) {
+					id = cap;
+				} else if (y < gen_waterLevel) {
+					id = fluid;
+				}
+
+				Gen_Blocks[index] = (BlockRaw)id;
+				if (y == 1 && !border) y = height - 2;
+			}
+		}
+	}
+}
+
 /* World.findSpawn: a random mid-map surface spot above water with room
     for (and a solid foundation under) the spawn house */
 static void IndevGen_FindSpawn(void) {
@@ -909,6 +950,8 @@ static void IndevGen_Generate(void) {
 		gen_waterLevel = -16;
 	}
 
+	IndevGen_Assemble();
+
 	IndevGen_SetState("Building..", 0.0f);
 	IndevGen_FindSpawn();
 	IndevGen_GenerateHouse();
@@ -971,12 +1014,17 @@ cc_bool IndevGen_ApplyPostLoad(struct LocationUpdate* update) {
 	Env_SetEdgeHeight(indevgen_waterLevel);
 	Env_SetSidesOffset(indevgen_groundLevel - indevgen_waterLevel);
 	Env_SetEdgeBlock(theme == 1 ? BLOCK_STILL_LAVA : BLOCK_STILL_WATER);
-	Env_SetSidesBlock(BLOCK_DIRT);
+	/* the genuine border wall is a bedrock shell (World.generate); bedrock
+	    sides also give floating maps their empty bedrock basin, since the
+	    engine always draws a SidesBlock plane at y=0 beneath the map */
+	Env_SetSidesBlock(BLOCK_BEDROCK);
 
-	/* spawn inside the house, facing the genuine rotSpawn = 180 */
+	/* spawn inside the house, facing the genuine rotSpawn = 180.
+	    Genuine preparePlayerToSpawn puts the bounding box CENTRE at ySpawn,
+	    so the feet sit at ySpawn - 0.9 (0.1 above the house floor) */
 	update->flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH;
 	update->pos.x = indevgen_spawnX + 0.5f;
-	update->pos.y = indevgen_spawnY + 1.0f;
+	update->pos.y = indevgen_spawnY - 0.9f;
 	update->pos.z = indevgen_spawnZ + 0.5f;
 	update->yaw   = 180.0f;
 	update->pitch = 0.0f;

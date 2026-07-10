@@ -1126,6 +1126,30 @@ static void Indev_RegisterFarmTicks(void) {
     the bounds check skips the (biased) picks on any odd-sized import. */
 static int indev_updateLCG;
 static cc_uint32 indev_randId;
+
+/* genuine BlockGrass.updateTick: covered grass decays to dirt on a 1-in-4
+    roll; lit grass spreads to a random nearby dirt block (+-1, y -3..+1).
+    Genuine light thresholds (<4 decay, >=9 spread, >=4 target) are
+    approximated with the engine's binary sky lighting. Note dirt has NO
+    updateTick in Indev - it only becomes grass by spreading. */
+static void IndevTest_TickGrass(int index) {
+	int x, y, z;
+	World_Unpack(index, x, y, z);
+
+	if (!Lighting.IsLit(x, y, z)) {
+		if (Random_Next(&indev_teRng, 4) == 0) Game_UpdateBlock(x, y, z, BLOCK_DIRT);
+		return;
+	}
+
+	x += Random_Next(&indev_teRng, 3) - 1;
+	y += Random_Next(&indev_teRng, 5) - 3;
+	z += Random_Next(&indev_teRng, 3) - 1;
+	if (!World_Contains(x, y, z))              return;
+	if (World_GetBlock(x, y, z) != BLOCK_DIRT) return;
+	if (!Lighting.IsLit(x, y, z))              return;
+	Game_UpdateBlock(x, y, z, BLOCK_GRASS);
+}
+
 void IndevTest_TickRandomBlocks(void) {
 	int shiftX = 1, shiftZ = 1;
 	int maskX, maskY, maskZ;
@@ -1153,6 +1177,15 @@ void IndevTest_TickRandomBlocks(void) {
 
 		index = World_Pack(x, y, z);
 		block = World.Blocks[index];
+
+		/* genuine in-20100223 updateTick coverage: sand/gravel/dirt have no
+		    updateTick at all and BlockStationary's is empty, so the engine's
+		    classic random-tick handlers for them must not run in Indev mode
+		    (random-tick sand rain hollows out Floating maps in seconds) */
+		if (block == BLOCK_SAND || block == BLOCK_GRAVEL || block == BLOCK_DIRT ||
+			block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA) continue;
+		if (block == BLOCK_GRASS) { IndevTest_TickGrass(index); continue; }
+
 		tick  = Physics.OnRandomTick[block];
 		if (tick) tick(index, block);
 	}

@@ -1,5 +1,72 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Generator round 2: Assembling pass, floating basin, spawn height (latest)
+
+User reports after testing the generator: floating maps still had "dirt at the
+bottom" instead of an empty basin with bedrock, and the spawn put your head
+inside the house ceiling.
+
+### Fixes
+- **Missing "Assembling.." pass ported** (`IndevGen_Assemble`). Genuine
+  LevelGenerator line 425 calls `World.generate()` AFTER the edge flood and
+  before findSpawn - a pass my first port skipped entirely. It rebuilds the
+  bottom/borders: interior columns only touch y=0, y=1 and the very top layer
+  (the y-skip quirk at World.java:118 - `if (var7 == 1 && interior) var7 =
+  height - 2`), border columns are rebuilt in full: bedrock below
+  groundLevel-1 (still lava at y<=1 where the block above is air), a
+  grass/dirt cap at groundLevel-1 (grass iff groundLevel > waterLevel and the
+  default fluid is water, so inland=grass, island=submerged dirt), then
+  defaultFluid up to waterLevel. On Floating maps groundLevel=-128 makes every
+  branch miss, so everything the pass touches becomes AIR - that is what
+  hollows out the basin (borders + map floor) under the islands. Writes are
+  UNCONDITIONAL (overwrites terrain), exactly like genuine.
+- **Env sides are now bedrock, not dirt** (`IndevGen_ApplyPostLoad`). The
+  engine always draws a SidesBlock-textured plane covering the map footprint
+  at y=0 (EnvRenderer.c BuildMapSides), plus side walls from Env_SidesHeight
+  up. With SidesBlock=DIRT that plane is what the user saw as "dirt at the
+  bottom" of floating maps. Bedrock matches both the genuine border shell and
+  the classic default, and gives floating maps their empty bedrock basin
+  (EdgeHeight=-127 hides the water plane, Env_SidesHeight=-128 sinks the
+  walls, but the y=0 floor plane is unconditional).
+- **Spawn height fixed**: genuine `preparePlayerToSpawn` puts the bounding box
+  CENTRE at ySpawn (posY is the bbox centre in Indev - Entity.setPosition), so
+  feet sit at ySpawn-0.9, i.e. 0.1 above the house floor (house interior air
+  is ySpawn-1..ySpawn+1, ceiling at +2). My port used feet = ySpawn+1.0, two
+  blocks too high - head inside the ceiling. Now `pos.y = spawnY - 0.9f`.
+- **Indev random ticks no longer run the engine's classic sand/gravel/
+  dirt/still-liquid handlers** (IndevTest_TickRandomBlocks skip list). Genuine
+  in-20100223 coverage: BlockSand/BlockGravel/dirt have NO updateTick (sand
+  falls only on place/neighbour change) and BlockStationary.updateTick is
+  EMPTY. The engine registers Physics_DoFalling on OnRandomTick for
+  sand/gravel (a classic-mode behaviour), which made floating islands rain
+  their sand/gravel down within seconds and (via activation cascades and
+  liberated water pockets) flood the entire basin with water in minutes.
+- **Genuine Indev grass tick implemented** (`IndevTest_TickGrass`, replaces
+  the classic HandleGrass/HandleDirt pair in Indev mode): covered grass decays
+  to dirt on a 1-in-4 roll; lit grass spreads to one random nearby dirt block
+  (+-1 x/z, y-3..y+1). Dirt itself never ticks - it only becomes grass by
+  spreading (the classic behaviour of dirt spontaneously regrowing grass is
+  NOT Indev). Genuine light thresholds (<4 decay, >=9/4 spread) approximated
+  with the engine's binary sky lighting - documented deviation.
+
+### Rig verification (saved worlds parsed offline)
+- Indev mode, Floating/Square/Small: two .mclevel saves 40s apart were
+  IDENTICAL (0 block diffs) - no sand rain, no flood, still-water pockets
+  intact (92 still water, 24 still lava), house torches present (2x id 50),
+  y=1 fully empty, borders fully air, no physical bedrock (basin is env
+  rendering). Spawn inside the house with head clear of the ceiling.
+- c0.30 mode cross-gen (same floating map under classic physics): classic
+  random-tick sand DOES rain and liberated pockets DO flood the basin over
+  minutes - that is classic physics faithfully applied to a foreign map type,
+  left as-is by the mode-purity mandate.
+- KNOWN MINOR: ~500 of ~2000 floating sand/gravel blocks still drop once
+  during world load in Indev mode (something activates them between EndGeneration
+  and the first saved frame - not the random tick loop, 0 diffs after). Track
+  down the load-time activation source later.
+- The earlier "255/garbage block ids in saves" scare was a parser off-by-one
+  in my own analysis script (+14 instead of +13 after the 13-byte
+  '\x07\x00\nBlockArray' tag), reading NBT metadata as blocks. Saves clean.
+
 ## SESSION LOG - Indev world generator (roadmap stage 1, WORKING)
 
 ### What landed
