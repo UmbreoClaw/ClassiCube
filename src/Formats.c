@@ -1738,7 +1738,7 @@ static cc_result MCLevel_Load(struct Stream* stream) {
 			if (World.Blocks[i] < 50) continue;
 			b = IndevTest_BlockFromIndev(World.Blocks[i]);
 			if (mcl_dataArr && i < mcl_dataSize) {
-				b = (BlockRaw)IndevTest_ApplyDataMeta(b, (mcl_dataArr[i] >> 4) & 15);
+				b = (BlockRaw)IndevTest_ApplyDataMetaAt(i, b, (mcl_dataArr[i] >> 4) & 15);
 			}
 			World.Blocks[i] = b;
 		}
@@ -1871,7 +1871,7 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		for (blk = 0; blk < (cc_uint32)n; blk++) {
 			BlockRaw b = World.Blocks[i + blk];
 			cc_uint8  d = 0x0F;
-			if (IndevTest_Enabled) d |= (cc_uint8)(IndevTest_BlockDataMeta(b) << 4);
+			if (IndevTest_Enabled) d |= (cc_uint8)(IndevTest_BlockDataMetaAt((int)(i + blk), b) << 4);
 			chunk[blk] = d;
 		}
 		if ((res = Stream_Write(stream, chunk, n))) return res;

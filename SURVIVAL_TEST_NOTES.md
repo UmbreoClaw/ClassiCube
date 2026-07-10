@@ -1,6 +1,82 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Held items: genuine ItemRenderer chain, re-derived (latest)
+## SESSION LOG - Fire + flint & steel (BlockFire port) (latest)
+
+User: "finish the fire and flint and steel". Roadmap stage 4. New module
+src/IndevFire.c/.h (picked up automatically - Makefile globs src/*.c).
+
+### What landed (all Indev-gated)
+- **Fire block 98** (genuine 51): DRAW_SPRITE custom mesh, full-bright
+  (light 15), no collision, CanPlace=false (only flint & steel starts it),
+  0 hardness (punching extinguishes instantly, drops nothing). Two
+  animated flame tiles: 118 (existing) + new 120 (INDEV_FIRE_TEX_LOC2),
+  each its own TextureFlamesFX instance (Animations.c refactored to a
+  2-element sim array - genuine registers two).
+- **Burn tables** (BlockFire ctor setBurnRate): planks 5/20, log 5/5,
+  leaves 30/60, bookshelf 30/20, tnt 15/100, all 16 cloths 30/60
+  (chance = encourages neighbours, ability = catches when consumed).
+- **Scheduled-update queue** (World.java tickList port): entries wait
+  tickRate=20 game ticks then run updateTick; <=200 processed per game
+  tick. IndevFire_Tick() runs each 20Hz tick before the random-block
+  pass. Ring buffer 8192 (drops new entries when full - a fire that big
+  self-heals by constant rescheduling).
+- **updateTick** verbatim: ages 0->15 in a per-map nibble store
+  (freed on OnNewMap), retires when no flammable neighbour (or floor gone
+  + age>3), else consumes neighbours (down 100 / up 200 / sides 300) and
+  jumps to air cells in the 3x3 column up to y+4 with the genuine
+  encourage-chance vs rand(bound) roll. Consumed TNT is armed
+  (SurvivalTest_IgniteTnt -> ArmTnt), not deleted.
+- **Flint & steel** (ItemFlintAndSteel.onItemUse): steps out of the
+  clicked face, interior cells only, places fire in an air cell, wears the
+  item by 1 (maxDamage 64) whether or not fire landed. Hooked in
+  IndevTest_UseHeldItem before the hoe/seed branch.
+- **Lava ignition** (BlockFlowing/BlockFluid fireSpread): lava flowing
+  into a flammable block lights the first free spot around it
+  (up/-x/+x/-z/+z/below) or the block itself. Hooked in
+  Physics_PropagateLava before the normal flow.
+- **Entity burning**: player takes 1 contact damage per tick standing in
+  fire and is set alight (st_playerFire=300); alight burns 1 HP/sec,
+  water fizzes it out (random.fizz), lava re-arms to 600 - genuine
+  Entity.onEntityUpdate. Mobs get the same. First-person flame overlay
+  (ItemRenderer.renderOverlays): two additive flame sheets at the bottom
+  of the view while alight.
+- **Chain armor recipe unlocked**: RecipesArmor's genuine material row is
+  {clothGray, FIRE, ingotIron, diamond, ingotGold} - chain armor is
+  literally crafted from fire blocks (a genuine, normally-unobtainable
+  quirk). The armorSet loop now runs all 5 materials incl. chain (46).
+- **.mclevel**: fire saves as genuine id 51 + age in the Data nibble
+  (new position-aware IndevTest_BlockDataMetaAt/ApplyDataMetaAt so age
+  comes from the side store, not the block id). setTickOnLoad reschedules
+  every fire block on load.
+
+### Rig verification
+- **Mechanics CONFIRMED**: a save patched with a wood box wrapped in fire
+  around spawn - loading it, the player spawned inside, took fire damage,
+  and DIED (Game Over with the burning red overlay). Fire spread
+  confirmed via live gdb block-count dumps growing 59 -> 85 fire blocks
+  across ticks as walls caught. flint & steel placement, lava ignition,
+  and a 5-fire-block save round-trip all confirmed via memory dumps.
+- **Flame SPRITE beauty-shot NOT cleanly captured** on the rig: the
+  test-world spawn is a lake (every fire ends up in/under water), the
+  headless xdotool session started firing spurious Escape events on large
+  mouse moves, and gdb position writes get overwritten by the physics
+  tick each frame - so I could never frame a fire block against open sky.
+  The burning-overlay red and the lethal box prove fire renders as a
+  visible hazard, but the exact animated flame sheets should be
+  eyeballed in a normal Indev world during playtest (same
+  ship-then-confirm arrangement as paintings). If they look wrong,
+  Builder_DrawFire is the single renderer to tune (genuine
+  renderType-3 tessellation; grounded = 8 slanted sheets alternating the
+  two flame tiles, wall/ceiling = leaning sheets per flammable
+  neighbour, padded to 12 quads for the banked sprite layout).
+
+### Traps hit
+- The fire vertex macro captured `v->U` when its param was named U/V
+  (the documented member-capture trap) - renamed to FU/FVV.
+- A stale `case 51:` in BlockFromIndev (old CPE-fire fallback) became a
+  duplicate once the real fire mapping was added - removed.
+
+## SESSION LOG - Held items: genuine ItemRenderer chain, re-derived
 
 User (after the u-unflip round): "the axe shaft is facing leftwards rather
 than in the hand... would you be willing to reread how indev handles it".

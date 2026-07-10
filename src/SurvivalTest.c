@@ -26,6 +26,7 @@
 #include "Camera.h"
 #include "IndevTest.h"
 #include "IndevArmor.h"
+#include "IndevFire.h"
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
@@ -88,6 +89,9 @@ static int   st_hurtTicks;
 /* Mob.hurtDir: horizontal bearing of the attacker relative to the player's */
 /*  yaw at the moment of the hit, baked in (not recomputed while it decays). */
 static float st_hurtDir;
+
+/* Entity.fire for the local player (Indev layer): > 0 while alight. */
+static int st_playerFire;
 
 /* Debug/testing toggle, driven by the /client god command - NOT part of */
 /*  genuine c0.30-s parity (see the Debug/testing tools section at the bottom). */
@@ -192,6 +196,14 @@ static void SurvivalTest_RenderItemDropSprites(float t);
 /*  test the FULL-height box, which is subtly different). */
 static cc_bool ST_IsLavaBlock(BlockID b)  { return Blocks.ExtendedCollide[b] == COLLIDE_LAVA; }
 static cc_bool ST_IsWaterBlock(BlockID b) { return Blocks.ExtendedCollide[b] == COLLIDE_WATER; }
+static cc_bool ST_IsFireBlock(BlockID b)  { return IndevFire_IsFire(b); }
+/* World.isBoundingBoxBurning's fire-block half (lava is tested separately) */
+static cc_bool ST_InFire(struct Entity* e) {
+	struct AABB bb;
+	if (!IndevTest_Enabled) return false;
+	Entity_GetBounds(e, &bb);
+	return Entity_TouchesAny(&bb, ST_IsFireBlock);
+}
 static cc_bool ST_InLiquid(struct Entity* e, cc_bool lava) {
 	struct AABB bb;
 	Entity_GetBounds(e, &bb);
@@ -536,6 +548,8 @@ static void SurvivalTest_SpawnDrop(IVec3 coords, cc_uint16 block) {
 /*  blocks that never drop a plain item at all (water/lava/bookshelf/TNT - */
 /*  TNT instead arms a fuse, handled separately by each caller). */
 static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, int* count) {
+	/* punching fire just extinguishes it - quantityDropped 0 */
+	if (IndevFire_IsFire(oldBlock)) return false;
 	/* Directional chest/furnace variants drop their canonical block */
 	oldBlock   = IndevTest_CanonicalBlock(oldBlock);
 	*dropBlock = oldBlock;
@@ -3340,6 +3354,10 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 			m->fire--;
 		}
 		if (inLava) m->fire = 600;
+		/* standing in a fire block sets mobs alight too (Entity.move's
+		    isBoundingBoxBurning path; the 1 HP/sec burn above does the
+		    damage once lit) */
+		if (m->fire <= 0 && !inWater && ST_InFire(&m->Base)) m->fire = 300;
 
 		/* EntityZombie/EntitySkeleton.onLivingUpdate: daylight sets them on
 		    fire - sky light over 7 (daytime), bright spot, open sky overhead,
@@ -5378,6 +5396,8 @@ void SurvivalTest_DebugGiveItem(int id) {
 /*  seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
 void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
+/* Fire consuming a TNT block arms it (onBlockDestroyedByPlayer) */
+void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled) SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); }
 
 /* .mclevel entity save: iterates live mobs (returns the next active index */
 /*  after prev, or -1) and physical item drops, for the Entities list. */
@@ -5972,6 +5992,28 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/*  into the effective 10 HP per half-second cadence. */
 	if (inLava) SurvivalTest_Hurt(LAVA_DAMAGE);
 
+	/* Standing in a fire block (Indev Entity.move's isBoundingBoxBurning):
+	    contact damage every tick (the invulnerability window shapes the
+	    cadence, like lava) and the player is set alight; being alight burns
+	    1 HP a second while the 300-tick counter runs down, water fizzes it
+	    out, lava re-arms it to 600 (Entity.onEntityUpdate). */
+	if (IndevTest_Enabled) {
+		if (ST_InFire(e)) {
+			SurvivalTest_Hurt(1);
+			if (!inWater) st_playerFire = 300;
+		}
+		if (inWater && st_playerFire > 0) {
+			Audio_PlayMobSound(MOBSND_FIZZ, 0.7f,
+				1.6f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.4f, 0.0f);
+			st_playerFire = 0;
+		}
+		if (st_playerFire > 0) {
+			if (st_playerFire % 20 == 0) SurvivalTest_Hurt(1);
+			st_playerFire--;
+		}
+		if (inLava) st_playerFire = 600;
+	}
+
 	/* Drowning - Mob.tick: airSupply-- while the head is underwater, then */
 	/*  hurt(null, 2) every tick once it's empty; instant refill on surfacing. */
 	st_headInWater = headInWater; /* exposed to the HUD for the air bubbles */
@@ -6039,6 +6081,7 @@ void SurvivalTest_Respawn(void) {
 	st_falling      = false;
 	st_airTimer     = 20.0f / 20.0f; /* airSupply = 20 ticks, not 300 */
 	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
+	st_playerFire   = 0;
 	st_isDead       = false;
 	st_deathTicks   = 0;
 	Camera_UpdateProjection(); /* undo the death FOV zoom immediately */
@@ -6099,6 +6142,7 @@ static void SurvivalTest_ResetState(void) {
 		st_paintings[i].active = false;
 	}
 	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
+	st_playerFire   = 0;
 
 	for (i = 0; i < TNT_MAX; i++) {
 		st_tnt[i].active = false;
@@ -6282,6 +6326,9 @@ void SurvivalTest_DebugShootArrow(void) {
 	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
 							ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
 }
+
+/* Whether the local player is alight (drives the first-person flames). */
+cc_bool SurvivalTest_PlayerBurning(void)   { return SurvivalTest_Enabled && st_playerFire > 0; }
 
 cc_bool SurvivalTest_DebugGodMode(void)    { return st_godMode; }
 void SurvivalTest_DebugToggleGodMode(void) { st_godMode = !st_godMode; }

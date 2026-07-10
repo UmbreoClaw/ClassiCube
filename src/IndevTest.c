@@ -18,6 +18,7 @@
 #include "Lighting.h"
 #include "BlockPhysics.h"
 #include "Picking.h"
+#include "IndevFire.h"
 
 /* Indev (in-20100223) gamemode - mode plumbing only so far.
    Ground truth: the deobfuscated EaglerPorts/in-20100223 tree (see
@@ -246,6 +247,8 @@ int IndevTest_ToolMaxDamage(int id) {
 	case ITEM_KIND_SWORD: case ITEM_KIND_SHOVEL: case ITEM_KIND_PICKAXE:
 	case ITEM_KIND_AXE:   case ITEM_KIND_HOE:
 		return 32 << d->param;
+	case ITEM_KIND_FLINTSTEEL:
+		return 64; /* ItemFlintAndSteel's explicit maxDamage */
 	}
 	return 0;
 }
@@ -466,11 +469,14 @@ cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId,
 	    diamond / gold ingot. (Genuine chain armor is crafted from FIRE
 	    blocks - deferred until BlockFire exists in the Indev layer.) */
 	{
-		static const cc_uint16 armorMaterial[4] = { BLOCK_GRAY, R_ITEM(9), R_ITEM(8), R_ITEM(10) };
-		static const cc_uint8  armorSet[4]  = { 42, 50, 54, 58 }; /* cloth iron diamond gold */
+		/* RecipesArmor's genuine material row is {clothGray, FIRE, ingotIron,
+		    diamond, ingotGold} - chain armor is literally crafted from fire
+		    blocks (unobtainable legitimately, a genuine quirk). */
+		static const cc_uint16 armorMaterial[5] = { BLOCK_GRAY, INDEV_BLOCK_FIRE, R_ITEM(9), R_ITEM(8), R_ITEM(10) };
+		static const cc_uint8  armorSet[5]  = { 42, 46, 50, 54, 58 }; /* cloth chain iron diamond gold */
 		static const cc_uint8  armorPatW[4] = { 3, 3, 3, 3 };
 		static const cc_uint8  armorPatH[4] = { 2, 3, 3, 2 };
-		for (m = 0; m < 4; m++) {
+		for (m = 0; m < 5; m++) {
 			cc_uint16 X = armorMaterial[m];
 			const cc_uint16 pats[4][9] = {
 				{ X,X,X, X,0,X },        /* helmet 3x2 */
@@ -597,6 +603,17 @@ int IndevTest_BlockDataMeta(BlockID b) {
 	if (b == INDEV_BLOCK_TORCH)           return 5; /* standing */
 	if (Indev_IsWallTorch(b))             return IndevTest_WallTorchMeta(b);
 	return 0;
+}
+
+/* Position-aware Data-nibble forms: fire keeps its age 0-15 in a per-map
+    side store rather than deriving it from the block id. */
+int IndevTest_BlockDataMetaAt(int index, BlockID b) {
+	if (IndevFire_IsFire(b)) return IndevFire_Age(index);
+	return IndevTest_BlockDataMeta(b);
+}
+BlockID IndevTest_ApplyDataMetaAt(int index, BlockID b, int meta) {
+	if (IndevFire_IsFire(b)) { IndevFire_SetAge(index, meta); return b; }
+	return IndevTest_ApplyDataMeta(b, meta);
 }
 
 /* Applies a loaded .mclevel metadata nibble to a base-mapped block. */
@@ -740,6 +757,7 @@ static void IndevBlocks_Define(void) {
 	    terrain's diamond ore. Hardness 3.0F like the other ores; the item/
 	    tool side of diamonds lands with the armor+tools roadmap stage. */
 	IndevBlock_Define(INDEV_BLOCK_DIAMOND_ORE, "Diamond Ore", 119, 119, 119, 119, SOUND_STONE, 60);
+	IndevFire_DefineBlock();
 
 	/* BlockFarmland.setBlockBounds(0, 0, 0, 1, 15/16, 1): genuine farmland
 	    sits 1/16 LOWER than a full block. The crop planes sink that same
@@ -1352,6 +1370,7 @@ void IndevTest_TickRandomBlocks(void) {
 		if (block == BLOCK_SAND || block == BLOCK_GRAVEL || block == BLOCK_DIRT ||
 			block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA) continue;
 		if (block == BLOCK_GRASS) { IndevTest_TickGrass(index); continue; }
+		if (IndevFire_IsFire(block)) { IndevFire_RandomTick(index); continue; }
 
 		tick  = Physics.OnRandomTick[block];
 		if (tick) tick(index, block);
@@ -1365,6 +1384,15 @@ cc_bool IndevTest_UseHeldItem(int heldId, IVec3 pos) {
 	BlockID target, above;
 	cc_bool solidAbove;
 	if (!IndevTest_Enabled) return false;
+
+	/* ItemFlintAndSteel.onItemUse: fire in the air cell on the clicked face */
+	{
+		const struct IndevItemDef* fs = IndevItems_Find(heldId);
+		if (fs && fs->kind == ITEM_KIND_FLINTSTEEL) {
+			return IndevFire_UseFlintSteel(pos,
+				Game_SelectedPos.valid ? Game_SelectedPos.closest : FACE_YMAX);
+		}
+	}
 
 	target     = World_GetBlock(pos.x, pos.y, pos.z);
 	above      = pos.y + 1 < World.Height ? World_GetBlock(pos.x, pos.y + 1, pos.z) : BLOCK_AIR;
@@ -1665,6 +1693,10 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 		}
 	}
 
+	/* Fire lifecycle: onBlockAdded validation/scheduling, age cleanup and
+	    onNeighborBlockChange for the six neighbouring fire blocks */
+	IndevFire_BlockChanged(coords, oldBlock, block);
+
 	/* Any block change makes the six neighbouring torches re-check their
 	    support (BlockTorch.onNeighborBlockChange) */
 	Indev_TorchCheckPop(coords.x - 1, coords.y, coords.z);
@@ -1685,6 +1717,7 @@ static void OnNewMapLoaded(void) {
 	if (!IndevTest_Enabled) return;
 	IndevBlocks_Define();
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
+	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
 
 	indev_baseSky      = Env.SkyCol;
 	indev_baseFog      = Env.FogCol;
@@ -1755,6 +1788,7 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 	case 69: return 62; /* furnace lit (exact) */
 	case 70: return 50; /* torch (exact) */
 	case INDEV_BLOCK_DIAMOND_ORE: return 56; /* diamond ore (exact) */
+	case INDEV_BLOCK_FIRE: return 51; /* fire (exact) */
 	default:
 		if (b <= 49) return b; /* classic identity */
 		/* directional variants: same Indev block, facing carried by the */
@@ -1772,7 +1806,8 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	switch (b) {
 	case 50: return 70; /* torch */
-	case 51: return 54; /* fire -> CPE fire (exact) */
+	case 51: return INDEV_BLOCK_FIRE; /* fire (was mapped to the inert CPE
+	    fire block 54 before the real BlockFire port existed) */
 	case 52: return 8;  /* waterSource -> water */
 	case 53: return 10; /* lavaSource  -> lava */
 	case 54: return 67; /* chest */
@@ -1848,6 +1883,7 @@ static void OnNewMap(void) {
 	int i;
 	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
 	indev_openTE = -1;
+	IndevFire_Reset();
 }
 
 struct IGameComponent IndevTest_Component = {

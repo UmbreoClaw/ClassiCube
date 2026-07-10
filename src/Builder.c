@@ -14,6 +14,7 @@
 #include "Game.h"
 #include "Options.h"
 #include "IndevTest.h"
+#include "IndevFire.h"
 
 int Builder_SidesLevel, Builder_EdgeLevel;
 /* Packs an index into the 16x16x16 count array. Coordinates range from 0 to 15. */
@@ -97,7 +98,8 @@ static void AddSpriteVertices(BlockID block) {
 	/*  the diagonal cross - see Builder_DrawCrops. Wall torches draw 5 */
 	/*  (4 tilted sides + tip cap) padded to 8 with degenerate quads so */
 	/*  the banked sprite layout stays quad-aligned - Builder_DrawWallTorch. */
-	part->sCount += (IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block)) ? 8 * 4 : 4 * 4;
+	part->sCount += IndevFire_IsFire(block) ? 12 * 4 :
+		(IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block)) ? 8 * 4 : 4 * 4;
 }
 
 static void AddVertices(BlockID block, Face face) {
@@ -647,9 +649,112 @@ static void Builder_DrawWallTorch(int x, int y, int z) {
 	#undef TORCH_DEGEN
 }
 
+/* The genuine RenderBlocks fire tessellation (renderType 3): grounded fire
+    is 8 slanted flame sheets alternating between the two animated flame
+    tiles; fire clinging to walls/ceilings draws leaning sheets against
+    each flammable neighbour instead. Every sheet is emitted as an opposed
+    pair in genuine, so the transcription is winding-safe. Padded to 12
+    quads (3 per sprite bank) with degenerates. */
+static void Builder_DrawFire(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	PackedCol color;
+	TextureLoc loc1, loc2;
+	float u1, u2, v1a, v2a, v1b, v2b, t;
+	float X, Y, Z, yy;
+	int stride, quads = 0;
+	cc_bool grounded;
+
+	X = (float)x; Y = (float)y; Z = (float)z;
+	loc1 = Block_Tex(Builder_Block, FACE_XMAX); /* INDEV_FIRE_TEX_LOC */
+	loc2 = INDEV_FIRE_TEX_LOC2;
+	/* both tiles must live in the same 1D atlas part to share the range */
+	if (Atlas1D_Index(loc2) != Atlas1D_Index(loc1)) loc2 = loc1;
+
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1a = Atlas1D_RowId(loc1) * Atlas1D.InvTileSize;
+	v2a = v1a + Atlas1D.InvTileSize * UV2_Scale;
+	v1b = Atlas1D_RowId(loc2) * Atlas1D.InvTileSize;
+	v2b = v1b + Atlas1D.InvTileSize * UV2_Scale;
+
+	part  = &Builder_Parts[Atlas1D_Index(loc1)];
+	color = PACKEDCOL_WHITE; /* fire is fullbright */
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+	v = &Builder_Vertices[part->sOffset];
+
+	#define FIRE_V(px, py, pz, FU, FVV) \
+		v->x = (px); v->y = (py); v->z = (pz); v->Col = color; v->U = (FU); v->V = (FVV); v++;
+	/* 3 quads per bank; hop to the next bank after every 3rd quad */
+	#define FIRE_ENDQUAD() \
+		quads++; if ((quads % 3) == 0) { v -= 12; v += stride; }
+	#define FIRE_DEGEN() \
+		FIRE_V(X, Y, Z, u1, v1a) FIRE_V(X, Y, Z, u1, v1a) \
+		FIRE_V(X, Y, Z, u1, v1a) FIRE_V(X, Y, Z, u1, v1a) FIRE_ENDQUAD()
+
+	grounded = (World_Contains(x, y - 1, z) && Blocks.FullOpaque[World_GetBlock(x, y - 1, z)]) ||
+	           (World_Contains(x, y - 1, z) && IndevFire_CanCatch(World_GetBlock(x, y - 1, z)));
+
+	if (grounded) {
+		/* inner slanted pair along X (tile 1) */
+		FIRE_V(X+0.2f, Y+1.4f, Z+1, u2,v1a) FIRE_V(X+0.7f, Y, Z+1, u2,v2a) FIRE_V(X+0.7f, Y, Z, u1,v2a) FIRE_V(X+0.2f, Y+1.4f, Z, u1,v1a) FIRE_ENDQUAD()
+		FIRE_V(X+0.8f, Y+1.4f, Z, u2,v1a) FIRE_V(X+0.3f, Y, Z, u2,v2a) FIRE_V(X+0.3f, Y, Z+1, u1,v2a) FIRE_V(X+0.8f, Y+1.4f, Z+1, u1,v1a) FIRE_ENDQUAD()
+		/* inner slanted pair along Z (tile 2) */
+		FIRE_V(X+1, Y+1.4f, Z+0.8f, u2,v1b) FIRE_V(X+1, Y, Z+0.3f, u2,v2b) FIRE_V(X, Y, Z+0.3f, u1,v2b) FIRE_V(X, Y+1.4f, Z+0.8f, u1,v1b) FIRE_ENDQUAD()
+		FIRE_V(X, Y+1.4f, Z+0.2f, u2,v1b) FIRE_V(X, Y, Z+0.7f, u2,v2b) FIRE_V(X+1, Y, Z+0.7f, u1,v2b) FIRE_V(X+1, Y+1.4f, Z+0.2f, u1,v1b) FIRE_ENDQUAD()
+		/* outer shell along X (tile 2) */
+		FIRE_V(X+0.1f, Y+1.4f, Z, u1,v1b) FIRE_V(X, Y, Z, u1,v2b) FIRE_V(X, Y, Z+1, u2,v2b) FIRE_V(X+0.1f, Y+1.4f, Z+1, u2,v1b) FIRE_ENDQUAD()
+		FIRE_V(X+0.9f, Y+1.4f, Z+1, u1,v1b) FIRE_V(X+1, Y, Z+1, u1,v2b) FIRE_V(X+1, Y, Z, u2,v2b) FIRE_V(X+0.9f, Y+1.4f, Z, u2,v1b) FIRE_ENDQUAD()
+		/* outer shell along Z (tile 1) */
+		FIRE_V(X, Y+1.4f, Z+0.9f, u1,v1a) FIRE_V(X, Y, Z+1, u1,v2a) FIRE_V(X+1, Y, Z+1, u2,v2a) FIRE_V(X+1, Y+1.4f, Z+0.9f, u2,v1a) FIRE_ENDQUAD()
+		FIRE_V(X+1, Y+1.4f, Z+0.1f, u1,v1a) FIRE_V(X+1, Y, Z, u1,v2a) FIRE_V(X, Y, Z, u2,v2a) FIRE_V(X, Y+1.4f, Z+0.1f, u2,v1a) FIRE_ENDQUAD()
+	} else {
+		/* side/ceiling flames against each flammable neighbour, with the
+		    genuine checkerboard tile/mirror variation */
+		float sv1 = v1a, sv2 = v2a, su1 = u1, su2 = u2;
+		if (((x + y + z) & 1) == 1) { sv1 = v1b; sv2 = v2b; }
+		if (((x / 2 + y / 2 + z / 2) & 1) == 1) { t = su1; su1 = su2; su2 = t; }
+
+		if (IndevFire_CanCatch(x > 0 ? World_GetBlock(x - 1, y, z) : BLOCK_AIR)) {
+			FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_V(X, Y+1.0f/16, Z, su1,sv2) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(x < World.MaxX ? World_GetBlock(x + 1, y, z) : BLOCK_AIR)) {
+			FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+1, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_V(X+1, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(z > 0 ? World_GetBlock(x, y, z - 1) : BLOCK_AIR)) {
+			FIRE_V(X, Y+1.4f+1.0f/16, Z+0.2f, su2,sv1) FIRE_V(X, Y+1.0f/16, Z, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.2f, su1,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.2f, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X, Y+1.0f/16, Z, su2,sv2) FIRE_V(X, Y+1.4f+1.0f/16, Z+0.2f, su2,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(z < World.MaxZ ? World_GetBlock(x, y, z + 1) : BLOCK_AIR)) {
+			FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.8f, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z+1, su1,sv2) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X, Y+1.4f+1.0f/16, Z+0.8f, su2,sv1) FIRE_ENDQUAD()
+			FIRE_V(X, Y+1.4f+1.0f/16, Z+0.8f, su2,sv1) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z+1, su1,sv2) FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.8f, su1,sv1) FIRE_ENDQUAD()
+		}
+		if (y + 1 < World.Height && IndevFire_CanCatch(World_GetBlock(x, y + 1, z))) {
+			yy = Y + 1.0f;
+			if (((x + (y + 1) + z) & 1) == 0) {
+				FIRE_V(X, yy-0.2f, Z, u2,v1a) FIRE_V(X+1, yy, Z, u2,v2a) FIRE_V(X+1, yy, Z+1, u1,v2a) FIRE_V(X, yy-0.2f, Z+1, u1,v1a) FIRE_ENDQUAD()
+				FIRE_V(X+1, yy-0.2f, Z+1, u2,v1b) FIRE_V(X, yy, Z+1, u2,v2b) FIRE_V(X, yy, Z, u1,v2b) FIRE_V(X+1, yy-0.2f, Z, u1,v1b) FIRE_ENDQUAD()
+			} else {
+				FIRE_V(X, yy-0.2f, Z+1, u2,v1a) FIRE_V(X, yy, Z, u2,v2a) FIRE_V(X+1, yy, Z, u1,v2a) FIRE_V(X+1, yy-0.2f, Z+1, u1,v1a) FIRE_ENDQUAD()
+				FIRE_V(X+1, yy-0.2f, Z, u2,v1b) FIRE_V(X+1, yy, Z+1, u2,v2b) FIRE_V(X, yy, Z+1, u1,v2b) FIRE_V(X, yy-0.2f, Z, u1,v1b) FIRE_ENDQUAD()
+			}
+		}
+	}
+
+	while (quads < 12) { FIRE_DEGEN() }
+	part->sOffset += 12;
+	#undef FIRE_V
+	#undef FIRE_ENDQUAD
+	#undef FIRE_DEGEN
+}
+
 static void Builder_DrawSprite(int x, int y, int z) {
 	if (IndevTest_IsCropBlock(Builder_Block)) { Builder_DrawCrops(x, y, z); return; }
 	if (IndevTest_IsWallTorch(Builder_Block)) { Builder_DrawWallTorch(x, y, z); return; }
+	if (IndevFire_IsFire(Builder_Block))      { Builder_DrawFire(x, y, z); return; }
 	{
 	struct Builder1DPart* part;
 	struct VertexTextured* v;

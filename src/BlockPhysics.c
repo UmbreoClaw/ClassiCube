@@ -16,6 +16,7 @@
 #include "Audio.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "IndevFire.h"
 
 /* Data for a resizable queue, used for liquid physic tick entries. */
 struct TickQueue {
@@ -334,6 +335,10 @@ static void Physics_PlaceLava(int index, BlockID block) {
 static void Physics_PropagateLava(int posIndex, int x, int y, int z) {
 	BlockID block = World.Blocks[posIndex];
 
+	/* Indev lava ignites flammable blocks it tries to flow against
+	    (BlockFlowing/BlockFluid's fireSpread) instead of flowing */
+	if (IndevFire_LavaFlowInto(x, y, z)) return;
+
 	if (block >= BLOCK_WATER && block <= BLOCK_STILL_LAVA) {
 		/* Lava spreading into water turns the water solid */
 		if (block == BLOCK_WATER || block == BLOCK_STILL_WATER) {
@@ -586,6 +591,7 @@ void Physics_Tick(void) {
 	    which visibly stalled crop growth and farmland moisture. c0.30
 	    and creative keep the engine loop untouched. */
 	if (IndevTest_Enabled) {
+		IndevFire_Tick(); /* the scheduled-update list runs before random ticks */
 		IndevTest_TickRandomBlocks();
 	} else {
 		Physics_TickRandomBlocks();

@@ -12,6 +12,7 @@
 #include "Options.h"
 #include "Logger.h"
 #include "IndevTest.h"
+#include "IndevFire.h"
 
 /* Disables when no hardware FPU, as lava/water animations are FPU heavy and thus costly */
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_NORMAL
@@ -183,11 +184,13 @@ static void WaterAnimation_Tick(void) {
     16 rows map through the genuine fire palette (alpha cuts off below 0.5)
     into the spare terrain tile the burning-mob billboards sample. Only runs
     in Indev mode, so c0.30/creative terrain is never touched. */
-static float fire_heat[16 * 20], fire_next[16 * 20];
+/* genuine registers TWO independent TextureFlamesFX instances (terrain
+    tiles 31 and 31+16) - the fire block renderer alternates between them */
+static float fire_heat[2][16 * 20], fire_next[2][16 * 20];
 static RNGState fire_rnd;
 static cc_bool  fire_rndInited;
 
-static void FireAnimation_Tick(void) {
+static void FireAnimation_TickOne(int inst, int tileLoc) {
 	BitmapCol pixels[16 * 16];
 	struct Bitmap bmp;
 	float heat, b;
@@ -203,27 +206,27 @@ static void FireAnimation_Tick(void) {
 	for (x = 0; x < 16; x++) {
 		for (y = 0; y < 20; y++) {
 			denom = 18;
-			heat  = fire_heat[x + ((y + 1) % 20) * 16] * 18.0f;
+			heat  = fire_heat[inst][x + ((y + 1) % 20) * 16] * 18.0f;
 
 			for (nx = x - 1; nx <= x + 1; nx++) {
 				for (ny = y; ny <= y + 1; ny++) {
-					if (nx >= 0 && ny >= 0 && nx < 16 && ny < 20) heat += fire_heat[nx + ny * 16];
+					if (nx >= 0 && ny >= 0 && nx < 16 && ny < 20) heat += fire_heat[inst][nx + ny * 16];
 					denom++;
 				}
 			}
-			fire_next[x + y * 16] = heat / ((float)denom * 1.06f);
+			fire_next[inst][x + y * 16] = heat / ((float)denom * 1.06f);
 
 			if (y >= 19) {
-				fire_next[x + y * 16] =
+				fire_next[inst][x + y * 16] =
 					Random_Float(&fire_rnd) * Random_Float(&fire_rnd) * Random_Float(&fire_rnd) * 4.0f +
 					Random_Float(&fire_rnd) * 0.1f + 0.2f;
 			}
 		}
 	}
-	Mem_Copy(fire_heat, fire_next, sizeof(fire_heat));
+	Mem_Copy(fire_heat[inst], fire_next[inst], sizeof(fire_heat[0]));
 
 	for (i = 0; i < 16 * 16; i++) {
-		b = fire_heat[i] * 1.8f;
+		b = fire_heat[inst][i] * 1.8f;
 		Math_Clamp(b, 0.0f, 1.0f);
 
 		pixels[i] = BitmapCol_Make(
@@ -234,7 +237,12 @@ static void FireAnimation_Tick(void) {
 	}
 
 	Bitmap_Init(bmp, 16, 16, pixels);
-	Animations_Update(INDEV_FIRE_TEX_LOC, &bmp, 16);
+	Animations_Update(tileLoc, &bmp, 16);
+}
+
+static void FireAnimation_Tick(void) {
+	FireAnimation_TickOne(0, INDEV_FIRE_TEX_LOC);
+	FireAnimation_TickOne(1, INDEV_FIRE_TEX_LOC2);
 }
 #endif
 

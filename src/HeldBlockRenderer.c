@@ -10,6 +10,8 @@
 #include "Model.h"
 #include "Options.h"
 #include "SurvivalTest.h"
+#include "IndevFire.h"
+#include "TexturePack.h"
 #include "IndevTest.h"
 
 cc_bool HeldBlockRenderer_Show;
@@ -398,6 +400,64 @@ static void DoAnimation(float delta, float lastSwingY) {
 	}
 }
 
+/* ItemRenderer.renderOverlays' burning half: while the player is alight,
+    two flame sheets fill the bottom of the view - one per animated flame
+    tile, mirrored and yawed +/-10 degrees, alpha 0.9 blended. Drawn in
+    plain camera space (identity view) with the held pass projection. */
+static GfxResourceID fireoverlay_vb;
+static void HeldBlockRenderer_FireOverlay(void) {
+	struct VertexTextured verts[8];
+	struct VertexTextured* v = verts;
+	struct Matrix m;
+	PackedCol col = PackedCol_Make(255, 255, 255, 229); /* alpha 0.9 */
+	TextureLoc locs[2];
+	float u1, u2, v1, v2, side, c, sn, tx, ty;
+	int i;
+
+	locs[0] = INDEV_FIRE_TEX_LOC; locs[1] = INDEV_FIRE_TEX_LOC2;
+	if (!fireoverlay_vb) {
+		fireoverlay_vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 8);
+		if (!fireoverlay_vb) return;
+	}
+	/* both flame tiles share the 1D atlas for 16px packs; fall back if not */
+	if (Atlas1D_Index(locs[1]) != Atlas1D_Index(locs[0])) locs[1] = locs[0];
+
+	for (i = 0; i < 2; i++) {
+		side = (float)((i << 1) - 1); /* -1, +1 */
+		c    = Math_CosF(side * 10.0f * MATH_DEG2RAD);
+		sn   = Math_SinF(side * 10.0f * MATH_DEG2RAD);
+		tx   = -side * 0.24f; ty = -0.3f;
+		u1 = 0.0f; u2 = UV2_Scale;
+		v1 = Atlas1D_RowId(locs[i]) * Atlas1D.InvTileSize;
+		v2 = v1 + Atlas1D.InvTileSize * UV2_Scale;
+
+		/* glTranslatef(-(2i-1)*0.24, -0.3, 0); glRotatef((2i-1)*10, 0,1,0);
+		    quad (+/-0.5, +/-0.5, z -0.5), u mirrored like genuine */
+		#define FOV_V(px, py, FU, FVV) \
+			v->x = tx + (px)*c + 0.5f*sn; v->y = ty + (py); v->z = (px)*sn - 0.5f*c; \
+			v->Col = col; v->U = (FU); v->V = (FVV); v++;
+		FOV_V(-0.5f, -0.5f, u2, v2)
+		FOV_V( 0.5f, -0.5f, u1, v2)
+		FOV_V( 0.5f,  0.5f, u1, v1)
+		FOV_V(-0.5f,  0.5f, u2, v1)
+		#undef FOV_V
+	}
+
+	m = Matrix_Identity;
+	Gfx_LoadMatrix(MATRIX_VIEW, &m);
+
+	Gfx_BindTexture(Atlas1D.TexIds[Atlas1D_Index(locs[0])]);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetDepthTest(false);
+	Gfx_SetFaceCulling(false);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetDynamicVbData(fireoverlay_vb, verts, 8);
+	Gfx_DrawVb_IndexedTris(8);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthTest(true);
+}
+
 void HeldBlockRenderer_Render(float delta) {
 	float lastSwingY;
 	struct Matrix view;
@@ -415,6 +475,9 @@ void HeldBlockRenderer_Render(float delta) {
 	DoAnimation(delta, lastSwingY);
 	SetBaseOffset();
 	if (!Camera.Active->isThirdPerson) HeldBlockRenderer_RenderModel();
+	if (!Camera.Active->isThirdPerson && SurvivalTest_PlayerBurning()) {
+		HeldBlockRenderer_FireOverlay();
+	}
 
 	Gfx.View = view;
 	Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);

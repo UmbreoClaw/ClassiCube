@@ -95,6 +95,9 @@ cc_bool IndevTest_UseHeldItem(int heldId, IVec3 pos);
     crop stage on save, and its application to a loaded base block. */
 int     IndevTest_BlockDataMeta(BlockID b);
 BlockID IndevTest_ApplyDataMeta(BlockID b, int meta);
+/* Position-aware forms (fire keeps its age in a per-position store). */
+int     IndevTest_BlockDataMetaAt(int index, BlockID b);
+BlockID IndevTest_ApplyDataMetaAt(int index, BlockID b, int meta);
 /* First-person extruded held item (ItemRenderer port): whether the id uses */
 /*  it, and the texture bind + UV rect for building its mesh. */
 cc_bool IndevTest_HeldIsExtruded(int id);

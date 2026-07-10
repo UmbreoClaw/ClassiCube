@@ -138,6 +138,10 @@ void SurvivalTest_DamageHeldItem(int amount);
 void SurvivalTest_ConsumeHeld(void);
 /* Spawns a physical item drop entity at an exact world position (chest scatter). */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
+/* Arms a TNT block's fuse (fire consuming TNT calls this). */
+void SurvivalTest_IgniteTnt(IVec3 coords);
+/* Whether the local player is alight (first-person flame overlay). */
+cc_bool SurvivalTest_PlayerBurning(void);
 /* .mclevel entity save/load: live mob + item drop iteration and respawn. */
 int  SurvivalTest_MobNext(int prev, int* type, Vec3* pos, float* yaw, int* health);
 int  SurvivalTest_DropNext(int prev, Vec3* pos, int* id, int* count);
