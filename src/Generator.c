@@ -77,6 +77,10 @@ static void Gen_Run(void) {
 cc_bool Gen_IsDone(void) { return gen_done; }
 #endif
 
+/* Generators outside this file can't reach the gen_done static - the
+    Indev generator calls this at the end of its Generate(). */
+void Gen_SetDone(void) { gen_done = true; }
+
 static void Gen_Reset(void) {
 	Gen_CurrentProgress = 0.0f;
 	Gen_CurrentState    = "";

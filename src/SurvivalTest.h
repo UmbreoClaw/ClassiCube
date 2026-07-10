@@ -69,6 +69,9 @@ void SurvivalTest_Hurt(int damage);
 /*  from attackerPos, matching the original's hurt(Entity, damage) call sites */
 /*  (melee/arrow hits, where the source is a specific entity). */
 void SurvivalTest_HurtFrom(int damage, Vec3 attackerPos);
+/* LevelGenerator's "Spawning.." phase - 1000 MobSpawner passes that
+    populate a freshly generated Indev world. No-op outside Indev mode. */
+void SurvivalTest_IndevInitialSpawn(void);
 /* Restores health to the player (capped at SURVIVAL_MAX_HEALTH). */
 void SurvivalTest_Heal(int amount);
 /* GameOverScreen's Respawn: clears the inventory, restores health/arrows */

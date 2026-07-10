@@ -1,5 +1,107 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
+## SESSION LOG - Indev world generator (roadmap stage 1, WORKING)
+
+### What landed
+- **src/IndevGen.c/.h**: full port of LevelGenerator.java + the noise stack
+  (NoiseGeneratorPerlin/Octaves/Distort), registered as a third engine
+  MapGenerator alongside FlatgrassGen/NotchyGen. Passes, in genuine order:
+  Raising (distorted-octave heightmap, island edge falloff), Eroding,
+  Soiling (dirt/stone fill, floating-layer carve-out; loops per 48-block
+  layer on Floating worlds), Growing (gravel/sand beaches; hell's odd
+  grass-beach quirk), Carving (worm caves, r up to ~4.7, y-squashed
+  ellipsoid), ore veins (coal 1000/10, iron 800/8, gold 500/6, diamond
+  800/2 with per-ore height caps), Melting (lava pockets, quad-min depth
+  bias), Watering (spring pockets < 640 cells via probe flood; edge ocean
+  flood at waterLevel-1; hell floods lava), theme colours/brightness
+  (hell 7 / paradise 16 / woods 12), findSpawn (mid-map, above water,
+  house-clearance + opaque-foundation checks, 1M-attempt sky fallback),
+  generateHouse (7x5x7 stone/plank shell, obsidian floor slab, doorway on
+  -Z, two torches), grass/trees/flowers/mushrooms, then post-load the
+  1000 MobSpawner passes (SurvivalTest_IndevInitialSpawn).
+- **UI**: IndevGenScreen = genuine GuiNewLevel (World type/Shape/Size/
+  Theme cyclers + Generate). Cross-linked per user request: the classic
+  gen screen has an "Indev..." button and the Indev screen a "Classic..."
+  button, so EITHER mode can use EITHER generator. Indev mode opens the
+  Indev screen first. Sizes 128<<n; Long = w/2 x 2w; Deep = w/2 sq x 256.
+- **Post-load hook**: GeneratingScreen_EndGeneration calls
+  IndevGen_ApplyPostLoad - spawn-in-house (player Spawn + yaw 180), theme
+  env via new IndevTest_SetBaseEnvColors (live + day/night baseline
+  together), EdgeHeight/SidesOffset from water/groundLevel, hell lava
+  edge fluid, initial mobs. Falls back to default spawn for classic gens.
+- **New block 93 Diamond Ore** (genuine 56, tile 119 patched from b173
+  tile (2,3)); .mclevel maps 56 <-> 93 exactly now (was coal-visual).
+  Cross-mode: classic-mode Indev generations substitute coal ore for
+  diamond and skip house torches (blocks 70/93 undefined there).
+- **Engine additions**: Gen_SetDone() exported (gen_done was a
+  Generator.c static only internal gens could set - without it the
+  "Generating level" screen never ended: THE hang symptom, main thread
+  fine at 600fps, gen thread exited, gen_done false forever).
+
+### Deviations from genuine (documented, low-impact)
+- MathHelper's 65536-entry sine TABLE -> libm sinf/cosf (identical
+  distribution; caves/veins differ per-seed but not statistically).
+- growGrassOnDirt light>=4 and flower canBlockStay -> "sky-exposed"
+  approximation (generation precedes engine lighting; loses only grass
+  just inside cave mouths).
+- Engine RNGState IS java.util.Random-compatible, so nextInt/nextFloat
+  match exactly. floodFill's segmented 1M-int stack -> growable stack.
+- COOPTHREADED platforms (web): IndevGen_Generate runs monolithically
+  in one call (no yield points) - fine on desktop, would hitch on web.
+
+### Performance notes (user asked: why does classic gen feel instant?)
+Measured on the rig (llvmpipe VM, slow CPU): Small inland ~2s, Normal
+island ~10-15s of real work. Genuine Indev was similarly slow in 2010
+(it even ran 10000 updateLighting rounds we skip). Why Indev >> classic:
+- NotchyGen evaluates ~10-20 noise samples per column; Indev's pipeline
+  is ~130+ DOUBLE-precision Perlin evaluations per column: Raising alone
+  is two Distorts (each = 2x octaves8 = 16 perlins, and the distort input
+  doubles it) + octaves6 + octaves2, then Eroding re-creates two more
+  distorts, Soiling 2x octaves8, Growing 2x octaves8.
+- Future optimization directions (fidelity-safe):
+  1. Specialize Perlin to true 2D (genuine samples 3D at z=0; the w/fz
+     lerp arm is dead weight - ~40% fewer ops, bit-identical results).
+  2. Evaluate each octave layer for the whole heightmap in one cache-
+     friendly sweep (array of doubles) instead of per-column call trees.
+  3. Multithread the per-column loops (columns are independent; only the
+     shared RNG for octave INIT needs ordering - noise evaluation itself
+     is pure table lookups).
+  4. Precompute the two erosion noises into arrays (they're sampled at
+     (x<<1, z<<1) - a quarter of the samples repeat).
+  5. floodFill edge-ocean pass scans full borders even over solid rock -
+     early-out when the start cell isn't air.
+  The 1000 post-load mob passes and the flood fills are NOT hot; the
+  Perlin tree is ~90% of the time.
+
+### Verified in rig / still to verify
+- Verified: gen screen cyclers (note: xdotool needs mousemove THEN click
+  as separate calls), progress phases display, Island-Normal generates,
+  player spawns INSIDE the genuine plank/stone house, no crashes.
+- Still to eyeball (user/next session): island coastline shape, cave/ore
+  density, hell lava sea + dark sky, paradise/woods themes, floating
+  layers, Deep worlds (256 tall), house torches, initial animal spread,
+  first-gen "screen reopened" oddity (likely a stacked-pause-menu quirk,
+  reproduce before chasing).
+
+## ROADMAP (agreed 2026-07, in priority order)
+1. **Indev world generator** (IN PROGRESS): full LevelGenerator.java port -
+   island/inland/floating/flat shapes, themes (normal/hell/paradise/woods),
+   soil layering, cave carving, ore veins, water/lava springs + edge
+   flooding, beaches, trees; genuine noise stack (Perlin/Octaves/Distort);
+   wired into Generate New Level with type/theme/size pickers in Indev mode.
+2. **Armor system**: ItemArmor tiers, inventory armor slots (GUI spots
+   exist; .mclevel slots 100-103 currently skipped), damage absorption,
+   player armor overlay rendering (mob flags already exist).
+3. **Bow + arrows as items**: ItemBow right-click fire consuming arrow
+   items (262) in Indev mode, replacing the c0.30 arrow counter there.
+4. **Paintings**: ItemPainting/EntityPainting/EnumArt - placement,
+   knock-off rule, rendering, .mclevel entity round-trip.
+5. **Flint & steel + BlockFire spread** (fire block + flame animation
+   already exist from the burning-mob work).
+6. **Polish batch**: wall torches, creeper swell white-flash overlay,
+   equip-dip on item switch, exact first-person swing curves, double-chest
+   verification, splash/fizz sound gaps, third-person held item decision.
+
 ## SESSION LOG - Pre-test fixes: lit furnace drop + inventory count shadow (latest)
 
 ### Growth stall: random ticks ran at 1/6.8 the genuine rate (user report)

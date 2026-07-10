@@ -29,6 +29,9 @@ void Gen_Start(STRING_REF const struct MapGenerator* gen, int seed,
 				int width, int height, int length);
 /* Checks whether the map generator has completed yet */
 cc_bool Gen_IsDone(void);
+/* Marks generation as complete - generators defined outside Generator.c
+   must call this at the end of their Generate() function */
+void Gen_SetDone(void);
 
 
 extern BlockRaw* Tree_Blocks;

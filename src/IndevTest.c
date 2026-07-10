@@ -423,6 +423,7 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_FARMLAND_WET 84
 #define INDEV_BLOCK_CROPS_0      85 /* 85-92 */
 #define INDEV_BLOCK_CROPS_7      92
+#define INDEV_BLOCK_DIAMOND_ORE  93 /* genuine 56; tile 119 */
 
 static cc_bool Indev_IsFarmland(BlockID b) {
 	return b == INDEV_BLOCK_FARMLAND || b == INDEV_BLOCK_FARMLAND_WET;
@@ -581,6 +582,11 @@ static void IndevBlocks_Define(void) {
 	/*  hardness dirt-like (0.6s). Only obtainable by hoeing - not placeable. */
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND,     "Farmland", 116, 2, 2, 2, SOUND_GRAVEL, 12);
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND_WET, "Farmland", 115, 2, 2, 2, SOUND_GRAVEL, 12);
+	/* Diamond ore (genuine 56) - tile 119 is patched from the b1.7.3
+	    terrain's diamond ore. Hardness 3.0F like the other ores; the item/
+	    tool side of diamonds lands with the armor+tools roadmap stage. */
+	IndevBlock_Define(INDEV_BLOCK_DIAMOND_ORE, "Diamond Ore", 119, 119, 119, 119, SOUND_STONE, 60);
+
 	/* BlockFarmland.setBlockBounds(0, 0, 0, 1, 15/16, 1): genuine farmland
 	    sits 1/16 LOWER than a full block. The crop planes sink that same
 	    1/16 to rest flush on it - with a full-cube farmland, the bottom
@@ -908,6 +914,19 @@ static int       indev_lastSkyLight = -1;
 int  IndevTest_WorldTime(void)      { return indev_worldTime; }
 void IndevTest_SetWorldTime(int t)  { indev_worldTime = t >= 0 ? t % 24000 : 0; }
 void IndevTest_SetSkyBrightness(int b) { indev_skyBright = b; }
+
+/* Applies theme colours as BOTH the live Env colours and the day/night
+    scaling baseline - the generator calls this after World_SetNewMap, i.e.
+    after OnNewMapLoaded already snapshotted the (default) colours. */
+void IndevTest_SetBaseEnvColors(PackedCol sky, PackedCol fog, PackedCol clouds) {
+	indev_baseSky      = sky;
+	indev_baseFog      = fog;
+	indev_baseClouds   = clouds;
+	indev_baseColsKnown = true;
+	Env_SetSkyCol(sky);
+	Env_SetFogCol(fog);
+	Env_SetCloudsCol(clouds);
+}
 int  IndevTest_SkyBrightness(void)      { return indev_skyBright; }
 
 /* Full-daylight base colours for .mclevel saving - the live Env colours */
@@ -1445,6 +1464,7 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 	case 68: return 61; /* furnace idle (exact) */
 	case 69: return 62; /* furnace lit (exact) */
 	case 70: return 50; /* torch (exact) */
+	case INDEV_BLOCK_DIAMOND_ORE: return 56; /* diamond ore (exact) */
 	default:
 		if (b <= 49) return b; /* classic identity */
 		/* directional variants: same Indev block, facing carried by the */
@@ -1466,7 +1486,7 @@ BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	case 53: return 10; /* lavaSource  -> lava */
 	case 54: return 67; /* chest */
 	case 55: return 0;  /* gear -> air */
-	case 56: return 16; /* diamond ore   -> coal ore (closest visual) */
+	case 56: return INDEV_BLOCK_DIAMOND_ORE; /* diamond ore (exact) */
 	case 57: return 42; /* diamond block -> iron block */
 	case 58: return 66; /* workbench */
 	case 59: return INDEV_BLOCK_CROPS_0;  /* + stage from the Data nibble */

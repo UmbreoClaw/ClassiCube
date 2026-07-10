@@ -26,6 +26,7 @@
 #include "Protocol.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "IndevGen.h"
 #include "IsometricDrawer.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
@@ -3712,7 +3713,11 @@ static void GeneratingScreen_EndGeneration(void) {
 	if (!Gen_Blocks) { Chat_AddRaw("&cFailed to generate the map."); return; }
 
 	Gen_Blocks = NULL;
-	LocalPlayer_CalcDefaultSpawn(Entities.CurPlayer, &update);
+	/* An Indev generation supplies its own spawn (the spawn house), theme
+	    environment and initial mob population; otherwise default spawn. */
+	if (!IndevGen_ApplyPostLoad(&update)) {
+		LocalPlayer_CalcDefaultSpawn(Entities.CurPlayer, &update);
+	}
 	LocalPlayers_MoveToSpawn(&update);
 }
 

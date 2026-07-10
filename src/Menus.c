@@ -39,6 +39,7 @@
 #include "Protocol.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "IndevGen.h"
 
 /*########################################################################################################################*
 *--------------------------------------------------------Menu base--------------------------------------------------------*
@@ -1045,11 +1046,13 @@ void EditHotkeyScreen_Show(struct HotkeyData original) {
 static struct GenLevelScreen {
 	Screen_Body
 	struct FontDesc textFont;
-	struct ButtonWidget flatgrass, vanilla, cancel;
+	struct ButtonWidget flatgrass, vanilla, indev, cancel;
 	struct TextInputWidget inputs[4];
 	struct TextWidget labels[4], title;
-	struct Widget* __widgets[2 * GENLEVEL_NUM_INPUTS + 4];
+	struct Widget* __widgets[2 * GENLEVEL_NUM_INPUTS + 5];
 } GenLevelScreen;
+
+static void IndevGenScreen_Show(void);
 
 CC_NOINLINE static int GenLevelScreen_GetInt(struct GenLevelScreen* s, int index) {
 	struct TextInputWidget* input = &s->inputs[index];
@@ -1092,6 +1095,10 @@ static void GenLevelScreen_Gen(void* screen, const struct MapGenerator* gen) {
 
 static void GenLevelScreen_Flatgrass(void* a, void* b) { GenLevelScreen_Gen(a, &FlatgrassGen); }
 static void GenLevelScreen_Notchy(void* a, void* b)    { GenLevelScreen_Gen(a, &NotchyGen);    }
+static void GenLevelScreen_Indev(void* a, void* b) {
+	Gui_Remove((struct Screen*)&GenLevelScreen);
+	IndevGenScreen_Show();
+}
 
 static void GenLevelScreen_Make(struct GenLevelScreen* s, int i, int def) {
 	cc_string tmp; char tmpBuffer[STRING_SIZE];
@@ -1176,6 +1183,7 @@ static void GenLevelScreen_ContextRecreated(void* screen) {
 	TextWidget_SetConst(&s->title,       "Generate new level", &s->textFont);
 	ButtonWidget_SetConst(&s->flatgrass, "Flatgrass",          &titleFont);
 	ButtonWidget_SetConst(&s->vanilla,   "Vanilla",            &titleFont);
+	ButtonWidget_SetConst(&s->indev,     "Indev...",           &titleFont);
 	ButtonWidget_SetConst(&s->cancel,    "Cancel",             &titleFont);
 	Font_Free(&titleFont);
 }
@@ -1204,6 +1212,7 @@ static void GenLevelScreen_Layout(void* screen) {
 	Widget_SetLocation(&s->title,     ANCHOR_CENTRE, ANCHOR_CENTRE,    0, -130);
 	Widget_SetLocation(&s->flatgrass, ANCHOR_CENTRE, ANCHOR_CENTRE, -120,  100);
 	Widget_SetLocation(&s->vanilla,   ANCHOR_CENTRE, ANCHOR_CENTRE,  120,  100);
+	Widget_SetLocation(&s->indev,     ANCHOR_CENTRE, ANCHOR_CENTRE,    0,  145);
 	Menu_LayoutBack(&s->cancel);
 }
 
@@ -1222,6 +1231,7 @@ static void GenLevelScreen_Init(void* screen) {
 	TextWidget_Add(s,   &s->title);
 	ButtonWidget_Add(s, &s->flatgrass, 200, GenLevelScreen_Flatgrass);
 	ButtonWidget_Add(s, &s->vanilla,   200, GenLevelScreen_Notchy);
+	ButtonWidget_Add(s, &s->indev,     200, GenLevelScreen_Indev);
 	AddPrimaryButton(s, &s->cancel,         Menu_SwitchPause);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
@@ -1235,12 +1245,153 @@ static const struct ScreenVTABLE GenLevelScreen_VTABLE = {
 	GenLevelScreen_Layout,      GenLevelScreen_ContextLost, GenLevelScreen_ContextRecreated,
 	Menu_PadAxis
 };
-void GenLevelScreen_Show(void) {	
+/*########################################################################################################################*
+*----------------------------------------------------IndevGenScreen-------------------------------------------------------*
+*#########################################################################################################################*/
+/* GuiNewLevel (in-20100223): four cycling options + Generate, replacing
+    the engine's width/height/seed screen while Indev mode is active. */
+static struct IndevGenScreen {
+	Screen_Body
+	struct TextWidget title;
+	struct ButtonWidget btns[4]; /* type, shape, size, theme cyclers */
+	struct ButtonWidget gen, classic, cancel;
+	struct Widget* __widgets[1 + 4 + 3];
+} IndevGenScreen;
+
+static void GenLevelScreen_ShowClassic(void);
+
+static int indevGen_sel[4]; /* type, shape, size, theme - persists per session */
+static const char* const indevGen_types[]  = { "Inland", "Island", "Floating", "Flat" };
+static const char* const indevGen_shapes[] = { "Square", "Long", "Deep" };
+static const char* const indevGen_sizes[]  = { "Small", "Normal", "Huge" };
+static const char* const indevGen_themes[] = { "Normal", "Hell", "Paradise", "Woods" };
+
+static void IndevGenScreen_UpdateLabels(struct IndevGenScreen* s, struct FontDesc* font) {
+	cc_string str; char strBuffer[STRING_SIZE];
+	static const char* const prefixes[] = { "World type: ", "Shape: ", "Size: ", "Theme: " };
+	static const char* const* const values[] = { indevGen_types, indevGen_shapes, indevGen_sizes, indevGen_themes };
+	int i;
+
+	for (i = 0; i < 4; i++) {
+		String_InitArray(str, strBuffer);
+		String_Format2(&str, "%c%c", prefixes[i], values[i][indevGen_sel[i]]);
+		ButtonWidget_Set(&s->btns[i], &str, font);
+	}
+}
+
+static void IndevGenScreen_Cycle(void* screen, void* widget) {
+	struct IndevGenScreen* s = (struct IndevGenScreen*)screen;
+	struct ButtonWidget* btn = (struct ButtonWidget*)widget;
+	static const int counts[] = { 4, 3, 3, 4 };
+	struct FontDesc font;
+	int i = (int)(btn - s->btns);
+
+	indevGen_sel[i] = (indevGen_sel[i] + 1) % counts[i];
+	Gui_MakeTitleFont(&font);
+	IndevGenScreen_UpdateLabels(s, &font);
+	Font_Free(&font);
+}
+
+static void IndevGenScreen_Generate(void* screen, void* b) {
+	int size   = 128 << indevGen_sel[2];
+	int width  = size, length = size, height = 64;
+	RNGState rnd;
+	int seed;
+
+	if (indevGen_sel[1] == 1) {        /* Long */
+		width /= 2; length <<= 1;
+	} else if (indevGen_sel[1] == 2) { /* Deep */
+		width /= 2; length = width; height = 256;
+	}
+
+	Random_SeedFromCurrentTime(&rnd);
+	seed = Random_Next(&rnd, Int32_MaxValue);
+
+	IndevGen_Setup(indevGen_sel[0], indevGen_sel[3]);
+	Gui_Remove((struct Screen*)screen);
+	Gen_Start(&IndevGen, seed, width, height, length);
+}
+
+static void IndevGenScreen_Close(void* a, void* b) { Gui_Remove((struct Screen*)&IndevGenScreen); }
+
+static void IndevGenScreen_Classic(void* a, void* b) {
+	Gui_Remove((struct Screen*)&IndevGenScreen);
+	GenLevelScreen_ShowClassic();
+}
+
+static void IndevGenScreen_ContextRecreated(void* screen) {
+	struct IndevGenScreen* s = (struct IndevGenScreen*)screen;
+	struct FontDesc font;
+	Screen_UpdateVb(screen);
+	Gui_MakeTitleFont(&font);
+
+	TextWidget_SetConst(&s->title, "Generate new level", &font);
+	IndevGenScreen_UpdateLabels(s, &font);
+	ButtonWidget_SetConst(&s->gen,     "Generate",   &font);
+	ButtonWidget_SetConst(&s->classic, "Classic...", &font);
+	ButtonWidget_SetConst(&s->cancel,  "Cancel",     &font);
+	Font_Free(&font);
+}
+
+static void IndevGenScreen_Layout(void* screen) {
+	struct IndevGenScreen* s = (struct IndevGenScreen*)screen;
+	int i;
+	Widget_SetLocation(&s->title, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -140);
+	for (i = 0; i < 4; i++) {
+		Widget_SetLocation(&s->btns[i], ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -90 + i * 40);
+	}
+	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  90);
+	Widget_SetLocation(&s->classic, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 135);
+	Menu_LayoutBack(&s->cancel);
+}
+
+static void IndevGenScreen_Init(void* screen) {
+	struct IndevGenScreen* s = (struct IndevGenScreen*)screen;
+	int i;
+	s->widgets    = s->__widgets;
+	s->numWidgets = 0;
+	s->maxWidgets = Array_Elems(s->__widgets);
+
+	TextWidget_Add(s, &s->title);
+	for (i = 0; i < 4; i++) {
+		ButtonWidget_Add(s, &s->btns[i], 200, IndevGenScreen_Cycle);
+	}
+	ButtonWidget_Add(s, &s->gen,     200, IndevGenScreen_Generate);
+	ButtonWidget_Add(s, &s->classic, 200, IndevGenScreen_Classic);
+	ButtonWidget_Add(s, &s->cancel,  120, IndevGenScreen_Close);
+
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+}
+
+static const struct ScreenVTABLE IndevGenScreen_VTABLE = {
+	IndevGenScreen_Init,   Screen_NullUpdate, Screen_NullFunc,
+	MenuScreen_Render2,    Screen_BuildMesh,
+	Menu_InputDown,        Screen_InputUp,    Screen_TKeyPress, Screen_TText,
+	Menu_PointerDown,      Screen_PointerUp,  Menu_PointerMove, Screen_TMouseScroll,
+	IndevGenScreen_Layout, Screen_ContextLost, IndevGenScreen_ContextRecreated,
+	Menu_PadAxis
+};
+static void IndevGenScreen_Show(void) {
+	struct IndevGenScreen* s = &IndevGenScreen;
+	s->grabsInput = true;
+	s->closable   = true;
+	s->VTABLE     = &IndevGenScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
+}
+
+static void GenLevelScreen_ShowClassic(void) {
 	struct GenLevelScreen* s = &GenLevelScreen;
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &GenLevelScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_MENU);
+}
+
+void GenLevelScreen_Show(void) {
+	/* Indev mode opens the genuine GuiNewLevel options first; both screens
+	    link to each other, so either generator is reachable in any mode. */
+	if (IndevTest_Enabled) { IndevGenScreen_Show(); return; }
+	GenLevelScreen_ShowClassic();
 }
 
 

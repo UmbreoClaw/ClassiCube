@@ -985,6 +985,7 @@ static const struct BetaTile { cc_uint8 sx, sy, dx, dy; } beta_tiles[] = {
 	{ 12,5, 15,6 }, { 13,5,  0,7 }, { 14,5,  1,7 }, { 15,5,  2,7 }, /* 111-114 crops 4-7 */
 	{  6,5,  3,7 }, /* 115 farmland wet */
 	{  7,5,  4,7 }, /* 116 farmland dry */
+	{  2,3,  7,7 }, /* 119 diamond ore (118 is the live fire animation) */
 };
 
 static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* data, struct ZipEntry* source) {

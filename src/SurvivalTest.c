@@ -3753,6 +3753,15 @@ static void Mob_IndevSpawnerRun(void) {
 	Mob_IndevSpawnPass(false, animalCap,  animals);
 }
 
+/* LevelGenerator's "Spawning.." phase: 1000 MobSpawner.performSpawning
+    passes populate a freshly generated world (mostly animals - monsters
+    only stick where it's already dark, i.e. the caves). */
+void SurvivalTest_IndevInitialSpawn(void) {
+	int i;
+	if (!IndevTest_Enabled || !World.Blocks) return;
+	for (i = 0; i < 1000; i++) Mob_IndevSpawnerRun();
+}
+
 /* SurvivalGameMode.spawnMob() - the periodic per-tick spawn gate. */
 static void SurvivalTest_TrySpawnMobs(void) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;

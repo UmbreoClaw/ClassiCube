@@ -146,6 +146,10 @@ void IndevTest_TickRandomBlocks(void);
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);
 PackedCol IndevTest_BaseCloudsCol(void);
+/* Sets the live Env colours AND the day/night baseline together - used by
+    the Indev generator's theme environments (which apply after the map-
+    loaded snapshot has already run). */
+void IndevTest_SetBaseEnvColors(PackedCol sky, PackedCol fog, PackedCol clouds);
 /* Renders the sun, moon and star field (RenderGlobal.renderSky port) - */
 /*  called from the 3D pass right after the sky plane, before clouds. */
 void IndevTest_RenderSky(void);
