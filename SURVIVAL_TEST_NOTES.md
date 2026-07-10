@@ -1,6 +1,43 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Genuine block-id migration (latest)
+## SESSION LOG - Paperdoll lean + spawn fallback + feedback triage (latest)
+
+Playtest feedback batch (Indev-vs-CC side-by-sides). Fixed this pass:
+- **Paperdoll lean too much**: the vertical mouse tilt was applied as a
+  BODY pitch (doll.RotX) stacked on top of the head pitch - double lean.
+  Genuine drawGuiContainerBackgroundLayer applies it as a whole-SCENE
+  camera rotation (glRotatef(-atan(dy/40)*20, 1,0,0) before rendering
+  the entity) PLUS the head pitch; the body only ever tracks
+  horizontally (renderYawOffset yaw). Now: body RotX=0, head pitch kept,
+  and a dollCamPitch rides the GUI view matrix as the scene tilt. Rig-
+  verified - body stays upright, legs clean.
+- **Startup air-spawn**: findSpawn is a byte-faithful transcription
+  including genuine's 1,000,000-attempt fallback of ySpawn = height+100
+  (genuine drops you and you fall). On our floating/uneven maps that
+  reads as "spawned in the sky"/void fall. Graceful deviation: the
+  fallback now drops to the sampled surface column (FirstUncovered+2)
+  instead of +100. Only triggers on the rare search-failure seed.
+
+Confirmed WORKING (not bugs), documented for the record:
+- **Sun/moon DO render** - the RenderSky port draws them (stars visible
+  at midnight, the sun is the soft additive glow above the horizon at
+  dawn - screenshotted). It's a soft Indev-era glow, not a hard disc,
+  so it's easy to miss as a time indicator but it IS there and faithful.
+
+Still open (need the user's exact view - couldn't reproduce cleanly on
+the flaky headless rig):
+- **Armor paperdoll "light bugs"**: our armor box defs match the engine
+  human legs + genuine ModelBiped inflation, so the remaining issue is
+  subtle (likely leggings/boots z-overlap). Needs the user's specific
+  armored-doll frame to pin down.
+- **Fire "placed as a block next to the wood"**: genuine fire keeps a
+  full selection cube (only entity collision is off), and our
+  Builder_DrawFire already leans against flammable neighbours when the
+  cell has no floor - so this is likely the grounded-render case (floor
+  below -> 8 upright sheets, genuine behaviour) reading as detached.
+  Needs the user's exact placement to confirm vs. genuine.
+
+## SESSION LOG - Genuine block-id migration
 
 User (after /give fire handed out the inert CPE Fire 54): asked for
 per-mode block identity so Indev uses the REAL Indev ids. Done - the

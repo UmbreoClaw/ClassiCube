@@ -2511,6 +2511,7 @@ static struct SurvivalInvScreen {
 	int  hotY;             /* pixel y of the in-screen hotbar row (GuiInventory style) */
 	float texF;            /* Indev: pixels per texture unit of the 176x166 gui panel */
 	int  dollBoxH;         /* doll viewport height (== dollBoxSize except Indev's tall window) */
+	float dollCamPitch;    /* GUI paperdoll: whole-scene vertical camera tilt */
 	int  craftX, craftY;   /* pixel origin of the top-left 2x2 crafting cell */
 	int  resultX, resultY; /* pixel origin of the crafting result slot */
 	int  slotSize;         /* current pixel size per slot */
@@ -2794,11 +2795,15 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		/* The view's x+y mirror below IS a 180-degree spin about Z, so the
 		    face-the-camera base is 0 here, and the frame matches genuine's
 		    mirrored one - the genuine signs apply verbatim. */
-		s->doll.RotY  = t * 20.0f;            /* body: light tracking */
+		s->doll.RotY  = t * 20.0f;            /* body: light HORIZONTAL track */
 		s->doll.Yaw   = t * 40.0f;            /* head: double strength */
-		s->doll.Pitch = -lean * 20.0f;        /* head pitch */
-		s->doll.RotX  = -lean * 20.0f;        /* whole-body lean */
+		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
+		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
 		s->doll.RotZ  = 0.0f;
+		s->dollCamPitch = lean * 20.0f;       /* the vertical tilt is a CAMERA
+		    rotation applied to the whole scene, not a body lean - genuine's
+		    glRotatef(-atan(dy/40)*20, 1,0,0) before rendering the entity.
+		    Mirrored frame flips the sign back to +lean here. */
 	}
 	s->doll.Position.x = 0.0f;
 	s->doll.Position.y = 0.0f;
@@ -2816,14 +2821,18 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 
 	savedView = Gfx.View;
 	{
-		struct Matrix flip, place;
+		struct Matrix flip, place, camPitch, tmp;
 		/* x+y mirror (winding-preserving), then anchor at the window's
 		    bottom-centre like genuine's (+51,+75) with z pushed into the
-		    ortho range */
+		    ortho range. The whole-scene pitch tilt (genuine's pre-render
+		    glRotatef about X) rides on top, so vertical mouse movement
+		    tips the CAMERA over the doll rather than bending the body. */
 		Matrix_Scale(&flip, -aspect, -aspect, aspect);
+		Matrix_RotateX(&camPitch, s->dollCamPitch * MATH_DEG2RAD);
 		Matrix_Translate(&place, (float)(boxSize - 2) * 0.5f,
 								 (float)(boxH - 2) * (67.0f / 70.0f), 50.0f);
-		Matrix_Mul(&Gfx.View, &flip, &place);
+		Matrix_Mul(&tmp, &flip, &camPitch);
+		Matrix_Mul(&Gfx.View, &tmp, &place);
 	}
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Gfx_LoadMatrix(MATRIX_PROJ, &proj);

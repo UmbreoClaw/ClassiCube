@@ -1037,8 +1037,14 @@ static void IndevGen_FindSpawn(void) {
 		y = IndevGen_FirstUncovered(x, z) + 1;
 
 		if (attempts == 1000000) {
+			/* genuine World.findSpawn gives up here with ySpawn = height+100
+			    and lets the player fall - fine on a solid classic world, but
+			    on our floating/uneven Indev maps that reads as "spawned in
+			    the sky" (or a fall into the void). Graceful deviation: drop
+			    to the surface column we already sampled, so the rare
+			    search-failure seed still lands the player on the ground. */
 			indevgen_spawnX = x;
-			indevgen_spawnY = World.Height + 100;
+			indevgen_spawnY = IndevGen_FirstUncovered(x, z) + 2;
 			indevgen_spawnZ = z;
 			return;
 		}
