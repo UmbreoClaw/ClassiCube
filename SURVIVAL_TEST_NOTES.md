@@ -4688,6 +4688,38 @@ Java before porting (one agent claim was wrong and is documented):
   SetModel resets Size from the model's GetCollisionSize. LOS/eye
   anchors (heightOff) left as-is deliberately.
 
+### GUI leftovers batch (commit 843508a) - round 3 complete
+- **Hotbar pop curves**: IsometricDrawer_AddBatchScaled (asymmetric X/Y
+  about the centre; plain AddBatch resets the statics so nothing leaks
+  into TableWidget; the Flat path scales too for low-FPU builds).
+  c0.30 HUDScreen: X = sin(t^2*pi)+1, Y = sin(t*pi)+1 (DIFFERENT
+  curves) + the sin(t^2*pi)*8px rise. Indev GuiIngame: squash
+  scaleX = 1/k, scaleY = (k+1)/2 (k = 1+t/5), pivot 4 GUI px below the
+  icon centre (reproduced by shifting the centre), NO bounce. Style via
+  hotbar.popSquash set in HUDScreen_SetSlotPop. Counts never scale.
+- **Paperdoll**: genuine GuiInventory constants (the old "no decompiled
+  source" note was stale) - feet (guiLeft+51, guiTop+75), mouse anchor
+  (51,25), scale 30*texF. ALSO fixed a PRE-EXISTING 180-degree facing
+  bug: the ortho x+y mirror = a Z-axis spin, which cannot turn the
+  face toward the camera (facing is a Z direction) - the old comment's
+  assumption was geometrically wrong; base yaw is now 180 and the
+  genuine dx sign cancels the mirror's left/right flip (rig-verified
+  tracking both ways). Confirmed present in the pre-change build too.
+- **Container layer order** (GuiContainer.drawScreen): slot items ->
+  counts -> hover highlight -> held stack -> labels LAST. The iso and
+  count meshes are split (isoSlotVerts/countSlotVerts) so the cursor-
+  held block + count draw as batch tails above the highlight (genuine
+  z+32); labels moved to the function tail. contKind/workbench/guiTex
+  hoisted to function scope. Classic flat branch untouched; paperdoll
+  stays last (viewport deviation, documented).
+- **Indev initial spawn**: audited conformant, no change (findSpawn
+  ranges/1e6 attempts/asymmetric z-5..z+3 volume + opaque floor all
+  match; sky-spawn failure fallback stays a documented deviation).
+
+Round 3 status: all six spec domains DONE (dig-time f326483, explosion
+c0812dd, arrows e5f082f, env ticks e941a27, entity polish c9d2494,
+GUI leftovers 843508a).
+
 ---
 
 ## ENGINE NOTES (useful pointers)
