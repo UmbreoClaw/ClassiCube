@@ -93,6 +93,9 @@ static float st_hurtDir;
 /* Entity.fire for the local player (Indev layer): > 0 while alight. */
 static int st_playerFire;
 static cc_bool st_playerWasInWater = true; /* true = no splash on the first tick */
+/* set while an arrow's hit is applied - Indev sheep shear only for LIVING
+    attackers, and a genuine arrow passes ITSELF (a plain Entity) as cause */
+static cc_bool st_hurtViaArrow;
 
 /* Debug/testing toggle, driven by the /client god command - NOT part of */
 /*  genuine c0.30-s parity (see the Debug/testing tools section at the bottom). */
@@ -602,7 +605,7 @@ static cc_bool SurvivalTest_GetBlockDrop(BlockID oldBlock, BlockID* dropBlock, i
 		break;
 	case BLOCK_DOUBLE_SLAB:
 		*dropBlock = BLOCK_SLAB; /* SlabBlock.getDrop() always returns SLAB.id */
-		*count     = 2;          /* getDropCount(): a double slab drops both halves */
+		*count     = 1;          /* getDropCount is NOT overridden - one slab only */
 		break;
 	case BLOCK_BOOKSHELF:
 		/* BookshelfBlock.getDropCount() == 0 - never drops anything */
@@ -662,6 +665,7 @@ static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	switch (oldBlock) {
 	case BLOCK_GRASS:   dropId = BLOCK_DIRT; break;
 	case BLOCK_STONE:   dropId = BLOCK_COBBLE; break;      /* BlockStone -> cobblestone */
+	case BLOCK_OBSIDIAN: dropId = BLOCK_COBBLE; break;     /* obsidian IS a BlockStone(49) */
 	case BLOCK_LOG:     dropId = BLOCK_LOG; break;         /* BlockLog -> the log itself */
 	case BLOCK_COAL_ORE: dropId = 256 + 7; break;          /* -> coal ITEM */
 	case 56 /* INDEV_BLOCK_DIAMOND_ORE */:
@@ -2525,10 +2529,12 @@ static void Mob_SpawnDeathDrops(struct Mob* m, BlockID block) {
 /* playerCredit mirrors `var1 != null` in the decompiled die(Entity var1) - */
 /*  every mob type here awards points on a credited kill (Mob.deathScore for */
 /*  most types, a flat 10 hardcoded in Pig.die()/Sheep.die() for those two - */
-/*  see mobTypeInfo's deathScore column). Pig.die drops 1-2 brown mushrooms; */
-/*  Sheep.die drops 1-2 white wool (NOT mushrooms - the two differ). */
+/*  see mobTypeInfo's deathScore column). Pig.die AND Sheep.die both drop */
+/*  1-2 brown mushrooms (identical bodies; wool only comes from the shear). */
 static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
-	if (playerCredit) st_score += mobTypeInfo[m->type].deathScore;
+	/* Indev has no kill score - EntityLiving.onDeath reinterprets
+	    scoreValue() as the death-drop item id instead */
+	if (playerCredit && !IndevTest_Enabled) st_score += mobTypeInfo[m->type].deathScore;
 	if (IndevTest_Enabled) {
 		/* Indev EntityLiving.onDeath: rand(3) = 0-2 of scoreValue() as an */
 		/*  item id - zombie feather(32), skeleton arrow(6), spider string(31), */
@@ -2551,7 +2557,7 @@ static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
 	} else if (m->type == MOB_TYPE_PIG) {
 		Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
 	}
-	if (!IndevTest_Enabled && m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_WHITE);
+	if (!IndevTest_Enabled && m->type == MOB_TYPE_SHEEP) Mob_SpawnDeathDrops(m, BLOCK_BROWN_SHROOM);
 }
 
 /* Skeleton.shootArrow() - looses an arrow at the skeleton's current target. */
@@ -2699,11 +2705,13 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	/*  damage, no invincibility window, no knockback). Only a genuine player */
 	/*  punch counts (Entities.CurPlayer is singleplayer's only Player), not */
 	/*  arrows or other sources - matches `attacker instanceof Player`. */
-	if (m->type == MOB_TYPE_SHEEP && m->hasFur && IndevTest_Enabled && attacker) {
-		/* Indev EntitySheep.attackEntityFrom: ANY living attacker (player, mob,
-		    or an arrow resolving to its owner) shears 1 + rand(3) GRAY cloth,
-		    and - unlike c0.30 - the code falls through to super.attackEntityFrom,
-		    so the hit still deals its damage after shearing. */
+	if (m->type == MOB_TYPE_SHEEP && m->hasFur && IndevTest_Enabled && attacker &&
+		!st_hurtViaArrow) {
+		/* Indev EntitySheep.attackEntityFrom: any LIVING attacker (player or
+		    mob) shears 1 + rand(3) GRAY cloth - an arrow passes ITSELF (an
+		    Entity, not an EntityLiving), so arrows never shear - and, unlike
+		    c0.30, the code falls through to super.attackEntityFrom, so the
+		    hit still deals its damage after shearing. */
 		m->hasFur = false;
 		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); }
 		woolCount = 1 + Random_Next(&st_mobRng, 3);
@@ -2737,7 +2745,9 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	if (attacker && mobTypeInfo[m->type].ai != MOB_AI_PASSIVE) {
 		if (st_hurtCauseSlot < 0) {
 			m->hasTarget = true; m->targetSlot = -1;
-		} else if (st_mobs[st_hurtCauseSlot].type != m->type) {
+		} else if (IndevTest_Enabled || st_mobs[st_hurtCauseSlot].type != m->type) {
+			/* the same-species exemption is c0.30 BasicAttackAI.hurt only -
+			    Indev EntityMob.attackEntityFrom retaliates against anything */
 			m->hasTarget = true; m->targetSlot = (cc_int8)st_hurtCauseSlot;
 		}
 	}
@@ -3511,11 +3521,11 @@ static void Mob_DoAttack(struct Mob* m) {
 	/*  facing (diff.x, diff.z) is Math_Atan2f(-diff.z, diff.x). Both chase */
 	/*  movement (Mob_MoveRelative's sin/cos(Yaw)) and arrow aim */
 	/*  (Mob_ShootArrow's Vec3_GetDirVector) depend on this. */
-	/* BasicAttackAI.doAttack's pitch is xRot = -atan2(dy, sqrt(distance)) where */
-	/*  distance is the 3D distance - so the "adjacent" is sqrt(dist3d), NOT the */
-	/*  horizontal distance. A genuine Notch quirk that steeply over-pitches at */
-	/*  range; skeleton arrow aim (which reads e->Pitch) depends on reproducing it. */
-	horDist  = Math_SqrtF(Math_SqrtF(distSq));
+	/* BasicAttackAI.doAttack's pitch is xRot = -atan2(dy, dist3d): the */
+	/*  adjacent is the full 3D distance (not the horizontal one), a mild */
+	/*  genuine quirk that slightly under-pitches. Skeleton arrow aim reads */
+	/*  e->Pitch off this. */
+	horDist  = Math_SqrtF(distSq);
 	e->Yaw   = Math_Atan2f(-diff.z, diff.x) * MATH_RAD2DEG;
 	e->Pitch = Math_Atan2f(horDist, -diff.y) * MATH_RAD2DEG;
 
@@ -4024,7 +4034,10 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 	m->type       = type;
 	m->targetSlot = -1;
 	m->nextStep   = 1; /* Entity.nextStep's field initialiser */
-	m->health   = MOB_MAX_HEALTH;
+	/* EntityLiving defaults to 10 HP; only EntityMob raises it to 20 - so
+	    Indev pigs/sheep have 10. c0.30 mobs are a flat 20. */
+	m->health   = (IndevTest_Enabled &&
+	               (type == MOB_TYPE_PIG || type == MOB_TYPE_SHEEP)) ? 10 : MOB_MAX_HEALTH;
 	m->airTicks = MOB_AIR_TICKS;
 	m->active   = true;
 	m->hasFur   = true; /* irrelevant for non-sheep, but harmless */
@@ -4149,9 +4162,14 @@ static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
 			type = Random_Next(&st_mobRng, 2) ? MOB_TYPE_PIG : MOB_TYPE_SHEEP;
 		}
 
-		r1 = Random_Float(&st_mobRng); r2 = Random_Float(&st_mobRng);
 		x  = Random_Next(&st_mobRng, World.Width);
-		y  = (int)((r1 < r2 ? r1 : r2) * World.Height);
+		if (monsters) {
+			/* the depth bias (min of two uniforms) is the MONSTER pass only */
+			r1 = Random_Float(&st_mobRng); r2 = Random_Float(&st_mobRng);
+			y  = (int)((r1 < r2 ? r1 : r2) * World.Height);
+		} else {
+			y  = Random_Next(&st_mobRng, World.Height);
+		}
 		z  = Random_Next(&st_mobRng, World.Length);
 
 		for (outer = 0; outer < 2; outer++) {
@@ -4233,15 +4251,17 @@ static void SurvivalTest_TrySpawnMobs(void) {
 
 /* SurvivalGameMode.prepareLevel() - the one-time initial population done */
 /*  when a new map finishes loading. It calls spawner.spawn(count, null, ...) */
-/*  with NO avoid entity, so mobs may legitimately spawn right at spawn. */
+/*  with no avoid ENTITY - but MobSpawner's else branch still rejects */
+/*  candidates within 16 blocks of the LEVEL SPAWN POINT. */
 static void SurvivalTest_SpawnInitialMobs(void) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
 	int area = (int)(volume / 800);
+	struct LocalPlayer* p = Entities.CurPlayer;
 	/* Indev has no prepareLevel population - MobSpawner fills the world */
 	/*  gradually under the darkness/distance rules instead (this is also */
 	/*  what stops mobs from camping the spawn point on day one). */
 	if (IndevTest_Enabled) return;
-	if (area > 0) Mob_SpawnerRun(area, NULL);
+	if (area > 0) Mob_SpawnerRun(area, p ? &p->Spawn : NULL);
 }
 
 static void SurvivalTest_TickMobs(float delta) {
@@ -4480,7 +4500,9 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	Mob_Hurt(best, e,
 		IndevTest_Enabled ? IndevTest_MeleeDamage(st_inv[Inventory.SelectedIndex].id) : 4,
 		true);
-	SurvivalTest_DamageHeldTool(2); /* ItemStack.hitEntity: weapons wear 2/hit */
+	/* hitEntity: swords wear 1, tools 2, hoes/flint&steel none */
+	SurvivalTest_DamageHeldTool(
+		IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, true));
 	return true;
 }
 
@@ -4672,6 +4694,7 @@ static cc_bool Arrow_EntityCollision(struct ArrowEntity* a, struct AABB* bb,
 static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, struct Mob* hitMob) {
 	struct Entity fakeAttacker = { 0 };
 	fakeAttacker.Position = a->pos;
+	st_hurtViaArrow = true;
 
 	if (hitMob) {
 		/* BasicAttackAI.hurt resolves an Arrow cause to its OWNER - so a mob */
@@ -4679,6 +4702,7 @@ static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, stru
 		/*  player fired it, aggroing onto the player as before). */
 		st_hurtCauseSlot = a->ownerIsPlayer ? -1 : a->ownerMobSlot;
 		Mob_Hurt(hitMob, &fakeAttacker, a->damage, a->ownerIsPlayer);
+	st_hurtViaArrow = false;
 	} else {
 		SurvivalTest_HurtFrom(a->damage, a->pos);
 	}
@@ -5870,7 +5894,11 @@ cc_bool SurvivalTest_TryEat(void) {
 		}
 	}
 
-	if (block == BLOCK_BROWN_SHROOM) {
+	if (IndevTest_Enabled) {
+		/* mushroom-eating is c0.30 SurvivalGameMode.useItem only - Indev
+		    mushrooms are just soup ingredients */
+		return false;
+	} else if (block == BLOCK_BROWN_SHROOM) {
 		SurvivalTest_Heal(5);            /* brown mushroom restores 5 HP */
 	} else if (block == BLOCK_RED_SHROOM) {
 		SurvivalTest_Hurt(3);            /* red mushroom is poisonous: -3 HP */
@@ -6008,13 +6036,13 @@ cc_bool SurvivalTest_CanInstaBreak(BlockID block) {
 static void SurvivalTest_DamageHeldTool(int amount) {
 	int slot = Inventory.SelectedIndex;
 	int maxDamage;
-	if (!IndevTest_Enabled) return;
+	if (!IndevTest_Enabled || amount <= 0) return;
 
 	maxDamage = IndevTest_ToolMaxDamage(st_inv[slot].id);
 	if (!maxDamage) return;
 
 	st_inv[slot].damage += amount;
-	if (st_inv[slot].damage >= maxDamage) {
+	if (st_inv[slot].damage > maxDamage) { /* damageItem: strictly greater */
 		st_inv[slot].id     = BLOCK_AIR;
 		st_inv[slot].count  = 0;
 		st_inv[slot].damage = 0;
@@ -6081,7 +6109,9 @@ static void SurvivalTest_TickBreaking(void) {
 		/*  the tool class is effective against the block, else 1). */
 		st_breakHits += IndevTest_MiningSpeed(st_inv[Inventory.SelectedIndex].id, block);
 		if (st_breakHits >= hardness + 1) {
-			SurvivalTest_DamageHeldTool(1);
+			/* onBlockDestroyed: tools wear 1, swords 2, hoes/flint&steel none */
+			SurvivalTest_DamageHeldTool(
+				IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, false));
 			old = block;
 			Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 			Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);

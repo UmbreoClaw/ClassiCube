@@ -24,7 +24,13 @@ furnace/chest), label positions/colors, empty-armor silhouettes, hover
 highlight, death tint, held-stack centering.
 
 FIXED in batch 1 (0876ebd): 1, 2, 3, 5, 7, 14a.
-FIXED in batch 2: 9, 10, 11, 12, 14b.
+FIXED in batch 2 (06ba2c9): 9, 10, 11, 12, 14b.
+FIXED in batch 3: mobs 1, 2, 3, 6, 7, 8, 11 + c0.30 half of 5 (initial
+population avoids the level spawn point; the INDEV initial 1000-pass
+avoid still needs the gen spawn threaded through - open); items 1, 3,
+4, 5, 6, 8, 14 (+ bonus: Indev sheep shear verified to drop GRAY cloth,
+already correct). Item 2 (sword 1.5x dig speed) folded into the open
+dig-model overhaul (item 9).
 STILL OPEN: 4 (scale quantization - decide Indev integer ScaledResolution),
 6 (pop anim curves - needs IsometricDrawer asymmetric scale support),
 8 (label rasterisation vs panel scale), 13 (doll anchor constants),

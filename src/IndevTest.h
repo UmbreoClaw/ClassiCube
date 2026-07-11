@@ -55,6 +55,8 @@ int IndevTest_FindBlockByName(const cc_string* name);
 int IndevTest_ItemFoodHeal(int id);
 /* ItemTool.maxDamage (32 << tier) for damageable tools, else 0. */
 int IndevTest_ToolMaxDamage(int id);
+/* hitEntity/onBlockDestroyed wear: swords 1/2, tools 2/1, others 0. */
+int IndevTest_ToolUseWear(int id, cc_bool entityHit);
 /* ItemArmor: piece worn (0 helmet / 1 chest / 2 legs / 3 boots), or -1 when
     the id is not armor. MaxDamage/Reduce return 0 for non-armor ids. */
 int IndevTest_ArmorPiece(int id);

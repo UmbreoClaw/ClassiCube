@@ -281,6 +281,22 @@ cc_bool IndevTest_IsHoe(int id) {
 	return def && def->kind == ITEM_KIND_HOE;
 }
 
+/* Per-use tool wear: ItemSword wears 1 per entity hit / 2 per block
+    destroyed, ItemTool (shovel/pick/axe) the reverse, and everything
+    else - hoes and flint&steel included - wears from NEITHER (they only
+    ever wear through their own onItemUse). */
+int IndevTest_ToolUseWear(int id, cc_bool entityHit) {
+	const struct IndevItemDef* d = IndevItems_Find(id);
+	if (!d) return 0;
+	switch (d->kind) {
+	case ITEM_KIND_SWORD:
+		return entityHit ? 1 : 2;
+	case ITEM_KIND_SHOVEL: case ITEM_KIND_PICKAXE: case ITEM_KIND_AXE:
+		return entityHit ? 2 : 1;
+	}
+	return 0;
+}
+
 int IndevTest_ToolMaxDamage(int id) {
 	const struct IndevItemDef* d = IndevItems_Find(id);
 	if (!d) return 0;
@@ -541,9 +557,12 @@ cc_bool IndevTest_MatchRecipe(const cc_uint16* grid, int gw, int gh, int* outId,
 }
 
 static cc_bool IndevItem_StacksToOne(cc_uint8 kind) {
+	/* ItemFood's constructor sets maxStackSize = 1 - apple, bread and both
+	    porkchops are single-stack like the tools (soup inherits it too) */
 	return kind == ITEM_KIND_SWORD || kind == ITEM_KIND_SHOVEL || kind == ITEM_KIND_PICKAXE ||
 	       kind == ITEM_KIND_AXE   || kind == ITEM_KIND_HOE    || kind == ITEM_KIND_FLINTSTEEL ||
-	       kind == ITEM_KIND_BOW   || kind == ITEM_KIND_SOUP   || kind == ITEM_KIND_ARMOR;
+	       kind == ITEM_KIND_BOW   || kind == ITEM_KIND_SOUP   || kind == ITEM_KIND_ARMOR ||
+	       kind == ITEM_KIND_FOOD;
 }
 
 static void IndevItems_Seed(void) {
