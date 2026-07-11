@@ -4637,6 +4637,57 @@ rig: curve values exact, night sun colour 0x202020, torch mid-air
 refused, gdb trample -> dirt + crop popped through the hook, raw
 Game_UpdateBlock support removal pops a standing torch.
 
+### Entity polish batch (commit c9d2494)
+Eight findings from the re-run spec agent, each re-verified against the
+Java before porting (one agent claim was wrong and is documented):
+- **EntityItem lava/fire** (Indev): health 5; isBoundingBoxBurning (fire
+  + both lava ids, UNSHRUNK box) deals 1/tick - silent 5-tick death.
+  The handleLavaMovement 10-damage hit NEVER fires for items: the -0.4
+  Y shrink is degenerate for a 0.25-tall box (int-cast loop bounds come
+  out empty - verified in World.java:697). Centre-cell lava fizz-bounce
+  (motionY 0.2, x/z (r-r)*0.2, random.fizz 0.4 / 2.0+r*0.4). Rig: drop
+  died in a walled lava pocket; open-pool tests are invalid (the bounce
+  kicks items out, ours got bounced into pickup range).
+- **pushOutOfBlocks** (Indev): centre cell FullOpaque -> pick the
+  nearest open face of six, overwrite that ONE axis velocity with
+  (rand*0.2+0.1) blocks/tick (x20 per-second at the drop layer).
+- **Drop spin/bob** (Indev): spin (age_ticks/20 + hoverStart) rad
+  (57.3 deg/s vs c0.30's 60), bob sin(age_ticks/10 + hoverStart) - a
+  THIRD of c0.30's frequency; rot0 deg folds to hoverStart rad. Sprite
+  drops share the bob, never spin. Glow stays c0.30-only. Audit's
+  "Indev pickup is instant" was WRONG - genuine block drops carry
+  delayBeforeCanPickup=10 (already implemented); c0.30 is the instant
+  one.
+- **TNT render** (Indev): swell (1-(fuse-t+1)/10 clamp01)^4*0.3+1 over
+  the last 10 ticks applied to cube AND flash shell (render-only; the
+  defuse/pick box stays 1x1); flash only while fuse/5 % 2 == 0, alpha
+  (1-(fuse-t+1)/100)*0.8; smoke spawns at y+0.5 (c0.30 keeps +0.6 and
+  its own flash). gdb: swell(5,0)=1.00768, swell(0,0.5)=1.24435 exact.
+  Genuine blends SRC_ALPHA/DST_ALPHA; our additive shell is the
+  established stand-in.
+- **Drowning** (Indev, player + mobs): genuine underflow model - --air,
+  at exactly -20: 8 bubbles at (r-r) offsets around the eye + 2 damage
+  + reset to 0. First hit 320 ticks after submerging, then 1/s. c0.30
+  keeps every-tick-hurt + invuln shaping. st_airTicks (300; respawn 20)
+  mirrors into st_airTimer for the HUD.
+- **Lit furnace drops LIT (62)**: BlockFurnace has NO idDropped
+  override in in-20100223 (grep-verified) - the lit->idle remap is a
+  later-version myth. IndevTest_DropFormBlock (drop paths only);
+  CanonicalBlock keeps folding for recipes/naming. Placed 62 rotates
+  like 61 and genuinely stays lit until the furnace is actually used
+  (updateBlockState only flips on burn-state CHANGE - the Indev
+  "furnace lamp" trick).
+- **Insta-break wear**: sendBlockRemoved runs Item.onBlockDestroyed
+  unconditionally, so the discrete click path wears tools too - new
+  SurvivalTest_WearHeldToolForBlockBreak before Game_ChangeBlock in
+  InputHandler_DeleteBlock.
+- **Mob boxes**: genuine setSize per mode in mobTypeInfo (c0.30:
+  humanoids 0.6x1.8, pig 1.4x1.2, sheep 1.4x1.72, spider 1.4x0.9;
+  Indev shrinks pig 0.9x0.9, sheep 0.9x1.3). Mob_ApplySize re-applied
+  after EVERY Entity_SetModel (spawn + 3 shear/regrow swaps) since
+  SetModel resets Size from the model's GetCollisionSize. LOS/eye
+  anchors (heightOff) left as-is deliberately.
+
 ---
 
 ## ENGINE NOTES (useful pointers)
