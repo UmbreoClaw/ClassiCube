@@ -64,9 +64,10 @@ int IndevTest_ArmorMaxDamage(int id);
 int IndevTest_ArmorReduce(int id);
 /* Whether the id is the bow item (fires arrows on right-click). */
 cc_bool IndevTest_IsBow(int id);
-/* Mining speed multiplier of the held id against a block ((tier+1)*2 when */
-/*  the tool class is effective vs the block's material, else 1). */
-int IndevTest_MiningSpeed(int id, BlockID block);
+/* Item.getStrVsBlock: dig speed multiplier of the held id against a block. */
+/*  (tier+1)*2 when the block is in the tool's blocksEffectiveAgainst list, */
+/*  swords a flat 1.5, everything else (incl. hoes) 1. */
+float IndevTest_StrVsBlock(int id, BlockID block);
 /* Melee damage of the held id (bare fist / non-weapons = 1; tools base+tier; */
 /*  swords 4 + tier*2), per Minecraft.java's attack path. */
 int IndevTest_MeleeDamage(int id);

@@ -152,8 +152,8 @@ Indev hardness overrides, hoe till, bow behaviour.
 
 1. [P] **Indev food maxStackSize 1** (MEDIUM): ItemFood sets maxStackSize=1
    (apple/bread/porkchops); ours stacks them to 64 (IndevTest.c:543-556).
-2. [P] Sword dig speed 1.5x vs everything (ItemSword.java:15-17); ours 1
-   and MiningSpeed returns int (IndevTest.c:328-342, SurvivalTest.c:6081).
+2. [V] Sword dig speed 1.5x vs everything: FIXED in round 3 (dig-time) -
+   IndevTest_StrVsBlock returns float, swords a flat 1.5f.
 3. [P] **Sword wear inverted** (MEDIUM): sword 1/hit 2/block; tools 2/hit
    1/block (ItemSword.java:19-25, ItemTool.java:29-35). Ours flat 2/hit
    1/block for all (SurvivalTest.c:4483, 6083). Notes:2239 wrong — fix.
@@ -172,15 +172,15 @@ Indev hardness overrides, hoe till, bow behaviour.
 8. [P] **c0.30 double slab drops 1 slab** not 2 (SlabBlock.java:45-47 only
    overrides getDrop; getDropCount default 1). Ours 2 = slab dupe
    (SurvivalTest.c:603-605). Notes self-contradict (2533 vs 3631).
-9. [P] **Indev dig-time model** (MEDIUM): Block.blockStrength = strVsBlock/
-   hardness/30 per tick, /5 in water, /5 airborne; non-harvestable digs at
-   1/hardness/100 with NO tool bonus (slow dig, no drop). Ours: c0.30
-   hardness*20 ticks model, no penalties, non-harvestable digs full speed
-   (SurvivalTest.c:6078-6082). Obsidian w/o diamond pick: ours ~201 ticks
-   vs genuine 1000.
-10. [P] Tool effectiveness lists: genuine explicit block lists (pickaxe
-    excludes brick/obsidian/furnace!; axe excludes workbench; spade excludes
-    leaves/sponge); ours dig-sound proxy over-applies (IndevTest.c:334-341).
+9. [V] **Indev dig-time model** (MEDIUM): FIXED in round 3 (dig-time) -
+   Indev_BlockStrength ports Block.blockStrength exactly (float accumulator
+   st_breakDamage, break at >= 1.0, /5 head-in-water, /5 airborne,
+   non-harvest 1/hardness/100, bedrock 0, hardness-0 instant); c0.30 keeps
+   the integer hits/hardness+1 model. gdb-verified per-tick values exact.
+10. [V] Tool effectiveness lists: FIXED in round 3 (dig-time) - dig-sound
+    proxy replaced by IndevTest_StrVsBlock with the genuine ItemPickaxe/
+    ItemAxe/ItemSpade id arrays (+ sword flat 1.5, chest/furnace variant
+    fold). Workbench/brick/obsidian/furnace correctly revert to 1.0.
 11. [P] Mirrored recipe matching missing: genuine tries mirrored layouts
     (CraftingRecipe.java:19-32); axe/hoe/bow/flint&steel can't be crafted
     mirrored in ours (IndevTest.c:443-466).

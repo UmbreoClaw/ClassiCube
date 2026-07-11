@@ -338,23 +338,45 @@ cc_bool IndevTest_IsBow(int id) {
 }
 
 
-/* ItemTool.getStrVsBlock: (tier+1)*2 against the tool's effective materials */
-/*  (approximated by dig-sound class), otherwise 1 - note gold tools are tier */
-/*  0 in Indev, i.e. WOOD speed. Returns 1 for non-tools/ineffective pairs. */
-int IndevTest_MiningSpeed(int id, BlockID block) {
+/* ItemTool.getStrVsBlock: efficiencyOnProperMaterial = (tier+1)*2 (so 2/4/6/8;
+    gold tools are tier 0 = WOOD speed) when the block is in the tool class's
+    blocksEffectiveAgainst array, else 1. ItemSword.getStrVsBlock is a flat
+    1.5 against every block; hoes extend Item (not ItemTool) so they dig at 1.
+    The per-class block lists below are the genuine ItemPickaxe/ItemAxe/
+    ItemSpade arrays by id - notably brick/obsidian/furnace/workbench are in
+    NO list (genuine quirk), and Block.crate 54 IS the chest. Genuine also
+    lists blockDiamond (57) for pickaxes; the fork has no diamond block yet. */
+float IndevTest_StrVsBlock(int id, BlockID block) {
+	static const cc_uint8 pickaxeBlocks[] = {
+		BLOCK_COBBLE, BLOCK_DOUBLE_SLAB, BLOCK_SLAB, BLOCK_STONE,
+		BLOCK_MOSSY_ROCKS, BLOCK_IRON_ORE, BLOCK_IRON, BLOCK_COAL_ORE,
+		BLOCK_GOLD, BLOCK_GOLD_ORE, 56 /* INDEV_BLOCK_DIAMOND_ORE */, 0
+	};
+	static const cc_uint8 axeBlocks[] = {
+		BLOCK_WOOD, BLOCK_BOOKSHELF, BLOCK_LOG, 54 /* INDEV_BLOCK_CHEST */, 0
+	};
+	static const cc_uint8 spadeBlocks[] = {
+		BLOCK_GRASS, BLOCK_DIRT, BLOCK_SAND, BLOCK_GRAVEL, 0
+	};
 	const struct IndevItemDef* d = IndevItems_Find(id);
-	cc_uint8 snd;
-	cc_bool effective = false;
-	if (!IndevTest_Enabled || !d) return 1;
+	const cc_uint8* list = NULL;
+	int i;
+	if (!IndevTest_Enabled || !d) return 1.0f;
+	if (d->kind == ITEM_KIND_SWORD) return 1.5f;
 
-	snd = Blocks.DigSounds[block];
+	/* fold directional chest (71-74) / furnace (75-82) variants to canonical */
+	block = IndevTest_CanonicalBlock(block);
 	switch (d->kind) {
-	case ITEM_KIND_PICKAXE: effective = snd == SOUND_STONE  || snd == SOUND_METAL; break;
-	case ITEM_KIND_SHOVEL:  effective = snd == SOUND_GRASS  || snd == SOUND_GRAVEL ||
-	                                    snd == SOUND_SAND   || snd == SOUND_SNOW;  break;
-	case ITEM_KIND_AXE:     effective = snd == SOUND_WOOD;  break;
+	case ITEM_KIND_PICKAXE: list = pickaxeBlocks; break;
+	case ITEM_KIND_AXE:     list = axeBlocks;     break;
+	case ITEM_KIND_SHOVEL:  list = spadeBlocks;   break;
 	}
-	return effective ? (d->param + 1) * 2 : 1;
+	if (!list) return 1.0f;
+
+	for (i = 0; list[i]; i++) {
+		if (list[i] == block) return (float)((d->param + 1) * 2);
+	}
+	return 1.0f;
 }
 
 /* Minecraft.java:352 melee: damage = held Item.getDamageVsEntity(), bare */

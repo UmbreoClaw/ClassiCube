@@ -6377,7 +6377,33 @@ static void SurvivalTest_DamageHeldTool(int amount) {
 static IVec3 st_breakPos;
 static cc_bool st_breaking;
 static int st_breakHits;
+/* PlayerControllerSP.curBlockDamage - Indev's float progress accumulator */
+static float st_breakDamage;
 static int st_breakDelay;
+
+/* Block.blockStrength(EntityPlayer): per-TICK dig progress, accumulated to */
+/*  1.0 to break. Bedrock (genuine hardness -1) never progresses; hardness 0 */
+/*  is instant (genuine divides by zero -> +Inf); a block the player cannot */
+/*  harvest digs at 1/hardness/100 with NO tool speed and NO penalties; */
+/*  otherwise tool speed is /5 with the head in water and /5 again airborne, */
+/*  then /hardness/30. Our hardness table stores genuine seconds * 20. */
+static float Indev_BlockStrength(BlockID block) {
+	struct Entity* e = &Entities.CurPlayer->Base;
+	int held = st_inv[Inventory.SelectedIndex].id;
+	int h    = SurvivalTest_Hardness(block);
+	float hardness, str;
+
+	if (block == BLOCK_BEDROCK) return 0.0f; /* genuine -1 sentinel */
+	if (h == 0) return 1.0f;
+	hardness = h / 20.0f;
+
+	if (!IndevTest_CanHarvest(held, block)) return 1.0f / hardness / 100.0f;
+
+	str = IndevTest_StrVsBlock(held, block);
+	if (SurvivalTest_IsHeadInWater(e)) str /= 5.0f;
+	if (!e->OnGround)                  str /= 5.0f;
+	return str / hardness / 30.0f;
+}
 
 /* SurvivalGameMode.applyBlockCracks: cracks = (hits + time - 1) / hardness, */
 /*  0 when no hits yet. (time, the render partial-tick, is omitted here as */
@@ -6385,6 +6411,11 @@ static int st_breakDelay;
 /*  offset and denominator are what visibly set the crack stages.) */
 float SurvivalTest_BreakProgress(void) {
 	int hardness;
+	if (IndevTest_Enabled) {
+		/* setPartialTime: the crack overlay reads curBlockDamage directly */
+		if (!st_breaking || st_breakDamage <= 0.0f) return 0.0f;
+		return st_breakDamage > 1.0f ? 1.0f : st_breakDamage;
+	}
 	if (!st_breaking || st_breakHits <= 0) return 0.0f;
 
 	hardness = SurvivalTest_Hardness(World_GetBlock(st_breakPos.x, st_breakPos.y, st_breakPos.z));
@@ -6398,11 +6429,14 @@ cc_bool SurvivalTest_BreakTargeted(IVec3* pos) {
 	return true;
 }
 
-/* SurvivalGameMode.hitBlock(x,y,z,side)/resetHits() - runs every tick while the */
-/*  left mouse button is held down and the player is aiming at a block. Hits */
-/*  accumulate on whichever block was targeted last tick; aiming at a different */
-/*  block resets the count. Reaching hardness+1 hits breaks the block and starts */
-/*  a 5-tick cooldown (hitDelay) before the next block can start accumulating hits. */
+/* c0.30 SurvivalGameMode.hitBlock(x,y,z,side)/resetHits() - runs every tick */
+/*  while the left mouse button is held down and the player is aiming at a */
+/*  block. Hits accumulate on whichever block was targeted last tick; aiming at */
+/*  a different block resets the count. Reaching hardness+1 hits breaks the */
+/*  block and starts a 5-tick cooldown (hitDelay) before the next block can */
+/*  start accumulating hits. Indev's PlayerControllerSP.sendBlockRemoving has */
+/*  the same lifecycle (incl. blockHitWait = 5) but accumulates the float */
+/*  Block.blockStrength per tick and breaks at curBlockDamage >= 1.0. */
 static void SurvivalTest_TickBreaking(void) {
 	IVec3 pos;
 	BlockID block, old;
@@ -6412,6 +6446,7 @@ static void SurvivalTest_TickBreaking(void) {
 	if (!holding || !Game_SelectedPos.valid) {
 		st_breaking   = false;
 		st_breakHits  = 0;
+		st_breakDamage = 0.0f;
 		st_breakDelay = 0;
 		return;
 	}
@@ -6420,33 +6455,42 @@ static void SurvivalTest_TickBreaking(void) {
 	pos = Game_SelectedPos.pos;
 
 	if (st_breaking && pos.x == st_breakPos.x && pos.y == st_breakPos.y && pos.z == st_breakPos.z) {
-		if (!World_Contains(pos.x, pos.y, pos.z)) { st_breaking = false; st_breakHits = 0; return; }
+		if (!World_Contains(pos.x, pos.y, pos.z)) {
+			st_breaking = false; st_breakHits = 0; st_breakDamage = 0.0f; return;
+		}
 
 		block = World_GetBlock(pos.x, pos.y, pos.z);
 		if (Blocks.Draw[block] == DRAW_GAS || !Blocks.CanDelete[block]) {
-			st_breaking = false; st_breakHits = 0; return;
+			st_breaking = false; st_breakHits = 0; st_breakDamage = 0.0f; return;
 		}
 
-		hardness = SurvivalTest_Hardness(block);
-		/* Indev tools: hits advance at getStrVsBlock speed ((tier+1)*2 when */
-		/*  the tool class is effective against the block, else 1). */
-		st_breakHits += IndevTest_MiningSpeed(st_inv[Inventory.SelectedIndex].id, block);
-		if (st_breakHits >= hardness + 1) {
-			/* onBlockDestroyed: tools wear 1, swords 2, hoes/flint&steel none */
-			SurvivalTest_DamageHeldTool(
-				IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, false));
-			old = block;
-			Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
-			Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
-
-			st_breaking   = false;
-			st_breakHits  = 0;
-			st_breakDelay = 5;
+		/* Indev: curBlockDamage += blockStrength per tick, break at 1.0. */
+		/* c0.30: integer hits, break at hardness + 1. */
+		if (IndevTest_Enabled) {
+			st_breakDamage += Indev_BlockStrength(block);
+			if (st_breakDamage < 1.0f) return;
+		} else {
+			hardness = SurvivalTest_Hardness(block);
+			st_breakHits++;
+			if (st_breakHits < hardness + 1) return;
 		}
+
+		/* onBlockDestroyed: tools wear 1, swords 2, hoes/flint&steel none */
+		SurvivalTest_DamageHeldTool(
+			IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, false));
+		old = block;
+		Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
+		Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
+
+		st_breaking    = false;
+		st_breakHits   = 0;
+		st_breakDamage = 0.0f;
+		st_breakDelay  = 5;
 	} else {
-		st_breaking  = true;
-		st_breakHits = 0;
-		st_breakPos  = pos;
+		st_breaking    = true;
+		st_breakHits   = 0;
+		st_breakDamage = 0.0f;
+		st_breakPos    = pos;
 	}
 }
 
