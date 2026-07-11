@@ -30,84 +30,100 @@ ClassiCube aims to replicate the 2009 Minecraft Classic client while offering **
 
 ---
 
-# Survival Test mode (unofficial fork)
+# Survival Test + Indev gamemodes (unofficial fork)
 
 > [!WARNING]
-> **This branch (`claude/c030-s-gamemode-8fpmns`) is an unofficial, unsupported fork.**
+> **This branch is an unofficial, unsupported fork.**
 > It is not affiliated with the ClassiCube project, not endorsed by its maintainers,
 > and is developed entirely independently. The official ClassiCube project does not
 > and will not include survival gameplay — see its stance above.
 
-This fork adds a faithful, from-scratch recreation of **Minecraft Classic Survival Test (version c0.30_survival_test)** — the short-lived survival mode that Notch shipped in October 2009, roughly 17 months before Minecraft's official release. It ran for only a few weeks before being pulled, and most players never experienced it. The implementation is cross-referenced against decompiled Java source and behaves as closely as possible to the original without touching ClassiCube's creative mode at all.
+This fork adds faithful, from-scratch recreations of **two** early survival-era
+versions of Minecraft inside ClassiCube's singleplayer:
 
-### What Survival Test was
+- **Minecraft Classic c0.30_survival_test** (October 2009) — the short-lived
+  original survival mode that ran for a few weeks before being pulled.
+- **Minecraft Indev in-20100223** (February 2010) — the final Indev version,
+  with items, tools, crafting, furnaces, chests, farming, armor, fire,
+  day/night, and its unique finite generated worlds.
 
-Survival Test was Minecraft's first taste of actual gameplay on top of the creative block editor. It was deliberately primitive — no crafting, no inventory management beyond a nine-slot hotbar, no saving — but it introduced almost everything that made Minecraft feel dangerous and alive:
+Every mechanic is cross-referenced against decompiled/deobfuscated Java source
+of the corresponding version, ported constant-for-constant, and verified on an
+instrumented test rig before landing. The two modes are strictly separated:
+turning them off leaves ClassiCube completely stock, and Indev features never
+leak into c0.30 mode (or vice versa). The mode is chosen from the launcher's
+**Choose Mode** screen.
 
-- **Health and hearts.** The player had ten hearts of health, displayed as a row of heart icons above the hotbar. Damage reduced them; there was no regeneration.
-- **Hostile mobs.** Zombies and skeletons hunted the player on sight, dealt melee damage, and had a chance to wear armour. Creepers crept up and exploded. Spiders skittered fast and could climb. Pigs wandered peacefully and dropped items when killed.
-- **Physics-based dropped items.** Mining a block popped a small spinning cube onto the ground. Walking over it picked it up. Explosions scattered drops outward with a 30% chance per item — giving the iconic "blocks exploding into existence" look.
-- **TNT and explosions.** TNT blocks could be lit, primed as a fuse-ticking entity, and detonated in a sphere-shaped blast that destroyed blocks, hurt everything nearby, and chain-reacted with adjacent TNT.
-- **Arrows.** The player could collect and fire arrows. Skeletons returned fire. Arrows stuck into whatever surface they hit.
-- **Fall damage and environmental hazards.** Falling too far, touching lava, or drowning all dealt damage. The camera tilted briefly in the direction of the hit.
-- **Score.** Killing mobs earned points, displayed in the corner. Death showed a Game Over screen with your final score.
-- **Mushroom food.** Brown mushrooms could be right-clicked to eat, restoring health.
+Engineering references living in this repo:
 
-### What this fork adds
+| Document | Contents |
+|---|---|
+| [`SURVIVAL_TEST_NOTES.md`](SURVIVAL_TEST_NOTES.md) | Session-by-session engineering log: every port, bug, trap, and rig verification |
+| [`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md) | The systematic fidelity audit queue — every deviation found by sweeping the decompiled sources, and its fix status |
+| [`doc/indev-generation.md`](doc/indev-generation.md) | In-depth write-up of the reverse-engineered Indev world generator, which is **bit-identical** to the genuine Java for the same seed |
 
-Everything above has been implemented inside ClassiCube's singleplayer mode. Survival Test is toggled on/off from the launcher's **Choose Mode** screen — when off, the game is completely unaffected and behaves as normal ClassiCube.
+## Minecraft Classic c0.30 Survival Test
 
-Specific systems ported so far:
+Survival Test was Minecraft's first taste of actual gameplay on top of the
+creative block editor — deliberately primitive (no crafting, no saving, a
+nine-slot hotbar), but it introduced hearts, hostile mobs, physics-based item
+drops, TNT, arrows, fall damage, and score. All of it is recreated here from
+the decompiled c0.30 source:
 
 | System | Notes |
 |---|---|
-| Hearts / health HUD | 10-heart row, DPI-aware scaling, per-heart low-health jitter, invulnerability flash with ghost hearts |
-| Hostile mob AI | Zombie, skeleton, creeper, spider, pig, sheep — authentic pathfinding and attack |
-| Mob armour | Zombies and skeletons can spawn wearing armour; geometry matches original 1px inflate |
+| Hearts / health HUD | 10-heart row, per-heart low-health jitter, invulnerability flash with ghost hearts |
+| Hostile mob AI | Zombie, skeleton, creeper, spider, pig, sheep — `BasicAI`/`BasicAttackAI` ported, genuine bounding boxes |
+| Mob armour | Zombies and skeletons can spawn wearing armour; geometry matches the original 1px inflate |
 | Dropped item physics | Spin, bob, glow, gravity+drag matching `Item.tick`, pickup fly-in, 5-minute despawn |
-| Hotbar slot pop animation | Slot briefly jumps and scales when a block lands in it |
-| Mob–mob and mob–player push | Equal-and-opposite separation forces matching `BasicAI.tick()` |
-| TNT entity | Fuse timer, smoke particles, glow overlay, chain-reaction with partial fuse |
-| Explosion drops | 30% per-item drop chance before block is cleared, matching `Level.explode()` |
-| Explosions destroy liquids | Only hard rock/metal blocks are blast-immune, exactly as `canExplode` lists |
-| Arrows | Fired by player (Tab), fired by skeletons, stick into surfaces, HUD count, fly-to-player pickup |
-| Hurt camera tilt | Rolls toward/away from attacker direction; death keels the camera sideways with a slow FOV zoom |
-| Player knockback | Mob melee and arrow hits shove the player, per `Mob.knockback` |
-| Fall damage | Mirrors `Player.hurt` fall threshold and damage formula |
-| Lava / drowning damage | Air bubble HUD depletes underwater; genuine per-tick hurts shaped by the dual-threshold invulnerability window |
-| Score | Awarded on player-credited kills, displayed in HUD corner |
-| Mining with hardness | Blocks require sustained mining; crack overlay tracks progress |
-| Death / game over screen | Game Over with score and the genuine **Respawn** button (inventory drops where you died and can be re-collected) |
-| Mushroom eating | Right-click brown mushroom to restore 5 HP |
-| Mob hit feedback | Red flash, white additive hit flash, 14° hurt wobble, death keel-over roll |
-| Sheep | Shear for wool (punch), graze grass with head-down nod, fur regrows and the model visibly switches |
-| Mob footsteps | Every mob plays step sounds while walking, within the genuine 32-block radius |
-| Inventory | Nine-slot hotbar with stack counts (36 slots with the optional Enhanced screen), no crafting |
+| Hotbar slot pop animation | Genuine per-axis `sin(t²π)+1` / `sin(tπ)+1` scale bounce when a block lands in a slot |
+| TNT entity | Fuse timer, smoke, glow overlay, chain-reaction with partial fuse; explosions ray drop scatter at 30% |
+| Arrows | Tab-fire, skeleton return fire, stick-in-surface, HUD count, fly-to-player pickup |
+| Mining | Integer hit-count model vs per-block hardness, crack overlay, 5-tick hit delay |
+| Damage & feedback | Fall damage, lava, drowning with bubble HUD, hurt camera tilt, knockback, death FOV zoom |
+| Random block ticks | The genuine `Level.tick` volume/200 LCG loop (the stock engine loop is ~7× sparser) |
+| Death screen | Genuine Game Over layout with score; inventory drops where you died and can be re-collected |
+| Score, mushroom eating, sheep shearing/grazing, mob step sounds | All per the decompiled source |
 
-### In progress: Indev mode
+## Minecraft Indev (in-20100223)
 
-Work has begun on a second gamemode: **Minecraft Indev (in-20100223)** — the
-last Indev version — layered on top of the survival core above. The plumbing
-(mode flag, component, per-block hardness as overridable runtime data) is in;
-next up are ItemStacks, tools & durability, crafting, and the day/night
-cycle, each cross-referenced against deobfuscated Indev source the same way
-the c0.30-s work was. The design keeps per-block/per-mob data in runtime
-tables so custom blocks and mobs (e.g. from an MCGalaxy server over CPE, once
-multiplayer support lands) can plug in without code changes.
+The Indev gamemode layers the full Indev survival loop on top of the c0.30
+core, ported from the deobfuscated in-20100223 source:
 
-### Screenshots
+| System | Notes |
+|---|---|
+| Items & inventory | The complete Indev item table at genuine ids (256+N), stack sizes, item damage; 36-slot inventory + 4 armor slots |
+| Tools & digging | `Block.blockStrength` float progress model: per-class effectiveness lists, tier speeds (gold = wood), sword 1.5×, /5 underwater, /5 airborne, pickaxe harvest gating, tool durability (32 << tier) |
+| Crafting | 2×2 pocket grid + 3×3 workbench, every in-20100223 recipe, pattern matching at any offset |
+| Furnace | Real `TileEntityFurnace` port: fuel burn times, 200-tick smelts, lit/idle block swap, GUI flame + progress arrow |
+| Chests | 27-slot tile entities, double chests, genuine placement rules (no triples/L-shapes), contents scatter on break |
+| Farming | Hoe → farmland with moisture, seeds, 8-stage crops with the genuine growth-rate formula, trampling, wheat, sapling trees |
+| Day/night | 20-minute day, `celestialAngle` sky/fog/cloud scaling, the genuine `lightBrightnessTable` curve, 1-step-per-tick skylight easing, sun & moon |
+| Combat | Per-tool melee damage, bow + arrows (gaussian spread, flat 4 damage, bounce off absorbed hits), armor absorption in 25ths with wear |
+| Armor | Full `ItemArmor` port: slots, absorption, per-piece wear, worn-armor rendering on the player and mobs, HUD armor bar |
+| Fire | Verbatim `BlockFire` port: spread/consume tables, scheduled tick list, flint & steel, burning entities, fizz-out in water |
+| Explosions | Genuine `World.createExplosion`: 1352 boundary rays, per-block resistance, entity damage by ray density, TNT chaining |
+| Mobs | Indev damage/AI differences, daylight burning, pig/sheep sizes, drops (incl. diamond-tier loot), spawn-cap population |
+| Blocks | Torches with wall metadata, fire, chest/furnace/workbench, diamond ore, farmland, crops — at their genuine block ids |
+| Paintings | Complete `EntityPainting` port: genuine bounds, art atlas (kz.png), placement/pop rules, save round-trip |
+| World generation | Full `LevelGenerator` port — **byte-identical output to genuine Java for the same seed** ([write-up](doc/indev-generation.md)) |
+| World save/load | Genuine `.mclevel` NBT format: blocks, Data nibbles, inventory, tile entities, time/sky, surroundings — interchangeable with real Indev saves |
+| Environment | The genuine out-of-bounds horizon planes (infinite grass ring on Flat/Inland, ocean on Island, void on Floating) |
+| GUI | Genuine 176×166 textured panels with labels/highlights in genuine draw order, mouse-tracking paperdoll, item squash animation, Indev integer GUI scaling (optional), genuine death screen |
+| Audio | The Indev mob/entity soundboard, ambient fire crackle, splashes, arrow/bow/pop/fizz with genuine volume/pitch formulas |
 
-> **[ Screenshot placeholder — launcher main screen with Survival mode ON ]**
+### Deliberate deviations
 
-> **[ Screenshot placeholder — in-game with hearts HUD, hotbar stack counts, and a zombie ]**
+Anything that intentionally differs from genuine is documented in
+[`SURVIVAL_TEST_NOTES.md`](SURVIVAL_TEST_NOTES.md) and
+[`AUDIT_FINDINGS.md`](AUDIT_FINDINGS.md). The notable ones:
 
-> **[ Screenshot placeholder — TNT explosion with item drops scattering ]**
-
-> **[ Screenshot placeholder — skeleton firing an arrow, player at low health ]**
-
-> **[ Screenshot placeholder — dropped items spinning on the ground ]**
-
-*Send screenshots here when you have them — replace the placeholders above with actual images.*
+- **Death drops your inventory** where you died (genuine Indev keeps it) —
+  kept deliberately with future multiplayer support in mind.
+- Failed spawn searches land on the sampled column instead of genuine's
+  y = height+100 skydive.
+- A handful of engine-shaped approximations (e.g. the crack overlay's
+  partial-tick term, additive TNT flash blend) — each flagged in the notes.
 
 ---
 

@@ -13,13 +13,14 @@
 
 /* Port of in-20100223's LevelGenerator.java. Structure and constants follow
     the decompiled source statement-for-statement; java.util.Random maps onto
-    the engine's RNGState (same LCG), and the only knowing deviations are:
-    - MathHelper's 65536-entry sine table becomes libm sinf/cosf (identical
-      distribution, no bit-parity requirement since seeds aren't shared),
-    - growGrassOnDirt/flower placement test "sky-exposed" instead of genuine
-      getBlockLightValue >= 4/canBlockStay (generation happens before the
-      engine lighting exists; the approximation only loses grass just inside
-      cave mouths). */
+    the engine's RNGState (same LCG). For the same seed/type/theme/size the
+    output block array is BYTE-IDENTICAL to the genuine Java generator at
+    every phase boundary - verified against a compiled oracle of the genuine
+    classes across all world types and themes (see doc/indev-generation.md
+    for the full write-up and how to re-run the parity harness). This is why
+    the sine table, double-vs-float precision, the three RNG streams and the
+    WR_* World-semantics replica below all matter and must not be
+    "simplified". */
 
 static int indevgen_type, indevgen_theme;
 static RNGState indevgen_rnd;
