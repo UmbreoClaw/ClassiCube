@@ -105,6 +105,10 @@ static struct TickQueue lavaQ, waterQ;
 #define PHYSICS_LAVA_DELAY_NOW ((IndevTest_Enabled ? 25U : 30U) << PHYSICS_DELAY_SHIFT)
 #define PHYSICS_WATER_DELAY (5U << PHYSICS_DELAY_SHIFT)
 
+/* c0.30 Level.tick's random-update state (see Physics_TickRandomBlocksC030) */
+static int physics_unprocessed;
+static cc_uint32 physics_randId;
+
 static void Physics_OnNewMapLoaded(void* obj) {
 	TickQueue_Clear(&lavaQ);
 	TickQueue_Clear(&waterQ);
@@ -116,6 +120,11 @@ static void Physics_OnNewMapLoaded(void* obj) {
 	Tree_Blocks = World.Blocks;
 	Random_SeedFromCurrentTime(&physics_rnd);
 	Tree_Rnd = &physics_rnd;
+
+	/* c0.30 Level.initTransient: randId = random.nextInt() */
+	physics_randId = ((cc_uint32)Random_Next(&physics_rnd, 65536) << 16)
+	               |  (cc_uint32)Random_Next(&physics_rnd, 65536);
+	physics_unprocessed = 0;
 }
 
 void Physics_SetEnabled(cc_bool enabled) {
@@ -204,6 +213,47 @@ static void Physics_TickRandomBlocks(void) {
 	}
 }
 
+
+/* c0.30 Level.tick's random block updates, at the genuine rate: unprocessed
+    accumulates the world volume every tick and pays out volume/200 updates
+    (the remainder carries), coordinates unpacked from the genuine randId LCG
+    (randId*3 + 1013904223, >> 2, x from the low bits, z next, y highest).
+    The engine loop above is 3 per 16^3 chunk = volume/1365 - about 6.8x
+    sparser, so grass/saplings/flowers/mushrooms/liquid activation all ran
+    visibly slow in c0.30 survival. Handlers are the same OnRandomTick table
+    (genuine gates on Block.physics[], the same block set). Masks assume
+    power-of-two dims like genuine; the bounds check skips (biased) picks on
+    odd-sized imports. Mirrors IndevTest_TickRandomBlocks. */
+static void Physics_TickRandomBlocksC030(void) {
+	int shiftX = 1, shiftZ = 1;
+	int maskX, maskY, maskZ;
+	int count, i, x, y, z, index;
+	cc_uint32 bits;
+	BlockID block;
+	PhysicsHandler tick;
+
+	while ((1 << shiftX) < World.Width)  shiftX++;
+	while ((1 << shiftZ) < World.Length) shiftZ++;
+	maskX = World.Width - 1; maskZ = World.Length - 1; maskY = World.Height - 1;
+
+	physics_unprocessed += World.Volume;
+	count = physics_unprocessed / 200;
+	physics_unprocessed -= count * 200;
+
+	for (i = 0; i < count; i++) {
+		physics_randId = physics_randId * 3u + 1013904223u;
+		bits = physics_randId >> 2;
+		x = (int)(bits & maskX);
+		z = (int)((bits >> shiftX) & maskZ);
+		y = (int)((bits >> (shiftX + shiftZ)) & maskY);
+		if (x >= World.Width || y >= World.Height || z >= World.Length) continue;
+
+		index = World_Pack(x, y, z);
+		block = World.Blocks[index];
+		tick  = Physics.OnRandomTick[block];
+		if (tick) tick(index, block);
+	}
+}
 
 static void Physics_DoFalling(int index, BlockID block) {
 	int found = -1, start = index;
@@ -595,6 +645,9 @@ void Physics_Tick(void) {
 	if (IndevTest_Enabled) {
 		IndevFire_Tick(); /* the scheduled-update list runs before random ticks */
 		IndevTest_TickRandomBlocks();
+	} else if (SurvivalTest_Enabled) {
+		/* c0.30 survival: the genuine volume/200 Level.tick rate */
+		Physics_TickRandomBlocksC030();
 	} else {
 		Physics_TickRandomBlocks();
 	}

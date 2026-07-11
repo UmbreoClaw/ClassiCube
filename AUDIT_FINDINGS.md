@@ -240,20 +240,37 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     alpha (1-(fuse+1)/100)*0.8, smoke at y+0.5; ours c0.30 pattern.
 11. [P] Indev explosion ray-march block destruction + entity velocity
     knockback (overlaps mobs finding 4 - one combined fix).
-12. [P] **Farmland trampling missing** (MEDIUM): onEntityWalking 1/4 ->
-    dirt. Not implemented at all.
-13. [P] Crops need BlockFlower.canBlockStay light check (pop unless
-    light>=8 or >=4+sky, ground farmland).
+12. [V] **Farmland trampling**: FIXED in round 3 (env batch) -
+    IndevTest_TrampleStep (1-in-4 -> dirt with notify) on genuine step
+    events: mob walkDist trigger + new player distanceWalkedModified
+    accumulator (0.6x horizontal, foot block at feetY-0.2). gdb-verified
+    incl. crop pop via the notify hook.
+13. [V] Crops canBlockStay: FIXED in round 3 (env batch) - checkFlowerChange
+    runs first on every crop random tick ((light>=8 || light>=4+sky) &&
+    farmland below); pop drops 1 wheat at stage 7, nothing earlier
+    (Indev_PopCrop, shared with the farmland-removed neighbour pop).
 14. [P] Indev lava flow tickRate 25 (ours 30 = c0.30-correct).
-15. [P] c0.30 random-tick rate should ALSO be volume/200 (engine default
-    ~volume/1365 is 6.8x slow for c0.30 grass/saplings).
-16. [P] Night terrain brightness: genuine lightBrightnessTable curve
-    (1-v)/(3v+1)*0.95+0.05 -> 0.13 at night; ours linear light/15 -> 0.27.
-    Nights ~2x too bright. (Also genuine eases 1 step/tick.)
-17. [P] Physics/fire block changes bypass UserEvents.BlockChanged so
-    torch/crop/fire neighbour pops miss non-player changes.
-18. [P] Torch placement with no support should FAIL (canPlaceBlockAt),
-    not place-then-pop.
+15. [V] c0.30 random-tick rate: FIXED in round 3 (env batch) -
+    Physics_TickRandomBlocksC030 ports Level.tick's volume/200 loop
+    (randId*3+1013904223 LCG, seeded random.nextInt() style per map) for
+    c0.30 survival; creative keeps the engine loop. indev_randId now
+    seeded per map too (was always 0).
+16. [V] Night terrain brightness: FIXED in round 3 (env batch) - public
+    IndevTest_BrightnessOfLight curve drives sun/shadow (night 0x20 =
+    0.1255 ~ genuine 0.129, rig-verified), eased at most 1 level/tick
+    (World.tick + updateDaylightCycle); LightLevel/CurSkyLight gameplay
+    reads (crops, zombie burn, spawns) use the eased value.
+17. [V] Physics-change notifications: FIXED in round 3 (env batch) -
+    Game_UpdateBlock now calls IndevTest_BlockUpdated (setBlockWithNotify
+    fan-out) for EVERY mutation: torch pops, crop pops (+wheat), farmland
+    cover revert (now immediate), fire lifecycle, chest scatter/TE removal
+    (same-container-kind swaps preserved). Validators moved out of the
+    UserEvents handler; fire spread's explicit schedules deduped.
+    gdb-verified: raw Game_UpdateBlock support removal pops the torch.
+18. [V] Torch placement fail: FIXED in round 3 (env batch) -
+    IndevTest_CanPlaceBlockAt refuses torches with no normal-cube support
+    (genuine 4-walls-or-floor check pre-placement, nothing consumed);
+    dead place-then-pop arm deleted. gdb-verified mid-air refusal.
 19. RESOLVED (user decision 2026-07-11): death inventory scatter is NOT
     genuine (no dropAllItems in either ground truth) but is KEPT as a
     deliberate deviation because multiplayer support is planned; may

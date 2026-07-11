@@ -151,6 +151,14 @@ BlockID IndevTest_FacingVariant(BlockID canonical, int meta);
 /*  destruction) - for removal paths that don't raise BlockChanged, like */
 /*  explosions. Safe to call for any block id. */
 void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock);
+/* World.setBlockWithNotify's notification fan-out - called by */
+/*  Game_UpdateBlock for EVERY block mutation while Indev is on, running */
+/*  the world-consistency validators (torch pop, crop pop, farmland cover */
+/*  revert, fire lifecycle, tile entity removal). */
+void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block);
+/* BlockFarmland.onEntityWalking, from Entity.move's step trigger: 1-in-4 */
+/*  roll converts the farmland below (feetY - 0.2) to dirt. */
+void IndevTest_TrampleStep(float px, float feetY, float pz);
 
 /* Day/night cycle: world time in ticks (0..23999, 20 minutes per day) and */
 /*  the Environment SkyBrightness (> 15 = "paradise" maps, always day). */
@@ -162,8 +170,11 @@ int  IndevTest_SkyBrightness(void);
 /* World.getBlockLightValue: combined sky+block light level (0-15). */
 int  IndevTest_LightLevel(int x, int y, int z);
 /* The current day/night sky light level (4..15) - what the deobfuscated
-    source misnames World.skylightSubtracted. 15 outside Indev mode. */
+    source misnames World.skylightSubtracted. 15 outside Indev mode.
+    EASED: moves at most one level per game tick toward the target. */
 int  IndevTest_CurSkyLight(void);
+/* World.lightBrightnessTable[light]: (1-v)/(3v+1)*0.95+0.05, v=1-light/15. */
+float IndevTest_BrightnessOfLight(int light);
 /* World.tick's random block updates at the genuine rate: volume/200 ticks
     per game tick via the genuine LCG. Replaces the engine's much sparser
     3-per-chunk loop while Indev mode is on (see Physics_Tick). */

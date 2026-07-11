@@ -230,6 +230,11 @@ void Game_UpdateBlock(int x, int y, int z, BlockID block) {
 	}
 	Lighting.OnBlockChanged(x, y, z, old, block);
 	MapRenderer_OnBlockChanged(x, y, z, block);
+
+	/* Indev setBlockWithNotify: EVERY mutation (player, physics, fire,
+	    farming, explosions) notifies neighbours so torches/crops/farmland/
+	    fire/tile entities re-validate - see IndevTest_BlockUpdated. */
+	if (IndevTest_Enabled && old != block) IndevTest_BlockUpdated(x, y, z, old, block);
 }
 
 void Game_ChangeBlock(int x, int y, int z, BlockID block) {

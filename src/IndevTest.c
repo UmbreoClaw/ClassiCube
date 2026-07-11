@@ -1017,6 +1017,7 @@ cc_bool IndevTest_DropIsSprite(int id) {
 }
 
 static cc_bool Indev_NormalCube(int x, int y, int z); /* defined with the torch helpers */
+static int Indev_TorchAutoMeta(IVec3 p);              /* likewise */
 
 static cc_bool Indev_ChestAt(int x, int y, int z) {
 	if (!World_Contains(x, y, z)) return false;
@@ -1033,10 +1034,15 @@ static cc_bool Indev_ChestIsPaired(int x, int y, int z) {
 
 /* BlockChest.canPlaceBlockAt: a chest may touch at most ONE other chest,
     and never one that is already half of a double - doubles are the limit,
-    triples and L-shapes are refused outright. Everything else places. */
+    triples and L-shapes are refused outright. BlockTorch.canPlaceBlockAt:
+    one of the four side walls or the floor must be a normal cube - checked
+    BEFORE placement by ItemBlock.onItemUse, so a refused click consumes
+    nothing and plays nothing. Everything else places. */
 cc_bool IndevTest_CanPlaceBlockAt(BlockID b, IVec3 pos) {
 	int n = 0;
-	if (!IndevTest_Enabled || !Indev_IsChestBlock(b)) return true;
+	if (!IndevTest_Enabled) return true;
+	if (b == INDEV_BLOCK_TORCH) return Indev_TorchAutoMeta(pos) != 0;
+	if (!Indev_IsChestBlock(b)) return true;
 
 	if (Indev_ChestAt(pos.x - 1, pos.y, pos.z)) n++;
 	if (Indev_ChestAt(pos.x + 1, pos.y, pos.z)) n++;
@@ -1278,6 +1284,22 @@ static int Indev_SkyLight(void) {
 	return light;
 }
 
+/* World.lightBrightnessTable: render brightness of a light level 0-15,
+    (1-v)/(3v+1)*0.95+0.05 with v = 1 - light/15 - so night (light 4) is
+    ~0.129, NOT the linear 0.267. Feeds block shade, entity shade, spawn
+    darkness tests and the env sun/shadow scale. */
+float IndevTest_BrightnessOfLight(int light) {
+	float v = 1.0f - (float)light / 15.0f;
+	return (1.0f - v) / (v * 3.0f + 1.0f) * 0.95f + 0.05f;
+}
+
+/* World.skylightSubtracted (misnomer - it IS the live sky light): World.tick
+    moves it at most ONE level per tick toward getSkyBrightness, giving the
+    11-step dawn/dusk fade. -1 = not yet initialised for this map. */
+static int Indev_EasedSkyLight(void) {
+	return indev_lastSkyLight >= 0 ? indev_lastSkyLight : Indev_SkyLight();
+}
+
 static void Indev_TickDayNight(void) {
 	float f;
 	int   light;
@@ -1296,15 +1318,21 @@ static void Indev_TickDayNight(void) {
 	Env_SetCloudsCol(Indev_ScaleColor(indev_baseClouds,
 		f * 0.9f + 0.1f, f * 0.9f + 0.1f, f * 0.85f + 0.15f));
 
-	/* skylightSubtracted: dim the world's sun/shadow lighting with the sky */
-	/*  light level (4..15). Sun/shadow changes trigger a relight, so only */
-	/*  apply when the level actually moves (11 steps across dawn/dusk). */
+	/* skylightSubtracted: World.tick eases the live sky level at most ONE
+	    step per tick toward getSkyBrightness (11 relights across dawn/dusk,
+	    gradual catch-up after /time jumps), and the sun/shadow scale runs
+	    through the genuine lightBrightnessTable curve (night ~0.129, not
+	    linear 0.267). Each Env change triggers a full relight, so only
+	    apply when the eased level actually moves. */
 	light = Indev_SkyLight();
-	if (light != indev_lastSkyLight) {
-		indev_lastSkyLight = light;
-		Env_SetSunCol(PackedCol_Scale(ENV_DEFAULT_SUN_COLOR,    (float)light / 15.0f));
-		Env_SetShadowCol(PackedCol_Scale(ENV_DEFAULT_SHADOW_COLOR, (float)light / 15.0f));
-	}
+	if (indev_lastSkyLight < 0)          indev_lastSkyLight = light;
+	else if (indev_lastSkyLight > light) indev_lastSkyLight--;
+	else if (indev_lastSkyLight < light) indev_lastSkyLight++;
+	else return;
+
+	f = IndevTest_BrightnessOfLight(indev_lastSkyLight);
+	Env_SetSunCol(PackedCol_Scale(ENV_DEFAULT_SUN_COLOR,       f));
+	Env_SetShadowCol(PackedCol_Scale(ENV_DEFAULT_SHADOW_COLOR, f));
 }
 
 /*########################################################################################################################*
@@ -1329,7 +1357,9 @@ int IndevTest_LightLevel(int x, int y, int z) {
 	if (y < 0) { y = 0; } else if (y >= World.Height) { y = World.Height - 1; }
 	if (z < 0) { z = 0; } else if (z >= World.Length) { z = World.Length - 1; }
 
-	if (Lighting.IsLit(x, y, z)) light = Indev_SkyLight();
+	/* genuine getBlockLightValue reads the EASED sky level (the stored light
+	    nibbles are nudged 1/tick by updateDaylightCycle), not the target */
+	if (Lighting.IsLit(x, y, z)) light = Indev_EasedSkyLight();
 	if (Lighting_Mode == LIGHTING_MODE_FANCY) {
 		int block = FancyLighting_BlockLightLevel(x, y, z);
 		if (block > light) light = block;
@@ -1343,7 +1373,7 @@ int IndevTest_LightLevel(int x, int y, int z) {
     light, 15 at noon / 4 at night). */
 int IndevTest_CurSkyLight(void) {
 	if (!IndevTest_Enabled) return 15;
-	return Indev_SkyLight();
+	return Indev_EasedSkyLight(); /* the zombie-burn test reads the eased field */
 }
 
 static cc_bool Indev_GrowLightOk(int x, int y, int z) {
@@ -1394,15 +1424,60 @@ static void Indev_TickFarmland(int index, BlockID block) {
 	}
 }
 
-/* BlockCrops.updateTick: growth rate from the farmland below (1 dry / 3 */
-/*  wet, neighbours at quarter weight), halved when crowded by adjacent */
-/*  crops; then a 1-in-(100/rate) roll advances the stage. */
+/* BlockFarmland.onEntityWalking, fed by Entity.move's step trigger (fires
+    once per accumulated 1/0.6 horizontal metres, NOT gated on onGround):
+    a 1-in-4 roll converts the farmland below the walker's feet (posY - 0.2)
+    to dirt with notify - the Game_UpdateBlock hook then pops any crop above.
+    Player and all mobs trample (canTriggerWalking is only false for items,
+    TNT and particles). */
+void IndevTest_TrampleStep(float px, float feetY, float pz) {
+	int bx, by, bz;
+	BlockID b;
+	if (!IndevTest_Enabled) return;
+
+	bx = Math_Floor(px); by = Math_Floor(feetY - 0.2f); bz = Math_Floor(pz);
+	if (!World_Contains(bx, by, bz)) return;
+	b = World_GetBlock(bx, by, bz);
+	if (!Indev_IsFarmland(b)) return;
+	if (Random_Next(&indev_teRng, 4) != 0) return;
+
+	Game_UpdateBlock(bx, by, bz, BLOCK_DIRT);
+}
+
+/* BlockFlower.checkFlowerChange's failure arm, for crops: dropBlockAsItem
+    (BlockCrops.idDropped: stage 7 -> 1 wheat item, stages 0-6 -> nothing;
+    seeds only ever drop from onBlockDestroyedByPlayer) then set air. */
+static void Indev_PopCrop(int x, int y, int z, BlockID crop) {
+	Vec3 dp;
+	if (crop == INDEV_BLOCK_CROPS_7) {
+		dp.x = x + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+		dp.y = y + 0.5f;
+		dp.z = z + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+		SurvivalTest_SpawnDropWorld(dp, 256 + 40, 1); /* Item.wheat */
+	}
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+}
+
+/* BlockCrops.updateTick: super.updateTick (BlockFlower.checkFlowerChange -
+    the canBlockStay pop check) runs FIRST for every stage; then growth:
+    rate from the farmland below (1 dry / 3 wet, neighbours at quarter
+    weight), halved when crowded by adjacent crops; then a 1-in-(100/rate)
+    roll advances the stage. */
 static void Indev_TickCrops(int index, BlockID block) {
 	float rate = 1.0f, f;
-	int x, y, z, dx, dz;
+	int x, y, z, dx, dz, light;
 	BlockID below;
-	cc_bool rowX, rowZ, diag;
+	cc_bool rowX, rowZ, diag, stay;
 	World_Unpack(index, x, y, z);
+
+	/* canBlockStay: (light >= 8 OR (light >= 4 AND sky access)) AND farmland
+	    below. Lighting.IsLit approximates canBlockSeeTheSky (both heightmap
+	    based - genuine also scans past translucent cover; accepted). */
+	light = IndevTest_LightLevel(x, y, z);
+	below = y > 0 ? World_GetBlock(x, y - 1, z) : BLOCK_AIR;
+	stay  = (light >= 8 || (light >= 4 && Lighting.IsLit(x, y, z))) &&
+	        Indev_IsFarmland(below);
+	if (!stay) { Indev_PopCrop(x, y, z, block); return; }
 
 	if (block >= INDEV_BLOCK_CROPS_7) return;
 	if (y + 1 >= World.Height || !Indev_GrowLightOk(x, y + 1, z)) return;
@@ -1993,25 +2068,69 @@ static void Indev_TorchCheckPop(int x, int y, int z) {
 	Game_ChangeBlock(x, y, z, BLOCK_AIR);
 }
 
-/* Tile entity lifecycle + placement rotation, driven off block changes. */
+/* World.setBlockWithNotify's notification fan-out, invoked from
+    Game_UpdateBlock for EVERY block mutation - player edits, engine block
+    physics (fluids, falling sand, sponges), fire spread, farm ticks and
+    explosions alike. Genuine block code never mutates without notifying,
+    which is what keeps torches, crops, farmland and tile entities
+    consistent. Player-INTENT logic (chest/furnace facing, torch face-meta
+    pick) stays in the UserEvents.BlockChanged handler below. */
+void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block) {
+	static int depth;
+	IVec3 coords;
+	BlockID below;
+	if (!IndevTest_Enabled || !World.Loaded || !World.Blocks) return;
+	/* validators mutate via Game_UpdateBlock themselves - cascades converge
+	    in genuine (everything ends at air), the cap bounds pathologies */
+	if (depth >= 8) return;
+	depth++;
+	coords.x = x; coords.y = y; coords.z = z;
+
+	/* BlockFlower.onNeighborBlockChange -> canBlockStay: a crop pops (stage
+	    7 drops 1 wheat) when its farmland turns into anything else */
+	if (Indev_IsFarmland(oldBlock) && !Indev_IsFarmland(block) &&
+		y + 1 < World.Height &&
+		Indev_IsCrops(World_GetBlock(x, y + 1, z))) {
+		Indev_PopCrop(x, y + 1, z, World_GetBlock(x, y + 1, z));
+	}
+
+	/* BlockFarmland.onNeighborBlockChange: a solid block landing on top
+	    reverts the farmland below to dirt immediately (not on random tick) */
+	if (Blocks.Collide[block] == COLLIDE_SOLID && y > 0) {
+		below = World_GetBlock(x, y - 1, z);
+		if (Indev_IsFarmland(below)) Game_UpdateBlock(x, y - 1, z, BLOCK_DIRT);
+	}
+
+	/* BlockContainer.onBlockRemoval (chest scatter / furnace TE cleanup).
+	    Same-kind swaps - furnace lit<->unlit, chest/furnace facing rotation -
+	    are metadata changes in genuine and keep the tile entity. */
+	if (IndevTest_ContainerKindOf(oldBlock) != IndevTest_ContainerKindOf(block)) {
+		IndevTest_NotifyBlockRemoved(coords, oldBlock);
+	}
+
+	/* Fire lifecycle: onBlockAdded validation/scheduling, age cleanup and
+	    onNeighborBlockChange for the six neighbouring fire blocks */
+	IndevFire_BlockChanged(coords, oldBlock, block);
+
+	/* Any block change makes the six neighbouring torches re-check their
+	    support (BlockTorch.onNeighborBlockChange) */
+	Indev_TorchCheckPop(x - 1, y, z);
+	Indev_TorchCheckPop(x + 1, y, z);
+	Indev_TorchCheckPop(x, y - 1, z);
+	Indev_TorchCheckPop(x, y + 1, z);
+	Indev_TorchCheckPop(x, y, z - 1);
+	Indev_TorchCheckPop(x, y, z + 1);
+	depth--;
+}
+
+/* Player-intent placement handling, driven off the UserEvents.BlockChanged
+    event (raised only for direct player actions). World-consistency
+    validation lives in IndevTest_BlockUpdated above, which already ran
+    inside Game_UpdateBlock for this same mutation. */
 static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, BlockID block) {
-	cc_bool oldFurn, nowFurn;
 	struct Entity* p;
 	int q, meta;
 	if (!IndevTest_Enabled) return;
-
-	oldFurn = Indev_IsFurnaceIdle(oldBlock) || Indev_IsFurnaceLit(oldBlock);
-	nowFurn = Indev_IsFurnaceIdle(block)    || Indev_IsFurnaceLit(block);
-	if (oldFurn && nowFurn) return; /* lit/unlit swap - state survives */
-
-	/* crops pop off when their farmland vanishes (BlockFlower.canBlockStay) */
-	if (Indev_IsFarmland(oldBlock) && !Indev_IsFarmland(block) &&
-		coords.y + 1 < World.Height &&
-		Indev_IsCrops(World_GetBlock(coords.x, coords.y + 1, coords.z))) {
-		Game_ChangeBlock(coords.x, coords.y + 1, coords.z, BLOCK_AIR);
-	}
-
-	IndevTest_NotifyBlockRemoved(coords, oldBlock);
 
 	/* Player placed a canonical chest/furnace: rotate it so the front faces */
 	/*  the player (BlockFurnace.setDefaultDirection / Beta onBlockPlacedBy: */
@@ -2024,41 +2143,22 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 		/*  north<->south / east<->west vs onBlockPlacedBy's 2/5/3/4. */
 		meta = q == 0 ? 3 : (q == 1 ? 4 : (q == 2 ? 2 : 5));
 		Game_UpdateBlock(coords.x, coords.y, coords.z,
-			IndevTest_FacingVariant(block, meta)); /* no event - avoids recursion */
+			IndevTest_FacingVariant(block, meta)); /* same container kind - TE survives */
 	}
 
 	/* Player placed a torch: onBlockAdded's auto wall-pick, overridden by
-	    onBlockPlaced's clicked-face mounting, then dropTorchIfCantStay
-	    (genuine ItemBlock.onItemUse runs exactly that sequence). */
+	    onBlockPlaced's clicked-face mounting. Support is guaranteed here -
+	    IndevTest_CanPlaceBlockAt refused the click otherwise (genuine
+	    ItemBlock.onItemUse checks canPlaceBlockAt BEFORE placing). */
 	if (block == INDEV_BLOCK_TORCH) {
-		Vec3 dp;
 		meta = Indev_TorchAutoMeta(coords);
 		q    = Indev_TorchFaceMeta(coords);
 		if (q) meta = q;
-
-		if (!meta) {
-			/* no support anywhere: pops straight off as an item */
-			dp.x = coords.x + 0.5f; dp.y = coords.y + 0.5f; dp.z = coords.z + 0.5f;
-			Game_UpdateBlock(coords.x, coords.y, coords.z, BLOCK_AIR);
-			SurvivalTest_SpawnDropWorld(dp, INDEV_BLOCK_TORCH, 1);
-		} else if (meta != 5) {
+		if (meta && meta != 5) {
 			Game_UpdateBlock(coords.x, coords.y, coords.z,
-				(BlockID)(INDEV_BLOCK_TORCH_W1 + meta - 1)); /* no event */
+				(BlockID)(INDEV_BLOCK_TORCH_W1 + meta - 1));
 		}
 	}
-
-	/* Fire lifecycle: onBlockAdded validation/scheduling, age cleanup and
-	    onNeighborBlockChange for the six neighbouring fire blocks */
-	IndevFire_BlockChanged(coords, oldBlock, block);
-
-	/* Any block change makes the six neighbouring torches re-check their
-	    support (BlockTorch.onNeighborBlockChange) */
-	Indev_TorchCheckPop(coords.x - 1, coords.y, coords.z);
-	Indev_TorchCheckPop(coords.x + 1, coords.y, coords.z);
-	Indev_TorchCheckPop(coords.x, coords.y - 1, coords.z);
-	Indev_TorchCheckPop(coords.x, coords.y + 1, coords.z);
-	Indev_TorchCheckPop(coords.x, coords.y, coords.z - 1);
-	Indev_TorchCheckPop(coords.x, coords.y, coords.z + 1);
 }
 
 /* Map loading runs Game_Reset, which wipes ALL custom block definitions - */
@@ -2086,6 +2186,15 @@ static void OnNewMapLoaded(void) {
 	indev_baseClouds   = Env.CloudsCol;
 	indev_baseColsKnown = true;
 	indev_lastSkyLight  = -1; /* reapply sun/shadow for the new map */
+
+	/* Level.initTransient: randId = random.nextInt() - without a per-map
+	    seed every world would replay the same random-update pick sequence */
+	{
+		RNGState seedRng;
+		Random_SeedFromCurrentTime(&seedRng);
+		indev_randId = ((cc_uint32)Random_Next(&seedRng, 65536) << 16)
+		             |  (cc_uint32)Random_Next(&seedRng, 65536);
+	}
 
 	if (Lighting_Mode != LIGHTING_MODE_FANCY && !Lighting_ModeLockedByServer) {
 		Lighting_SetMode(LIGHTING_MODE_FANCY, false);

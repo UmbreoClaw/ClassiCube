@@ -171,8 +171,9 @@ static void Fire_TryCatch(int x, int y, int z, int bound) {
 	if (Random_Next(&fire_rng, bound) >= ability) return;
 
 	if (Random_Next(&fire_rng, 2) == 0) {
+		/* onBlockAdded scheduling now runs via the Game_UpdateBlock notify
+		    hook (IndevTest_BlockUpdated -> IndevFire_BlockChanged) */
 		Fire_Set(x, y, z, INDEV_BLOCK_FIRE);
-		if (World_Contains(x, y, z)) Fire_Schedule(World_Pack(x, y, z)); /* onBlockAdded */
 	} else {
 		Fire_Set(x, y, z, BLOCK_AIR);
 	}
@@ -231,8 +232,8 @@ static void Fire_UpdateTick(int x, int y, int z) {
 
 				if (chance > 0 && Random_Next(&fire_rng, bound) <= chance) {
 					if (World_Contains(xx, yy, zz)) {
+						/* the notify hook runs onBlockAdded's schedule */
 						Fire_Set(xx, yy, zz, INDEV_BLOCK_FIRE);
-						Fire_Schedule(World_Pack(xx, yy, zz));
 					}
 				}
 			}
@@ -341,8 +342,7 @@ cc_bool IndevFire_UseFlintSteel(IVec3 clickedPos, Face face) {
 		/* "fire.ignite", 1.0F, rand * 0.4F + 0.8F */
 		SurvivalTest_PlaySoundAtBlock(x, y, z, MOBSND_IGNITE, 1.0f,
 			Random_Float(&fire_rng) * 0.4f + 0.8f);
-		Fire_Set(x, y, z, INDEV_BLOCK_FIRE);
-		Fire_Schedule(World_Pack(x, y, z));
+		Fire_Set(x, y, z, INDEV_BLOCK_FIRE); /* hook schedules it */
 	}
 	/* the item wears by 1 whether or not fire was actually placed */
 	SurvivalTest_DamageHeldItem(1);
@@ -388,8 +388,7 @@ static cc_bool Fire_SpreadCheck(int x, int y, int z) {
 	if (b == INDEV_BLOCK_FIRE) return true;
 	if (b != BLOCK_AIR)        return false;
 	if (!World_Contains(x, y, z)) return false;
-	Fire_Set(x, y, z, INDEV_BLOCK_FIRE);
-	Fire_Schedule(World_Pack(x, y, z));
+	Fire_Set(x, y, z, INDEV_BLOCK_FIRE); /* hook schedules it */
 	return true;
 }
 
@@ -411,8 +410,7 @@ cc_bool IndevFire_LavaFlowInto(int x, int y, int z) {
 	if (!lit) lit = Fire_SpreadCheck(x, y, z + 1);
 	if (!lit) lit = Fire_SpreadCheck(x, y - 1, z);
 	if (!lit) {
-		Fire_Set(x, y, z, INDEV_BLOCK_FIRE);
-		Fire_Schedule(World_Pack(x, y, z));
+		Fire_Set(x, y, z, INDEV_BLOCK_FIRE); /* hook schedules it */
 	}
 	return true;
 }

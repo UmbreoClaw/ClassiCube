@@ -2339,8 +2339,7 @@ static int st_hurtCauseSlot = -1;
     "getEntityBrightness > 0.5" style check reads. (1-v)/(v*3+1)*0.95+0.05
     with v = 1 - light/15, so > 0.5 needs a light level of 12+. */
 static float Indev_LightBrightness(int x, int y, int z) {
-	float v = 1.0f - (float)IndevTest_LightLevel(x, y, z) / 15.0f;
-	return (1.0f - v) / (v * 3.0f + 1.0f) * 0.95f + 0.05f;
+	return IndevTest_BrightnessOfLight(IndevTest_LightLevel(x, y, z));
 }
 
 static float Mob_Brightness(struct Mob* m) {
@@ -4196,6 +4195,11 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 			BlockID under = World_Contains(bx, by, bz) ? World_GetBlock(bx, by, bz) : BLOCK_AIR;
 
 			m->nextStep++;
+			/* Block.onEntityWalking: mobs trample farmland (1-in-4) on the
+			    same step trigger, regardless of player distance */
+			if (under != BLOCK_AIR) {
+				IndevTest_TrampleStep(e->Position.x, e->Position.y, e->Position.z);
+			}
 			if (under != BLOCK_AIR && sp) {
 				sdx = e->Position.x - sp->Base.Position.x;
 				sdz = e->Position.z - sp->Base.Position.z;
@@ -6914,6 +6918,12 @@ static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_
 	}
 }
 
+/* Entity.distanceWalkedModified/nextStepDistance for the local player - the
+    step-event cadence that drives farmland trampling (the engine's footstep
+    sounds are leg-swing based and can't be reused for this). */
+static float st_walkDist;
+static int   st_nextStep = 1;
+
 static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	struct LocalPlayer* p;
 	struct Entity* e;
@@ -6945,6 +6955,26 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	inLava      = ST_InLiquid(e, true);
 	inWater     = ST_InLiquid(e, false);
 	headInWater = SurvivalTest_IsHeadInWater(e);
+
+	/* Entity.move's step trigger for the PLAYER: distanceWalkedModified
+	    accumulates horizontal metres * 0.6 and fires once per whole unit -
+	    NOT gated on onGround (genuine isn't) - trampling farmland below the
+	    feet (Block.onEntityWalking). e->next.pos is this tick's fresh
+	    position; e->Position is one tick stale here (see UpdateFall). */
+	if (IndevTest_Enabled && !p->Hacks.Flying && !p->Hacks.Noclip) {
+		float wdx = e->next.pos.x - e->prev.pos.x;
+		float wdz = e->next.pos.z - e->prev.pos.z;
+		st_walkDist += Math_SqrtF(wdx * wdx + wdz * wdz) * 0.6f;
+		if (st_walkDist > (float)st_nextStep) {
+			int fx = Math_Floor(e->next.pos.x);
+			int fy = Math_Floor(e->next.pos.y - 0.2f);
+			int fz = Math_Floor(e->next.pos.z);
+			st_nextStep++;
+			if (World_Contains(fx, fy, fz) && World_GetBlock(fx, fy, fz) != BLOCK_AIR) {
+				IndevTest_TrampleStep(e->next.pos.x, e->next.pos.y, e->next.pos.z);
+			}
+		}
+	}
 
 	/* Fall damage -------------------------------------------------------- */
 	/* Mob.tick resets fallDistance for water ONLY (isInWater) - landing in */
@@ -7083,7 +7113,10 @@ static void SurvivalTest_ResetState(void) {
 	st_hurtDir      = 0.0f;
 	st_breaking     = false;
 	st_breakHits    = 0;
+	st_breakDamage  = 0.0f;
 	st_breakDelay   = 0;
+	st_walkDist     = 0.0f;
+	st_nextStep     = 1; /* Entity.nextStepDistance's field initialiser */
 	st_airTimer     = AIR_SUPPLY_SECS;
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
