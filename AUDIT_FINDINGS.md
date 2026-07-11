@@ -31,8 +31,11 @@ avoid still needs the gen spawn threaded through - open); items 1, 3,
 4, 5, 6, 8, 14 (+ bonus: Indev sheep shear verified to drop GRAY cloth,
 already correct). Item 2 (sword 1.5x dig speed) folded into the open
 dig-model overhaul (item 9).
-STILL OPEN: 4 (scale quantization - decide Indev integer ScaledResolution),
-6 (pop anim curves - needs IsometricDrawer asymmetric scale support),
+FIXED in batch 6: 4 (Indev GUI scale - genuine integer ScaledResolution
+via the new "Indev GUI scale" toggle in GUI options, default ON, applies
+only while the Indev gamemode is active; c0.30/creative keep the engine
+formula).
+STILL OPEN: 6 (pop anim curves - needs IsometricDrawer asymmetric scale support),
 8 (label rasterisation vs panel scale), 13 (doll anchor constants),
 14c (label draw order over held stack).
 

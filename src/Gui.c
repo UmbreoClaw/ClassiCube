@@ -1,4 +1,5 @@
 #include "Gui.h"
+#include "IndevTest.h"
 #include "String_.h"
 #include "Window.h"
 #include "Game.h"
@@ -44,6 +45,13 @@ static CC_NOINLINE int GetWindowScale(void) {
 #ifndef CC_BUILD_DUALSCREEN
 	}
 #endif
+	if (IndevTest_Enabled && Gui.IndevGuiScale) {
+		/* genuine ScaledResolution: the LARGEST integer scale that keeps a
+		    >= 320x240 virtual screen - exactly double the 640x480 step of
+		    the engine formula, so 720p renders 3x and 1080p 4x */
+		int s = (int)(min(widthScale * 2, heightScale * 2));
+		return s < 1 ? 1 : s;
+	}
 	return 1 + (int)(min(widthScale, heightScale));
 }
 
@@ -124,6 +132,7 @@ static void LoadOptions(void) {
 	Gui.ClassicChat      = Options_GetBool(OPT_CLASSIC_CHAT,      false) || Game_PureClassic;
 	Gui.ClassicInventory = Options_GetBool(OPT_CLASSIC_INVENTORY, false) || Game_ClassicMode;
 	Gui.ShowFPS          = Options_GetBool(OPT_SHOW_FPS, true);
+	Gui.IndevGuiScale    = Options_GetBool(OPT_INDEV_GUI_SCALE, true);
 	
 	Gui.RawInventoryScale = Options_GetFloat(OPT_INVENTORY_SCALE, 0.25f, 5.0f, 1.0f);
 #if defined CC_BUILD_SYMBIAN_3 || defined CC_BUILD_SYMBIAN_S60V5

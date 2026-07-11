@@ -48,6 +48,9 @@ CC_VAR extern struct _GuiData {
 	cc_bool ShowFPS;
 	/* Whether classic-style inventory is used */
 	cc_bool ClassicInventory;
+	/* Whether the Indev gamemode sizes its GUI with the genuine
+	    ScaledResolution (largest integer scale keeping >= 320x240). */
+	cc_bool IndevGuiScale;
 	float RawHotbarScale, RawChatScale, RawInventoryScale, RawCrosshairScale;
 	GfxResourceID GuiTex, GuiClassicTex, IconsTex, TouchTex;
 	int DefaultLines;

@@ -906,6 +906,13 @@ static void    GuO_SetShowFPS(cc_bool v) {
 	Options_SetBool(OPT_SHOW_FPS, v);
 }
 
+static cc_bool GuO_GetIndevScale(void) { return Gui.IndevGuiScale; }
+static void    GuO_SetIndevScale(cc_bool v) {
+	Gui.IndevGuiScale = v;
+	Options_SetBool(OPT_INDEV_GUI_SCALE, v);
+	Gui_LayoutAll();
+}
+
 static void GuO_GetHotbar(cc_string* v) { String_AppendFloat(v, Gui.RawHotbarScale, 1); }
 static void GuO_SetHotbar(const cc_string* v) { 
 	ChatOptionsScreen_SetScale(v, &Gui.RawHotbarScale, OPT_HOTBAR_SCALE); 
@@ -948,6 +955,8 @@ static void GuiOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 		MenuOptionsScreen_AddNum(s,  "Crosshair scale",
 			0.25f, 4.00f, 1,
 			GuO_GetCrosshair, GuO_SetCrosshair, NULL);
+		MenuOptionsScreen_AddBool(s, "Indev GUI scale",
+			GuO_GetIndevScale, GuO_SetIndevScale, NULL);
 		
 		MenuOptionsScreen_AddBool(s, "Black text shadows",
 			GuO_GetShadows,   GuO_SetShadows, NULL);
