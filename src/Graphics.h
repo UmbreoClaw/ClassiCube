@@ -258,9 +258,10 @@ CC_API void Gfx_SetAlphaArgBlend(cc_bool enabled);
 /*  instead of the usual interpolation (dst = dst * (1-alpha) + src * alpha). Backends without a */
 /*  cheap additive mode fall back to regular alpha blending. */
 CC_API void Gfx_SetAlphaBlendingAdditive(cc_bool enabled);
-/* Sets colour-inverting blending (dst' = src * (1-dst) + dst * (1-src)) - what genuine */
-/*  Indev draws its crosshair with (glBlendFunc(ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR)). */
-/*  Backends without an implementation fall back to regular alpha blending. */
+/* Swaps the blend FUNCTION to colour-inverting (dst' = src*(1-dst) + dst*(1-src)) - what */
+/*  genuine Indev draws its crosshair with - and back to standard alpha interpolation. */
+/*  Does NOT touch the blending enable state (the caller manages that); backends without */
+/*  an implementation leave the function unchanged (the draw renders plainly). */
 CC_API void Gfx_SetInvertedBlending(cc_bool enabled);
 
 /* Sets whether pixels may be discard based on z/depth */

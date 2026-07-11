@@ -2581,6 +2581,7 @@ static struct SurvivalInvScreen {
 	/* Genuine GuiContainer foreground labels (0x404040 dark gray text): */
 	/*  "Chest"/"Furnace"/"Crafting" panel titles + "Inventory" section label */
 	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory;
+	float fontTexF;  /* panel scale the label/count textures were built for */
 	struct Entity    doll;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
@@ -3337,7 +3338,11 @@ static void SurvivalInvScreen_ContextLost(void* screen) {
 	Screen_ContextLost(screen);
 }
 
-static void SurvivalInvScreen_ContextRecreated(void* screen) {
+/* The genuine 8px GUI font lives in 176-unit panel space, so on-screen
+    text height must be 8 * texF - rasterise the label/count textures for
+    the CURRENT panel scale (and again whenever it changes, e.g. resizing
+    the window or toggling Indev GUI scale). */
+static void SurvivalInv_MakeLabelTextures(struct SurvivalInvScreen* s) {
 	static const cc_string digits = String_FromConst("0123456789");
 	static const cc_string empty  = String_FromConst("");
 	static const cc_string title  = String_FromConst("Inventory");
@@ -3347,18 +3352,33 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 	static const cc_string lblFur = String_FromConst("&8Furnace");
 	static const cc_string lblCra = String_FromConst("&8Crafting");
 	static const cc_string lblInv = String_FromConst("&8Inventory");
-	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	struct DrawTextArgs args;
 	struct FontDesc countFont;
+	float texF;
+	int size;
 
-	Screen_UpdateVb(s);
-	Font_Make(&s->font, 14, FONT_FLAGS_PADDING);
+	/* same slot-size derivation Layout uses, so this is order-independent */
+	texF = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale())) / 18.0f;
+	if (texF < 16.0f / 18.0f) texF = 16.0f / 18.0f; /* Layout's 16px floor */
+	s->fontTexF = texF;
+	size = (int)(8.0f * texF);
+	if (size < 8) size = 8;
+
+	/* free any previous-scale textures (no-ops right after context loss) */
+	Font_Free(&s->font);
+	TextAtlas_Free(&s->countAtlas);
+	Gfx_DeleteTexture(&s->titleTex.ID);
+	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblFurnace.ID);
+	Gfx_DeleteTexture(&s->lblCrafting.ID);
+	Gfx_DeleteTexture(&s->lblInventory.ID);
+
+	Font_Make(&s->font, size, FONT_FLAGS_PADDING);
 	Font_SetPadding(&s->font, 1);
-	/* Unpadded size-16 digit atlas, same as the hotbar's stack counts - the
-	    baked drawStringWithShadow drop shadow scales with the font size
-	    (size/8 px), and 14pt's 1px shadow was too faint to read against
-	    item sprites. Exact glyph metrics also keep right-alignment tight. */
-	Font_Make(&countFont, 16, FONT_FLAGS_NONE);
+	/* Unpadded digit atlas at the same 8-GUI-px size - the baked
+	    drawStringWithShadow drop shadow scales with the font size, and
+	    exact glyph metrics keep right-alignment tight. */
+	Font_Make(&countFont, size, FONT_FLAGS_NONE);
 	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
 	Font_Free(&countFont);
 
@@ -3376,12 +3396,23 @@ static void SurvivalInvScreen_ContextRecreated(void* screen) {
 	s->dirty = true;
 }
 
+static void SurvivalInvScreen_ContextRecreated(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	Screen_UpdateVb(s);
+	SurvivalInv_MakeLabelTextures(s);
+}
+
 static void SurvivalInvScreen_Layout(void* screen) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	int storageW, storageH, gap, pad, topAreaH;
 
 	s->slotSize = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale()));
 	if (s->slotSize < 16) s->slotSize = 16; /* minimum usable size */
+
+	/* label/count text is rasterised per panel scale - rebuild on change */
+	if (Math_AbsF(s->slotSize / 18.0f - s->fontTexF) > 0.01f && s->font.handle) {
+		SurvivalInv_MakeLabelTextures(s);
+	}
 
 	gap = (int)(SURVINV_GAP_BASE * Gui_GetInventoryScale());
 	pad = (int)(SURVINV_PAD_BASE * Gui_GetInventoryScale());

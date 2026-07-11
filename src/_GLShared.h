@@ -267,8 +267,8 @@ void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
 }
 
 void Gfx_SetInvertedBlending(cc_bool enabled) {
-	Gfx_SetAlphaBlending(enabled);
-	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert */
+	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert. */
+	/* Function swap ONLY - the blending enable state belongs to the caller */
 	if (enabled) { _glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_COLOR); }
 	else         { _glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); }
 }

@@ -487,10 +487,9 @@ void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
 }
 
 void Gfx_SetInvertedBlending(cc_bool enabled) {
-	gfx_alphaBlend = enabled;
 	if (Gfx.LostContext) return;
-	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert */
-	IDirect3DDevice9_SetRenderState(device, D3DRS_ALPHABLENDENABLE, enabled);
+	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert. */
+	/* Function swap ONLY - the blending enable state belongs to the caller */
 	IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,  enabled ? D3DBLEND_INVDESTCOLOR : D3DBLEND_SRCALPHA);
 	IDirect3DDevice9_SetRenderState(device, D3DRS_DESTBLEND, enabled ? D3DBLEND_INVSRCCOLOR  : D3DBLEND_INVSRCALPHA);
 }

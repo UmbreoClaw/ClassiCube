@@ -35,9 +35,13 @@ FIXED in batch 6: 4 (Indev GUI scale - genuine integer ScaledResolution
 via the new "Indev GUI scale" toggle in GUI options, default ON, applies
 only while the Indev gamemode is active; c0.30/creative keep the engine
 formula).
-STILL OPEN: 6 (pop anim curves - needs IsometricDrawer asymmetric scale support),
-8 (label rasterisation vs panel scale), 13 (doll anchor constants),
-14c (label draw order over held stack).
+FIXED in batch 7: 8 (labels/counts rasterised at 8 GUI px * texF and
+rebuilt on scale change) + the invert-blend regression (batch 1's
+crosshair blend toggled the ENABLE state off, blacking out transparency
+for everything drawn after it - now swaps the blend function only).
+STILL OPEN: 6 (pop anim curves - needs IsometricDrawer asymmetric scale
+support), 13 (doll anchor constants), 14c (label draw order over held
+stack).
 
 1. [V] **Container GUI background dim missing** (HIGH).
    Genuine GuiContainer.drawScreen -> drawDefaultBackground() ->
