@@ -5976,14 +5976,14 @@ static int SurvivalTest_DefaultHardness(BlockID block) {
 	switch (block) {
 		case BLOCK_STONE:       return 20;  /* 1.0s */
 		case BLOCK_GRASS:       return 12;  /* 0.6s */
-		case BLOCK_DIRT:        return 12;  /* 0.6s */
+		case BLOCK_DIRT:        return 10;  /* setData 0.5 */
 		case BLOCK_COBBLE:      return 30;  /* 1.5s */
 		case BLOCK_WOOD:        return 30;  /* 1.5s (planks) */
 		case BLOCK_BEDROCK:     return 19980; /* 999.0s - effectively unbreakable */
 		case BLOCK_WATER: case BLOCK_STILL_WATER:
 		case BLOCK_LAVA:  case BLOCK_STILL_LAVA:
 			return 2000; /* 100.0s */
-		case BLOCK_SAND:        return 12;  /* 0.6s */
+		case BLOCK_SAND:        return 10;  /* setData 0.5 */
 		case BLOCK_GRAVEL:      return 12;  /* 0.6s */
 		case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE:
 			return 60;  /* 3.0s */
@@ -5999,13 +5999,13 @@ static int SurvivalTest_DefaultHardness(BlockID block) {
 		case BLOCK_GOLD:        return 60;  /* 3.0s */
 		case BLOCK_IRON:        return 100; /* 5.0s */
 		case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB:
-			return 20;  /* 1.0s (grouped with stone/mossy cobblestone) */
+			return 40;  /* setData 2.0 */
+		case BLOCK_BRICK:       return 40;  /* setData 2.0 */
 		case BLOCK_BOOKSHELF:   return 30;  /* 1.5s */
 		case BLOCK_MOSSY_ROCKS: return 20;  /* 1.0s */
 		case BLOCK_OBSIDIAN:    return 200; /* 10.0s */
-		/* BRICK is absent from getHardness's switch, so it falls through to the */
-		/*  default 0 - brick breaks instantly. Same for DANDELION, ROSE, both */
-		/*  mushrooms, SAPLING and TNT (all explicit hardness 0). */
+		/* DANDELION, ROSE, both mushrooms, SAPLING and TNT are explicit */
+		/*  hardness 0 in Block.java's static init - instant break. */
 		default: return 0;
 	}
 }

@@ -187,8 +187,52 @@ Indev hardness overrides, hoe till, bow behaviour.
 15. [P] Hardness-0 blocks don't wear tools in our insta-break path; genuine
     onBlockDestroyed always fires.
 
-## Domain 4: Entities + environment — AUDIT NOT RUN (agent hit usage limit)
-Re-run next session: EntityItem physics/pickup/despawn + render copies,
-arrows (covered partially by 3.12), TNT entity + explosion drops, paintings,
-day/night celestialAngle + skylight steps, random tick coverage, grass/
-sapling/crops/farmland, fluid flow, fire spread spot-check, particle ticks.
+## Domain 4: Entities + environment (audit complete)
+
+MATCHES confirmed for: EntityItem core physics/pickup/toss/despawn, render
+copy thresholds + glow, c0.30 TNT entirely, day/night formulas, Indev
+random-tick dispatch, crops growth math, farmland moisture, paintings
+(entire port), torch placement, fire spread verbatim.
+
+1. [P] **Indev TNT fuse 80 ticks** (HIGH): EntityTNTPrimed fuse=80 (4s);
+   ours TNT_FUSE_TICKS 40 both modes (40 is c0.30-correct). Mined + fire
+   paths + debug all pass 40 in Indev.
+2. [P] Indev chain-reaction fuse rand(20)+10 = 10..29; ours 5..14 both
+   modes (c0.30-correct).
+3. [P] No random.fuse sound when Indev TNT primes (BlockTNT.java:31).
+4. [P] Indev primed TNT must NOT be melee-defusable (no attackEntityFrom
+   override); ours defuses in both modes.
+5. [P] Indev explosion drops must use the INDEV drop table
+   (dropBlockAsItemWithChance 0.3): ours routes explosions through the
+   c0.30 table in both modes (log->planks etc).
+6. [P] Indev obsidian mined drop -> cobble. FIXED in batch 3 (overlap).
+7. [P] Mined drops need delayBeforeCanPickup=10 (Block.java:287); ours 0
+   (only Q-toss gets 40) - items vacuum instantly.
+8. [P] Indev EntityItem lava pop + burn (health 5) + push-out-of-solid
+   missing; drops rest inert in lava.
+9. [P] Indev drop spin 2.86deg/tick + bob arg 0.1 rad/tick w/ random
+   hoverStart phase; ours c0.30 3deg/0.3 both modes. Indev pickup is
+   instant (no fly-in anim).
+10. [P] Indev TNT render: swell 1+t^4*0.3 last 10 ticks, flash fuse/5%2
+    alpha (1-(fuse+1)/100)*0.8, smoke at y+0.5; ours c0.30 pattern.
+11. [P] Indev explosion ray-march block destruction + entity velocity
+    knockback (overlaps mobs finding 4 - one combined fix).
+12. [P] **Farmland trampling missing** (MEDIUM): onEntityWalking 1/4 ->
+    dirt. Not implemented at all.
+13. [P] Crops need BlockFlower.canBlockStay light check (pop unless
+    light>=8 or >=4+sky, ground farmland).
+14. [P] Indev lava flow tickRate 25 (ours 30 = c0.30-correct).
+15. [P] c0.30 random-tick rate should ALSO be volume/200 (engine default
+    ~volume/1365 is 6.8x slow for c0.30 grass/saplings).
+16. [P] Night terrain brightness: genuine lightBrightnessTable curve
+    (1-v)/(3v+1)*0.95+0.05 -> 0.13 at night; ours linear light/15 -> 0.27.
+    Nights ~2x too bright. (Also genuine eases 1 step/tick.)
+17. [P] Physics/fire block changes bypass UserEvents.BlockChanged so
+    torch/crop/fire neighbour pops miss non-player changes.
+18. [P] Torch placement with no support should FAIL (canPlaceBlockAt),
+    not place-then-pop.
+19. [P] **NOTES ERROR**: death inventory scatter is NOT genuine - neither
+    ground truth drops inventory on death (no dropAllItems exists).
+    SurvivalTest_DropInventory is an invention; decide with user (it
+    interacts with the no-respawn death screen fix: genuine death = world
+    over, items moot). Fix notes either way.

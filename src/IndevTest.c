@@ -457,13 +457,16 @@ static const cc_uint8 toolResult[5][5] = {
 };
 
 static cc_bool Recipe_MatchesAt(const struct IndevRecipe* r, const cc_uint16* grid,
-								int gw, int gh, int ox, int oy) {
+								int gw, int gh, int ox, int oy, cc_bool mirror) {
 	int x, y;
 	for (y = 0; y < gh; y++) {
 		for (x = 0; x < gw; x++) {
 			int rx = x - ox, ry = y - oy;
 			cc_uint16 want = 0;
-			if (rx >= 0 && rx < r->w && ry >= 0 && ry < r->h) want = r->cells[ry * r->w + rx];
+			if (rx >= 0 && rx < r->w && ry >= 0 && ry < r->h) {
+				if (mirror) rx = r->w - 1 - rx; /* horizontally flipped layout */
+				want = r->cells[ry * r->w + rx];
+			}
 			if (grid[y * gw + x] != want) return false;
 		}
 	}
@@ -471,11 +474,14 @@ static cc_bool Recipe_MatchesAt(const struct IndevRecipe* r, const cc_uint16* gr
 }
 
 static cc_bool Recipe_Matches(const struct IndevRecipe* r, const cc_uint16* grid, int gw, int gh) {
+	/* CraftingRecipe.matchRecipe tries every offset both unmirrored AND
+	    horizontally mirrored - axes/hoes/bows craft in either layout */
 	int ox, oy;
 	if (r->w > gw || r->h > gh) return false;
 	for (oy = 0; oy + r->h <= gh; oy++) {
 		for (ox = 0; ox + r->w <= gw; ox++) {
-			if (Recipe_MatchesAt(r, grid, gw, gh, ox, oy)) return true;
+			if (Recipe_MatchesAt(r, grid, gw, gh, ox, oy, false)) return true;
+			if (Recipe_MatchesAt(r, grid, gw, gh, ox, oy, true))  return true;
 		}
 	}
 	return false;
