@@ -296,6 +296,8 @@ int HUDScreen_LayoutHotbar(void) {
 void HUDScreen_SetSlotPop(int slot, float time) {
 	if (!Gui_HUD || slot < 0 || slot >= INVENTORY_BLOCKS_PER_HOTBAR) return;
 	Gui_HUD->hotbar.slotPopTime[slot] = time;
+	/* Indev GuiIngame squashes; c0.30 HUDScreen bounces (see BuildEntriesMesh) */
+	Gui_HUD->hotbar.popSquash = IndevTest_Enabled;
 }
 
 static void HUDScreen_Layout(void* screen) {
@@ -2561,6 +2563,10 @@ static struct SurvivalInvScreen {
 	Screen_Body
 	int  isoState[SURVINV_MAX_ISO_VERTS / 4];
 	int  isoVertCount;
+	int  isoSlotVerts;    /* iso verts belonging to SLOTS - the batch tail past
+	                          this is the cursor-held block, drawn later so the
+	                          hover highlight sits between them (genuine order) */
+	int  countSlotVerts;  /* likewise for the count digits mesh */
 	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
 	int  lastInvVersion;
 	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
@@ -2802,10 +2808,11 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 
 /* Renders the 3D player-skin paperdoll, confined to the doll preview box. */
 /*  The body always faces forward; only the head turns to track the cursor. */
-/* Based off the classic Indev/Beta inventory screen's mouse-follow paperdoll; */
-/*  not present in c0.30-s, so there's no decompiled source to ground this in - */
-/*  the rotation math is a reasonable approximation from general knowledge of */
-/*  how that effect has always worked, not a verified original formula. */
+/* Indev mode: verified against GuiInventory.drawGuiContainerBackgroundLayer */
+/*  (in-20100223) - anchor (guiLeft+51, guiTop+75) z=50, glScalef(-30,30,30) */
+/*  + rotZ 180, dx/dy from (51, 25) with the atan(d/40)*20/40 tracking, */
+/*  camera tilt glRotatef(-atan(dy/40)*20, 1,0,0). The classic-mode doll box */
+/*  is our own invention (c0.30-s has no doll) and keeps its approximation. */
 static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	struct Entity* p = &Entities.CurPlayer->Base;
 	struct Matrix proj, savedView;
@@ -2848,6 +2855,11 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		if (s->mouseX < 0) {
 			/* no PointerMove yet - look straight ahead */
 			dx = 0.0f; dy = 0.0f;
+		} else if (IndevTest_Enabled && s->texF > 0.0f) {
+			/* genuine anchors: dx from (guiLeft+51), dy from (guiTop+25)
+			    (= 75 - 50), both in genuine GUI px (mouse / texF) */
+			dx = ((float)s->panelX + 51.0f * s->texF - (float)s->mouseX) / s->texF;
+			dy = ((float)s->panelY + 25.0f * s->texF - (float)s->mouseY) / s->texF;
 		} else {
 			float eyeY = (float)boxY + (float)boxH * (20.0f / 70.0f);
 			dx = ((float)(boxX + boxSize / 2) - (float)s->mouseX) * gscale;
@@ -2856,11 +2868,14 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		t    = Math_Atan2f(40.0f, dx); /* engine Atan2f(x,y) = atan(y/x) */
 		lean = Math_Atan2f(40.0f, dy);
 
-		/* The view's x+y mirror below IS a 180-degree spin about Z, so the
-		    face-the-camera base is 0 here, and the frame matches genuine's
-		    mirrored one - the genuine signs apply verbatim. */
-		s->doll.RotY  = t * 20.0f;            /* body: light HORIZONTAL track */
-		s->doll.Yaw   = t * 40.0f;            /* head: double strength */
+		/* The view's x+y mirror below is a 180-degree spin about the Z
+		    axis - which does NOT turn the model's face toward the camera
+		    (facing is a Z direction, unchanged by a Z spin), so the
+		    face-the-camera base yaw is 180 here. The x-mirror component
+		    also flips screen-left/right, which the genuine dx sign then
+		    cancels out - verified by cursor tracking on the rig. */
+		s->doll.RotY  = 180.0f + t * 20.0f;   /* body: light HORIZONTAL track */
+		s->doll.Yaw   = 180.0f + t * 40.0f;   /* head: double strength */
 		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
 		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
 		s->doll.RotZ  = 0.0f;
@@ -2880,21 +2895,33 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 	    x+y flip: it maps the y-up model into y-down GUI space while
 	    preserving triangle winding (and mirrors the doll horizontally,
 	    which is also genuine). Reproduced via the view matrix below. */
-	aspect = 30.0f * (float)(boxH - 2) / 70.0f; /* genuine scale 30, resized to our box */
+	if (IndevTest_Enabled && s->texF > 0.0f) {
+		aspect = 30.0f * s->texF; /* genuine glScalef 30 in panel px */
+	} else {
+		aspect = 30.0f * (float)(boxH - 2) / 70.0f; /* our classic box approximation */
+	}
 	Gfx_CalcOrthoMatrix(&proj, (float)(boxSize - 2), (float)(boxH - 2), -1000.0f, 1000.0f);
 
 	savedView = Gfx.View;
 	{
 		struct Matrix flip, place, camPitch, tmp;
-		/* x+y mirror (winding-preserving), then anchor at the window's
-		    bottom-centre like genuine's (+51,+75) with z pushed into the
+		float px, py;
+		/* x+y mirror (winding-preserving), then anchor at genuine's
+		    (guiLeft+51, guiTop+75) - expressed relative to the viewport's
+		    (boxX+1, boxY+1) origin in Indev mode - with z pushed into the
 		    ortho range. The whole-scene pitch tilt (genuine's pre-render
 		    glRotatef about X) rides on top, so vertical mouse movement
 		    tips the CAMERA over the doll rather than bending the body. */
+		if (IndevTest_Enabled && s->texF > 0.0f) {
+			px = ((float)s->panelX + 51.0f * s->texF) - (float)(boxX + 1);
+			py = ((float)s->panelY + 75.0f * s->texF) - (float)(boxY + 1);
+		} else {
+			px = (float)(boxSize - 2) * 0.5f;
+			py = (float)(boxH - 2) * (67.0f / 70.0f);
+		}
 		Matrix_Scale(&flip, -aspect, -aspect, aspect);
 		Matrix_RotateX(&camPitch, s->dollCamPitch * MATH_DEG2RAD);
-		Matrix_Translate(&place, (float)(boxSize - 2) * 0.5f,
-								 (float)(boxH - 2) * (67.0f / 70.0f), 50.0f);
+		Matrix_Translate(&place, px, py, 50.0f);
 		Matrix_Mul(&tmp, &flip, &camPitch);
 		Matrix_Mul(&Gfx.View, &tmp, &place);
 	}
@@ -2977,6 +3004,8 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 		IsometricDrawer_AddBatch((BlockID)id, itemHalf,
 			slotX + ictr, slotY + ictr);
 	}
+	/* EndBatch just measures - the batch continues below with the cursor block */
+	s->isoSlotVerts = IsometricDrawer_EndBatch();
 	/* Cursor-held BLOCK follows the mouse inside the same iso batch (held */
 	/*  ITEMS draw as sprites in the render pass instead). */
 	if (SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() < 256 && s->mouseX >= 0) {
@@ -2989,6 +3018,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	/* Stack-count digit overlay for slots with count > 1 */
 	countDst = data + SURVINV_MAX_ISO_VERTS;
 	cur = countDst;
+	s->countSlotVerts = 0;
 	if (s->countAtlas.tex.ID) {
 		int savedY = s->countAtlas.tex.y;
 		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
@@ -3013,6 +3043,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 			}
 			TextAtlas_AddInt(&s->countAtlas, count, &cur);
 		}
+		s->countSlotVerts = (int)(cur - countDst);
 		/* Cursor-held stack count follows the mouse (blocks and items alike). */
 		if (SurvivalTest_CursorCount() > 1 && s->mouseX >= 0) {
 			int cc    = SurvivalTest_CursorCount();
@@ -3035,6 +3066,12 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 static void SurvivalInvScreen_Render(void* screen, float delta) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	int i, slotX, slotY, b;
+	int contKind      = IndevTest_OpenKind();
+	cc_bool workbench = IndevTest_Enabled && SurvivalTest_CraftDim() == 3;
+	GfxResourceID guiTex;
+	if (contKind == INDEV_CONTAINER_CHEST)        guiTex = IndevTest_ContGuiTex();
+	else if (contKind == INDEV_CONTAINER_FURNACE) guiTex = IndevTest_FurnGuiTex();
+	else guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
 
 	/* GuiContainer.drawScreen begins with drawDefaultBackground(): a
 	    full-screen gradient (0x60050500 -> 0xA0303060) dimming the world
@@ -3052,12 +3089,6 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
 
 	{
-	int  contKind = IndevTest_OpenKind();
-	cc_bool workbench = IndevTest_Enabled && SurvivalTest_CraftDim() == 3;
-	GfxResourceID guiTex;
-	if (contKind == INDEV_CONTAINER_CHEST)        guiTex = IndevTest_ContGuiTex();
-	else if (contKind == INDEV_CONTAINER_FURNACE) guiTex = IndevTest_FurnGuiTex();
-	else guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
 	if (IndevTest_Enabled && guiTex) {
 		/* Genuine look: the whole panel IS the 176-wide GUI texture (slot */
 		/*  bevels, craft arrow, and - for the pocket inventory - the armor */
@@ -3121,47 +3152,11 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			Texture_Render(&ovl);
 		}
 
-		/* GuiContainer foreground labels at the genuine coordinates: */
-		/*  chest "Chest"(8,6) + "Inventory"(8,74); furnace "Furnace"(60,6) */
-		/*  + "Inventory"(8,72); workbench "Crafting"(28,6) + "Inventory" */
-		/*  (8,72); pocket inventory "Crafting"(86,16). */
-		{
-			struct Texture* name = NULL;
-			int nx = 8, ny = 6, invY = 72;
-			if (contKind == INDEV_CONTAINER_CHEST) {
-				name = &s->lblChest; invY = 74;
-			} else if (contKind == INDEV_CONTAINER_FURNACE) {
-				name = &s->lblFurnace; nx = 60;
-			} else if (workbench) {
-				name = &s->lblCrafting; nx = 28;
-			} else if (s->lblCrafting.ID) {
-				name = &s->lblCrafting; nx = 86; ny = 16; invY = -1;
-			}
-			if (name && name->ID) {
-				name->x = (short)(s->panelX + (int)(nx * s->texF));
-				name->y = (short)(s->panelY + (int)(ny * s->texF));
-				Texture_Render(name);
-			}
-			if (invY >= 0 && s->lblInventory.ID) {
-				s->lblInventory.x = (short)(s->panelX + (int)(8 * s->texF));
-				s->lblInventory.y = (short)(s->panelY + (int)(invY * s->texF));
-				Texture_Render(&s->lblInventory);
-			}
-		}
+		/* Foreground labels + the hover highlight moved to the tail of this
+		    function - genuine GuiContainer.drawScreen draws the highlight
+		    per-slot AFTER that slot's item, and the labels LAST of all
+		    (drawGuiContainerForegroundLayer, above even the held stack). */
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
-
-		/* GuiContainer's mouse-over highlight: translucent white over the */
-		/*  16px slot area under the cursor. */
-		{
-			int hover = SurvivalInv_HitSlot(s, s->mouseX, s->mouseY);
-			int inner = (int)(16 * s->texF);
-			if (hover >= 0 && hover != SURVINV_RESULT_HIT) {
-				SurvivalInv_AnySlotXY(s, hover, &slotX, &slotY);
-				Gfx_Draw2DFlat(slotX, slotY, inner, inner, PackedCol_Make(255, 255, 255, 128));
-			} else if (hover == SURVINV_RESULT_HIT) {
-				Gfx_Draw2DFlat(s->resultX, s->resultY, inner, inner, PackedCol_Make(255, 255, 255, 128));
-			}
-		}
 	} else {
 	/* Panel: outer dark border then light-grey fill */
 	Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
@@ -3201,11 +3196,13 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	if (SurvivalTest_InvVersion() != s->lastInvVersion) s->dirty = true;
 	if (s->dirty) { SurvivalInvScreen_BuildMesh(screen); s->dirty = false; }
 
-	/* ISO block pictures */
-	if (s->isoVertCount > 0) {
+	/* ISO block pictures - SLOT entries only; the batch tail (the cursor-
+	    held block) draws later, above the hover highlight like genuine's
+	    z+32 held stack. */
+	if (s->isoSlotVerts > 0) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 		Gfx_BindDynamicVb(s->vb);
-		IsometricDrawer_Render(s->isoVertCount, 0, s->isoState);
+		IsometricDrawer_Render(s->isoSlotVerts, 0, s->isoState);
 	}
 
 	/* Item-id sprites (Indev items - tools, food, materials) drawn as flat */
@@ -3271,13 +3268,36 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	}
 
-	/* Stack-count text overlay (drawn last so digits sit over both pictures) */
-	if (s->countVertCount > 0 && s->countAtlas.tex.ID) {
+	/* Slot stack-count digits (the cursor-held stack's count draws later,
+	    with the held stack itself) */
+	if (s->countSlotVerts > 0 && s->countAtlas.tex.ID) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 		Gfx_BindTexture(s->countAtlas.tex.ID);
 		Gfx_BindDynamicVb(s->vb);
-		Gfx_DrawVb_IndexedTris_Range(s->countVertCount,
+		Gfx_DrawVb_IndexedTris_Range(s->countSlotVerts,
 		                             SURVINV_MAX_ISO_VERTS, DRAW_HINT_RECT);
+	}
+
+	/* GuiContainer's mouse-over highlight: translucent white over the 16px
+	    slot area under the cursor - AFTER the slot item + count (the
+	    highlight tints them), BEFORE the held stack. */
+	if (IndevTest_Enabled && guiTex) {
+		int hover = SurvivalInv_HitSlot(s, s->mouseX, s->mouseY);
+		int inner = (int)(16 * s->texF);
+		if (hover >= 0 && hover != SURVINV_RESULT_HIT) {
+			SurvivalInv_AnySlotXY(s, hover, &slotX, &slotY);
+			Gfx_Draw2DFlat(slotX, slotY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+		} else if (hover == SURVINV_RESULT_HIT) {
+			Gfx_Draw2DFlat(s->resultX, s->resultY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+		}
+	}
+
+	/* Cursor-held BLOCK - the iso batch's tail (genuine held stack, z+32) */
+	if (s->isoVertCount > s->isoSlotVerts) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindDynamicVb(s->vb);
+		IsometricDrawer_Render(s->isoVertCount - s->isoSlotVerts, s->isoSlotVerts,
+		                       s->isoState + s->isoSlotVerts / 4);
 	}
 
 	/* Cursor-held stack follows the mouse, drawn over everything (blocks are */
@@ -3298,8 +3318,48 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		}
 	}
 
+	/* Cursor-held stack count, over the held icon */
+	if (s->countVertCount > s->countSlotVerts && s->countAtlas.tex.ID) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(s->countAtlas.tex.ID);
+		Gfx_BindDynamicVb(s->vb);
+		Gfx_DrawVb_IndexedTris_Range(s->countVertCount - s->countSlotVerts,
+		                             SURVINV_MAX_ISO_VERTS + s->countSlotVerts, DRAW_HINT_RECT);
+	}
+
+	/* GuiContainer foreground labels LAST - drawGuiContainerForegroundLayer
+	    runs after the held stack, so labels are the topmost layer. Genuine
+	    coordinates: chest "Chest"(8,6) + "Inventory"(8,74); furnace
+	    "Furnace"(60,6) + "Inventory"(8,72); workbench "Crafting"(28,6) +
+	    "Inventory"(8,72); pocket inventory "Crafting"(86,16). */
+	if (IndevTest_Enabled && guiTex) {
+		struct Texture* name = NULL;
+		int nx = 8, ny = 6, invY = 72;
+		if (contKind == INDEV_CONTAINER_CHEST) {
+			name = &s->lblChest; invY = 74;
+		} else if (contKind == INDEV_CONTAINER_FURNACE) {
+			name = &s->lblFurnace; nx = 60;
+		} else if (workbench) {
+			name = &s->lblCrafting; nx = 28;
+		} else if (s->lblCrafting.ID) {
+			name = &s->lblCrafting; nx = 86; ny = 16; invY = -1;
+		}
+		if (name && name->ID) {
+			name->x = (short)(s->panelX + (int)(nx * s->texF));
+			name->y = (short)(s->panelY + (int)(ny * s->texF));
+			Texture_Render(name);
+		}
+		if (invY >= 0 && s->lblInventory.ID) {
+			s->lblInventory.x = (short)(s->panelX + (int)(8 * s->texF));
+			s->lblInventory.y = (short)(s->panelY + (int)(invY * s->texF));
+			Texture_Render(&s->lblInventory);
+		}
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	}
+
 	/* 3D paperdoll (only the pocket inventory has a doll window; the */
-	/*  workbench/chest/furnace GUIs have none). */
+	/*  workbench/chest/furnace GUIs have none). Genuine draws it in the */
+	/*  background layer; ours last for viewport reasons (accepted). */
 	if (SurvivalTest_CraftDim() != 3 &&
 		IndevTest_OpenKind() == INDEV_CONTAINER_NONE) SurvivalInv_RenderDoll(s);
 }

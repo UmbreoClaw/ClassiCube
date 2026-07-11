@@ -73,10 +73,12 @@ stack).
    c0.30 on engine behaviour (conservative).
 5. [P] Hearts/bubbles row 1 GUI px too high: our gap 2*scale above hotbar,
    genuine y = height-32 = gap 1 (HUDScreen.java:69; Screens.c:548).
-6. [P] Hotbar slot pop animation: genuine c0.30 X=sin(t^2*pi)+1 but
-   Y=sin(t*pi)+1 (HUDScreen.java:119-124); genuine Indev is a squash
-   glScalef(1/(1+t), (2+t)/2, 1) around (x+8, y+12) (GuiIngame.java:137-143).
-   Ours: uniform sin(t^2*pi)+1 both axes, both modes (Widgets.c:457-467).
+6. [V] Hotbar slot pop animation: FIXED in round 3 (GUI batch) - new
+   IsometricDrawer_AddBatchScaled (asymmetric X/Y about the centre; plain
+   AddBatch resets the scale). c0.30: X=sin(t^2*pi)+1, Y=sin(t*pi)+1 +
+   the sin(t^2*pi)*8px rise; Indev: squash 1/k x (k+1)/2 (k=1+t/5) with
+   the low (y+12) pivot reproduced by shifting the centre. Rig-verified
+   (squashed tall-narrow icon caught mid-anim, count unscaled).
 7. [P] HUD hotbar item sprites: genuine 16x16 GUI px at (cell+3, height-19)
    (GuiIngame.java:133-134); ours 0.72*slotW centred (Screens.c:862-875).
 8. [P] Container label/count text rasterised at fixed pt (14/16pt), doesn't
@@ -91,12 +93,18 @@ stack).
 12. [P] Furnace flame stub: genuine draws flame while isBurning() even at
     h==0 (2px stub); ours gates h > 0 (Screens.c:3064). Needs an is-burning
     accessor.
-13. [P] Paperdoll anchors: genuine panel (51,75) feet anchor, fixed scale 30,
-    mouse anchor (x+51, y+25) (GuiInventory.java:100-118); ours box-derived
-    (~1-3 units off, scale 29.1). Convert to panel-relative constants.
-14. [P] Minor: (a) heart shake gated health>0, genuine shakes at <=4 incl 0;
-    (b) held-stack count anchor +8*texF vs genuine +9; (c) foreground labels
-    drawn before items, genuine draws them last (over held stack).
+13. [V] Paperdoll anchors: FIXED in round 3 (GUI batch) - Indev path uses
+    panel-relative (51,75) feet anchor at scale 30*texF, mouse deltas from
+    (panel+51, panel+25) in genuine GUI px. ALSO fixed a pre-existing
+    180-degree facing bug (the ortho rewrite's x+y mirror is a Z-spin,
+    which never turns the face; base yaw is now 180). Cursor tracking
+    rig-verified both directions. Classic doll box untouched.
+14. [P->partial] Minor: (a) heart shake gated health>0, genuine shakes at
+    <=4 incl 0 - OPEN; (b) held-stack count anchor +8*texF vs genuine +9 -
+    OPEN; (c) [V] FIXED in round 3 (GUI batch): labels now draw LAST
+    (genuine drawGuiContainerForegroundLayer order), hover highlight after
+    the slot item+count, and the cursor-held block/count draw as the iso/
+    count batch tails above the highlight (genuine z+32 held stack).
 
 ## Domain 2: Mob mechanics (audit complete)
 

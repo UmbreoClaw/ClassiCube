@@ -440,7 +440,7 @@ static void HotbarWidget_BuildOutlineMesh(struct HotbarWidget* w, struct VertexT
 
 static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexTextured** vertices) {
 	int i, x, y;
-	float scale, slotScale, yOff, t, sinT2;
+	float scale, yOff, t, sinT2;
 
 	IsometricDrawer_BeginBatch(*vertices, w->state);
 	scale = w->elemSize / 2.0f;
@@ -451,19 +451,34 @@ static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexT
 
 		if (i == HOTBAR_MAX_INDEX && Gui_TouchUI) continue;
 
-		slotScale = scale;
-		yOff      = 0.0f;
-
-		/* HUDScreen.java pop animation: popTime counts 5→0, t=popTime/5 ∈ [0,1].
-		   sinT2 = sin(t²π) peaks ~0.707; shifts the slot up and briefly enlarges it. */
-		if (w->slotPopTime[i] > 0.0f) {
-			t      = w->slotPopTime[i] / 5.0f;
-			sinT2  = Math_SinF(t * t * MATH_PI);
-			yOff      = -sinT2 * 8.0f * (w->height / 22.0f);
-			slotScale = scale * (sinT2 + 1.0f);
+		if (w->slotPopTime[i] > 0.0f && w->popSquash) {
+			/* Indev GuiIngame: k = 1 + t/5 over the 5-tick pop -
+			   scaleX = 1/k (0.5..1), scaleY = (k+1)/2 (1..1.5) - a tall
+			   squash, no bounce, pivoted 4 GUI px BELOW the icon centre
+			   (x+8, y+12), reproduced by shifting the centre up as it
+			   stretches. Count text stays outside the transform. */
+			float k  = 1.0f + w->slotPopTime[i] / 5.0f;
+			float sX = 1.0f / k;
+			float sY = (k + 1.0f) / 2.0f;
+			float f  = w->height / 22.0f; /* GUI px factor */
+			IsometricDrawer_AddBatchScaled(Inventory_Get(i), scale, sX, sY,
+				(float)x, (float)y + 4.0f * f * (1.0f - sY));
+		} else if (w->slotPopTime[i] > 0.0f) {
+			/* c0.30 HUDScreen: t = popTime/5; the cell scales about its
+			   centre with DIFFERENT curves per axis - X by sin(t*t*pi)+1,
+			   Y by sin(t*pi)+1 - while the centre rides up sin(t*t*pi)*8
+			   GUI px. Count text stays outside the transform. */
+			float sX, sY;
+			t     = w->slotPopTime[i] / 5.0f;
+			sinT2 = Math_SinF(t * t * MATH_PI);
+			sX    = sinT2 + 1.0f;
+			sY    = Math_SinF(t * MATH_PI) + 1.0f;
+			yOff  = -sinT2 * 8.0f * (w->height / 22.0f);
+			IsometricDrawer_AddBatchScaled(Inventory_Get(i), scale, sX, sY,
+				(float)x, (float)y + yOff);
+		} else {
+			IsometricDrawer_AddBatch(Inventory_Get(i), scale, (float)x, (float)y);
 		}
-
-		IsometricDrawer_AddBatch(Inventory_Get(i), slotScale, (float)x, (float)y + yOff);
 	}
 	w->verticesCount = IsometricDrawer_EndBatch();
 }
