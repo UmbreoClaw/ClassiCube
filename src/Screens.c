@@ -3697,13 +3697,26 @@ static struct GameOverScreen {
 	struct TextWidget title, message;
 	struct ButtonWidget gen, load;
 	struct Widget* __widgets[4];
+	int guiScale; /* survival GUI scale the fonts/buttons were built at */
 } GameOverScreen CC_BIG_VAR;
+
+static int GameOverScreen_Scale(void) {
+	int scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	return scale < 1 ? 1 : scale;
+}
+
+static void GameOverScreen_ContextRecreated(void* screen);
 
 static void GameOverScreen_Layout(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
 	/* genuine coordinates are in ScaledResolution units - top-anchored. */
 	/*  (hotbar scale = raw scale x window scale, the survival HUD's GUI px) */
-	int scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	int scale = GameOverScreen_Scale();
+	/* fonts + button sizes are baked at a specific scale - rebuild them
+	    when the window scale changes (e.g. resize with Indev GUI scale on),
+	    or the offsets scale while the widgets stay small (user report) */
+	if (scale != s->guiScale && s->titleFont.handle) GameOverScreen_ContextRecreated(s);
+
 	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_MIN, 0,  60 * scale);
 	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_MIN, 0, 100 * scale);
 	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_MIN, 0, Game.Height / 4 + 72 * scale);
@@ -3722,20 +3735,29 @@ static void GameOverScreen_ContextRecreated(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
 	cc_string msg; char msgBuffer[STRING_SIZE];
 	int score = SurvivalTest_Score();
+	int scale = GameOverScreen_Scale();
 	Screen_UpdateVb(screen);
+	s->guiScale = scale;
 
-	/* GameOverScreen.render(): "Game over!" is drawn at 2x scale (glScalef(2,2,2)) */
-	/*  - titleFont's usual 16 doubled to 32, instead of the bold-but-normal-size */
-	/*  font every other screen's title uses. */
-	Font_Make(&s->titleFont, 32, FONT_FLAGS_BOLD);
-	Gui_MakeBodyFont(&s->messageFont);
-	Gui_MakeTitleFont(&s->btnFont);
+	/* Everything in genuine GUI px x the survival GUI scale, like the HUD:
+	    the 8px GUI font (our 8pt) at 2x for the title (GameOverScreen.render's
+	    glScalef(2,2,2)), 1x for the score and buttons; buttons are the
+	    genuine 200x20 GUI px. Fixed sizes here previously left the widgets
+	    tiny while the offsets scaled (user report + reference screenshot). */
+	Font_Free(&s->titleFont);
+	Font_Free(&s->messageFont);
+	Font_Free(&s->btnFont);
+	Font_Make(&s->titleFont,  16 * scale, FONT_FLAGS_BOLD);
+	Font_Make(&s->messageFont, 8 * scale, FONT_FLAGS_NONE);
+	Font_Make(&s->btnFont,     8 * scale, FONT_FLAGS_BOLD);
 	TextWidget_SetConst(&s->title, "Game over!", &s->titleFont);
 
 	String_InitArray(msg, msgBuffer);
 	String_Format1(&msg, "Score: &e%i", &score);
 	TextWidget_Set(&s->message, &msg, &s->messageFont);
 
+	s->gen.minWidth   = 200 * scale; s->gen.minHeight  = 20 * scale;
+	s->load.minWidth  = 200 * scale; s->load.minHeight = 20 * scale;
 	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
 	ButtonWidget_SetConst(&s->load, "Load level..",          &s->btnFont);
 }

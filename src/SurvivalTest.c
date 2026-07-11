@@ -7329,6 +7329,9 @@ static void SurvivalTest_ResetState(void) {
 	st_falling      = false;
 	st_isDead       = false;
 	st_deathTicks   = 0;
+	/* the projection was last rebuilt mid-death-zoom (DeathFovZoom); undo it
+	    or a world loaded from the Game Over screen keeps the low FOV */
+	Camera_UpdateProjection();
 	st_score        = 0;
 	st_invincTimer  = 0.0f;
 	st_lastHealth   = SURVIVAL_MAX_HEALTH;
