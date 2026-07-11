@@ -881,8 +881,10 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (IndevTest_Enabled && IndevTest_ItemsTex()) {
 			struct Texture itex;
 			float slotW = s->hotbar.width / (float)INVENTORY_BLOCKS_PER_HOTBAR;
-			/* GuiIngame: 16x16 GUI-px icons at (cell + 3, height - 19) - a
-			    16/20 cell fraction, one px right of centred */
+			/* GuiIngame: 16x16 GUI-px icons at (cell + 2, height - 19) -
+			    dead centre of the 20px cell (the old +3 shifted every
+			    sprite one GUI px right - most visible on compact sprites
+			    like coal/diamond, user report) */
 			int size = (int)(slotW * (16.0f / 20.0f)), k;
 
 			for (k = 0; k < SURVIVAL_HOTBAR_SLOTS; k++) {
@@ -892,7 +894,7 @@ static void HUDScreen_Render(void* screen, float delta) {
 
 				int maxDmg, dmg;
 				itex.ID     = IndevTest_ItemsTex();
-				itex.x      = (short)(s->hotbar.x + k * slotW + slotW * (3.0f / 20.0f));
+				itex.x      = (short)(s->hotbar.x + k * slotW + slotW * (2.0f / 20.0f));
 				itex.y      = (short)(s->hotbar.y + s->hotbar.height * (3.0f / 22.0f));
 				itex.width  = (cc_uint16)size;
 				itex.height = (cc_uint16)size;
@@ -1468,6 +1470,13 @@ static void ChatScreen_UpdateChatYOffsets(struct ChatScreen* s) {
 	HUDScreen_LayoutHotbar();
 		
 	y = min(s->input.base.y, Gui_HUD->hotbar.y);
+	/* Survival: the hearts (+ armor) row sits 10 GUI px above the hotbar
+	    (9px icons + 1px gap) - lift the chat stack above it so chat
+	    history doesn't cover the hearts while chatting */
+	if (SurvivalTest_Enabled) {
+		int rowH = (int)(10.0f * Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+		y = min(y, Gui_HUD->hotbar.y - rowH);
+	}
 	y -= s->input.base.yOffset; /* add some padding */
 	s->altText.yOffset = Window_UI.Height - y;
 	Widget_Layout(&s->altText);
