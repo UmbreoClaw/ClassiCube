@@ -2935,7 +2935,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		    reversed test select exactly the fragments GL's test selects,
 		    with x/y untouched - pixel-identical output on every backend
 		    (winding inverts, but the doll pass has culling off). */
-#if defined CC_BUILD_D3D9 || defined CC_BUILD_D3D11
+#if CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9 || CC_GFX_BACKEND == CC_GFX_BACKEND_D3D11
 		#define DOLL_Z -1.0f
 #else
 		#define DOLL_Z  1.0f
