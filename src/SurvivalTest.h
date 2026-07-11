@@ -152,6 +152,9 @@ void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count);
 void SurvivalTest_IgniteTnt(IVec3 coords);
 /* Whether the local player is alight (first-person flame overlay). */
 cc_bool SurvivalTest_PlayerBurning(void);
+/* InventoryPlayer.getPlayerArmorValue: worn protection weighted by the
+    pieces' remaining durability - drives absorption AND the HUD icons. */
+int SurvivalTest_PlayerArmorValue(void);
 /* .mclevel entity save/load: live mob + item drop iteration and respawn. */
 int  SurvivalTest_MobNext(int prev, int* type, Vec3* pos, float* yaw, int* health);
 int  SurvivalTest_DropNext(int prev, Vec3* pos, int* id, int* count);

@@ -1101,6 +1101,13 @@ static int SurvivalTest_ArmorValue(void) {
 	return max == 0 ? 0 : (reduce - 1) * remain / max + 1;
 }
 
+/* Exposed for the HUD's armor icon row (GuiIngame draws it from the same
+    wear-weighted value the damage absorption uses). */
+int SurvivalTest_PlayerArmorValue(void) {
+	if (!SurvivalTest_Enabled) return 0;
+	return SurvivalTest_ArmorValue();
+}
+
 static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	if (!SurvivalTest_Enabled || !p) return;

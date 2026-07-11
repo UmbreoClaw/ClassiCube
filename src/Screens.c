@@ -103,8 +103,10 @@ static struct HUDScreen {
 #define POSITION_VAL_CHARS 11
 /* [PREFIX] [(] [X] [,] [Y] [,] [Z] [)] */
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
-/* 10 heart backgrounds + up to 10 filled hearts = 20 quads = 80 vertices */
-#define SURVIVAL_HEARTS_MAX_VERTICES 80
+/* 10 heart backgrounds + up to 10 ghost hearts (invuln glow) + up to 10 */
+/*  filled hearts + up to 10 armor icons = 40 quads = 160 vertices. (The */
+/*  old budget of 80 could overflow into the counts region while glowing.) */
+#define SURVIVAL_HEARTS_MAX_VERTICES 160
 /* Up to 2 digits per hotbar slot for stack counts (4 vertices per digit) */
 #define SURVIVAL_COUNTS_MAX_VERTICES (SURVIVAL_HOTBAR_SLOTS * 2 * 4)
 /* Air bubble row when the head is underwater: up to 10 bubbles (4 verts each) */
@@ -499,6 +501,15 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 /* White-flash heart background: 9x9 at pixel (25,0) */
 #define HEART_FLASH_BG_U1 (25/256.0f)
 #define HEART_FLASH_BG_U2 (34/256.0f)
+/* Armor icons (GuiIngame): empty outline (16,9), half (25,9), full (34,9) */
+#define ARMOR_EMPTY_U1 (16/256.0f)
+#define ARMOR_EMPTY_U2 (25/256.0f)
+#define ARMOR_HALF_U1  (25/256.0f)
+#define ARMOR_HALF_U2  (34/256.0f)
+#define ARMOR_FULL_U1  (34/256.0f)
+#define ARMOR_FULL_U2  (43/256.0f)
+#define ARMOR_V1 ( 9/64.0f)
+#define ARMOR_V2 (18/64.0f)
 /* Ghost (lastHealth) hearts drawn while the invuln window flashes: (70,0)/(79,0) */
 #define HEART_GHOST_FULL_U1 (70/256.0f)
 #define HEART_GHOST_FULL_U2 (79/256.0f)
@@ -583,6 +594,30 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 		Tex_SetUV(tex, HEART_HALF_U1, HEART_V1, HEART_HALF_U2, HEART_V2);
 		Tex_SetRect(tex, x + fullHearts * step, y + jitter[fullHearts], heartSize, heartSize);
 		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	/* GuiIngame's armor bar (Indev): 10 icons on the hearts row, flush with
+	    the hotbar's RIGHT edge and filling right-to-left - icon i covers
+	    protection points 2i+1/2i+2, full below the wear-weighted
+	    getPlayerArmorValue, half at it, empty outline above it. The whole
+	    row only appears while some armor is worn (value > 0), and never
+	    shakes with the low-health hearts (genuine adds the jitter after
+	    the armor draw). */
+	if (IndevTest_Enabled) {
+		int armor = SurvivalTest_PlayerArmorValue();
+		int ax    = s->hotbar.x + s->hotbar.width - heartSize;
+		for (i = 0; i < 10 && armor > 0; i++) {
+			int threshold = (i << 1) + 1;
+			if (threshold < armor) {
+				Tex_SetUV(tex, ARMOR_FULL_U1,  ARMOR_V1, ARMOR_FULL_U2,  ARMOR_V2);
+			} else if (threshold == armor) {
+				Tex_SetUV(tex, ARMOR_HALF_U1,  ARMOR_V1, ARMOR_HALF_U2,  ARMOR_V2);
+			} else {
+				Tex_SetUV(tex, ARMOR_EMPTY_U1, ARMOR_V1, ARMOR_EMPTY_U2, ARMOR_V2);
+			}
+			Tex_SetRect(tex, ax - i * step, y, heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
 	}
 
 	return (int)(cur - dst);

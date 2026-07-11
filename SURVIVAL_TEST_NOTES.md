@@ -4517,6 +4517,37 @@ Also fixed the moon quad UVs: genuine mirrors U ONLY (u=1 at -x, v=0 at
 - random.splash / fire sounds inaudible on the headless rig - user to
   verify by ear (sounds zip auto-refetches, ~46 KB total).
 
+### HUD armor bar (user request, same polish phase)
+GuiIngame's armor row: 10 icons on the hearts row, flush with the
+hotbar's RIGHT edge, filling right-to-left - icon i covers protection
+points 2i+1/2i+2 (full below the armor value, half at it, empty above),
+visible only while armor is worn, and never shaking with the low-health
+hearts (genuine adds the heart jitter after the armor draw). The value
+is the wear-weighted InventoryPlayer.getPlayerArmorValue - the exact
+function absorption already used (now exported as
+SurvivalTest_PlayerArmorValue), so icons drain as pieces wear down.
+
+Two extra finds while implementing:
+- **The classic jar's icons.png has the armor sprites MIRRORED** vs the
+  Indev/beta sheet: classic row 9 is (16,9) full .. (34,9) empty, while
+  Indev/b1.7.3 (which the genuine HUD coordinates expect) is (16,9)
+  empty .. (34,9) full. The resource fetcher now PNG-decodes icons.png
+  and the beta patcher overwrites the 27x9 armor strip from the beta
+  jar's icons.png, so the stock default.zip renders genuinely. (Match
+  by FILENAME, not path - the jar stores it at gui/icons.png.)
+  Existing default.zip installs keep the mirrored sprites until
+  re-fetched (no new entry names = no auto-refetch); Indev-style custom
+  packs are already correct.
+- **Latent hearts-mesh overflow fixed**: SURVIVAL_HEARTS_MAX_VERTICES
+  was 80 (20 quads), but the invuln glow can draw 10 backgrounds + 10
+  ghosts + 10 filled = 30 quads, silently overrunning into the counts
+  region. Now 160 (40 quads, armor row included).
+
+Rig-verified: fresh diamond set = 10 full icons; set worn to ~47%
+durability (armorValue 11 via gdb) = 5 full from the right + 1 half +
+4 empty, matching the genuine right-to-left fill. Refetched default.zip
+confirmed to carry the beta armor strip.
+
 ---
 
 ## ENGINE NOTES (useful pointers)

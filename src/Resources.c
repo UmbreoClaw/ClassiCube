@@ -828,7 +828,11 @@ static struct ResourceZipEntry defaultZipEntries[] = {
 	{ "terrain.png",  RESOURCE_TYPE_PNG  }, { "particles.png",   RESOURCE_TYPE_DATA },
 	{ "clouds.png",   RESOURCE_TYPE_DATA }, { "rain.png",        RESOURCE_TYPE_DATA },
 	{ "char.png",     RESOURCE_TYPE_DATA }, { "default.png",     RESOURCE_TYPE_DATA }, 
-	{ "icons.png",    RESOURCE_TYPE_DATA }, { "gui_classic.png", RESOURCE_TYPE_DATA },
+	/* icons.png is PNG-decoded so the armor icons can be patched from the
+	    beta jar: the classic jar's row-9 armor sprites are MIRRORED
+	    ((16,9) full .. (34,9) empty) vs the Indev/beta sheet the genuine
+	    armor HUD coordinates expect ((16,9) empty .. (34,9) full). */
+	{ "icons.png",    RESOURCE_TYPE_PNG  }, { "gui_classic.png", RESOURCE_TYPE_DATA },
 	{ "creeper.png",  RESOURCE_TYPE_DATA }, { "pig.png",         RESOURCE_TYPE_DATA }, 
 	{ "sheep.png",    RESOURCE_TYPE_DATA }, { "sheep_fur.png",   RESOURCE_TYPE_DATA },
 	{ "skeleton.png", RESOURCE_TYPE_DATA }, { "spider.png",      RESOURCE_TYPE_DATA },
@@ -952,6 +956,11 @@ static cc_result ClassicPatcher_ProcessEntry(const cc_string* path, struct Strea
 	if (String_CaselessEqualsConst(path, "terrain.png")) {
 		return Png_Decode(&e->value.bmp, data);
 	}
+	/* icons.png too - the beta patcher swaps its armor sprites in place */
+	/*  (matched by FILENAME: the classic jar stores it at gui/icons.png) */
+	if (String_CaselessEqualsConst(&name, "icons.png")) {
+		return Png_Decode(&e->value.bmp, data);
+	}
 	return ZipEntry_ExtractData(e, data, source);
 }
 
@@ -978,6 +987,7 @@ static cc_bool BetaPatcher_SelectEntry(const cc_string* path) {
 		|| String_CaselessEqualsConst(path, "gui/crafting.png")
 		|| String_CaselessEqualsConst(path, "gui/furnace.png")
 		|| String_CaselessEqualsConst(path, "gui/container.png")
+		|| String_CaselessEqualsConst(path, "gui/icons.png")
 		|| String_CaselessEqualsConst(path, "terrain/sun.png")
 		|| String_CaselessEqualsConst(path, "terrain/moon.png")
 		|| String_CaselessEqualsConst(path, "art/kz.png")
@@ -1336,6 +1346,32 @@ static cc_result BetaPatcher_ProcessEntry(const cc_string* path, struct Stream* 
 		e = ZipEntries_Find(&kzPng);
 		if ((res = Png_Decode(&e->value.bmp, data))) return res;
 		return BetaPatcher_PatchKz(&e->value.bmp);
+	}
+	if (String_CaselessEqualsConst(path, "gui/icons.png")) {
+		/* The classic jar's icons.png (already decoded into the entry by the
+		    classic patcher) carries the armor sprites MIRRORED relative to
+		    the Indev/beta sheet: (16,9) full .. (34,9) empty instead of
+		    (16,9) empty .. (34,9) full. The armor HUD uses the genuine
+		    coordinates, so overwrite the 27x9 strip with the beta jar's. */
+		static const cc_string iconsPng = String_FromConst("icons.png");
+		struct Bitmap* dst;
+		int x, y;
+		e = ZipEntries_Find(&iconsPng);
+		dst = &e->value.bmp;
+		if (!dst->scan0) return 0; /* classic icons.png failed to decode */
+
+		res = Png_Decode(&bmp, data);
+		if (res) return res;
+		if (bmp.width >= 43 && bmp.height >= 18 &&
+			dst->width >= 43 && dst->height >= 18) {
+			for (y = 9; y < 18; y++) {
+				BitmapCol* srcRow = Bitmap_GetRow(&bmp, y);
+				BitmapCol* dstRow = Bitmap_GetRow(dst, y);
+				for (x = 16; x < 43; x++) dstRow[x] = srcRow[x];
+			}
+		}
+		Mem_Free(bmp.scan0);
+		return 0;
 	}
 	/* armor/cloth_1.png etc -> armor_cloth_1.png (flat names in the pack) */
 	if (String_CaselessStarts(path, &armorPrefix)) {
