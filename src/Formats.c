@@ -1440,9 +1440,10 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 	} else if (IsTag(tag, "SurroundingWaterType")) {
 		Env.EdgeBlock   = NbtTag_U8(tag);
 	} else if (IsTag(tag, "SurroundingGroundHeight")) {
-		mcl_sidesHeight = NbtTag_U16(tag);
+		/* SIGNED short: genuine Floating maps store groundLevel -128 */
+		mcl_sidesHeight = (cc_int16)NbtTag_U16(tag);
 	} else if (IsTag(tag, "SurroundingWaterHeight")) {
-		mcl_edgeHeight  = NbtTag_U16(tag);
+		mcl_edgeHeight  = (cc_int16)NbtTag_U16(tag);
 	} else if (IsTag(tag, "TimeOfDay")) {
 		IndevTest_SetWorldTime(NbtTag_I16(tag));
 	} else if (IsTag(tag, "SkyBrightness")) {
@@ -1831,11 +1832,13 @@ cc_result MCLevel_Save(struct Stream* stream) {
 		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(IndevTest_BaseFogCol()));
 		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", (cc_uint8)IndevTest_SkyBrightness());
 		cur = Nbt_WriteUInt16(cur, "CloudHeight", (cc_uint16)Env.CloudsHeight);
-		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(Env.EdgeHeight + Env.SidesOffset));
-		cur = Nbt_WriteUInt16(cur, "SurroundingWaterHeight",  (cc_uint16)Env.EdgeHeight);
-		cur = Nbt_WriteUInt8 (cur, "SurroundingGroundType", 2 /* grass */);
+		/* the pinned World.groundLevel/waterLevel/defaultFluid - the live
+		    env planes are the remapped OOB-horizon form, not the raw levels */
+		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(cc_int16)IndevTest_SurroundGroundLevel());
+		cur = Nbt_WriteUInt16(cur, "SurroundingWaterHeight",  (cc_uint16)(cc_int16)IndevTest_SurroundWaterLevel());
+		cur = Nbt_WriteUInt8 (cur, "SurroundingGroundType", 2 /* grass - genuine writes grass always */);
 		cur = Nbt_WriteUInt8 (cur, "SurroundingWaterType",
-				IndevTest_BlockToIndev((BlockRaw)Env.EdgeBlock));
+				IndevTest_BlockToIndev((BlockRaw)IndevTest_SurroundFluid()));
 		cur = Nbt_WriteUInt16(cur, "TimeOfDay", (cc_uint16)IndevTest_WorldTime());
 	} *cur++ = NBT_END;
 

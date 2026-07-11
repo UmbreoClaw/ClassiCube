@@ -2870,13 +2870,23 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 
 		/* The view's x+y mirror below is a 180-degree spin about the Z
 		    axis - which does NOT turn the model's face toward the camera
-		    (facing is a Z direction, unchanged by a Z spin), so the
-		    face-the-camera base yaw is 180 here. The x-mirror component
-		    also flips screen-left/right, which the genuine dx sign then
-		    cancels out - verified by cursor tracking on the rig. */
-		s->doll.RotY  = 180.0f + t * 20.0f;   /* body: light HORIZONTAL track */
-		s->doll.Yaw   = 180.0f + t * 40.0f;   /* head: double strength */
-		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
+		    (facing is a Z direction, unchanged by a Z spin) - so a base
+		    yaw decides which side shows. WHICH side wins the depth test
+		    differs per backend: D3D9/D3D11 run a reversed depth buffer
+		    (ZFUNC GREATEREQUAL) while GL is LEQUAL, and both ortho
+		    matrices share the same z row - so the doll's visible side
+		    flips between them (user-reported on D3D9 after a GL-side
+		    fix). Base yaw is picked per backend; cursor tracking was
+		    verified correct on both (screen x/y are identical across
+		    backends - only occlusion order differs). */
+#if defined CC_BUILD_D3D9 || defined CC_BUILD_D3D11
+		#define DOLL_BASE_YAW 0.0f
+#else
+		#define DOLL_BASE_YAW 180.0f
+#endif
+		s->doll.RotY  = DOLL_BASE_YAW + t * 20.0f; /* body: light HORIZONTAL track */
+		s->doll.Yaw   = DOLL_BASE_YAW + t * 40.0f; /* head: double strength */
+		s->doll.Pitch = -lean * 20.0f;             /* head pitch (vertical) */
 		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
 		s->doll.RotZ  = 0.0f;
 		s->dollCamPitch = -lean * 20.0f;      /* the vertical tilt is a CAMERA

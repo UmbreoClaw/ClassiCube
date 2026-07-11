@@ -2171,6 +2171,62 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 	}
 }
 
+/* World.groundLevel / waterLevel / defaultFluid - what genuine calls "the
+    surroundings". Stored by the generator and the .mclevel loader, applied
+    to the engine env planes on map load, written back on save. */
+static int indev_surGround, indev_surWater, indev_surFluid;
+static cc_bool indev_surKnown;
+
+void IndevTest_SetSurroundings(int groundLevel, int waterLevel, int fluid) {
+	indev_surGround = groundLevel;
+	indev_surWater  = waterLevel;
+	indev_surFluid  = fluid;
+	indev_surKnown  = true;
+}
+int IndevTest_SurroundGroundLevel(void) { return indev_surKnown ? indev_surGround : Env_SidesHeight; }
+int IndevTest_SurroundWaterLevel(void)  { return indev_surKnown ? indev_surWater  : Env.EdgeHeight; }
+int IndevTest_SurroundFluid(void)       { return indev_surKnown ? indev_surFluid  : Env.EdgeBlock; }
+
+/* RenderGlobal.oobGroundRenderer/oobWaterRenderer: genuine Indev draws NO
+    border WALLS, but DOES draw infinite horizon planes outside the map -
+    the ground plane at groundLevel (grass.png when the world is dry land
+    with water as its fluid, dirt.png otherwise) and the default fluid
+    plane at waterLevel. Mapped onto the engine's edge/sides machinery:
+    - dry worlds (ground > water, e.g. Flat/Inland): edge plane = grass at
+      groundLevel, no side walls (the fluid plane sits below the ground
+      plane and is invisible from outside)
+    - water worlds (Island): edge plane = the fluid at waterLevel, sides =
+      dirt up to groundLevel (the submerged OOB ground plane - the engine
+      wall skirt approximates it and is hidden underwater)
+    - Floating (groundLevel -128): void all around */
+static void Indev_ApplySurroundings(int groundLevel, int waterLevel, int fluid) {
+	cc_bool waterFluid = fluid == BLOCK_WATER || fluid == BLOCK_STILL_WATER;
+
+	if (groundLevel < 0) {
+		Env_SetEdgeBlock(BLOCK_AIR);
+		Env_SetSidesBlock(BLOCK_AIR);
+		return;
+	}
+	if (groundLevel > waterLevel) {
+		Env_SetEdgeBlock(waterFluid ? BLOCK_GRASS : BLOCK_DIRT);
+		Env_SetEdgeHeight(groundLevel);
+		Env_SetSidesBlock(BLOCK_AIR);
+	} else {
+		Env_SetEdgeBlock(waterFluid ? BLOCK_STILL_WATER : BLOCK_STILL_LAVA);
+		Env_SetEdgeHeight(waterLevel);
+		Env_SetSidesBlock(BLOCK_DIRT);
+		Env_SetSidesOffset(groundLevel - waterLevel);
+	}
+}
+
+/* Applies the stored surroundings to the env planes. Called on Indev map
+    load, and directly by the generator so non-Indev-mode generations get
+    the same genuine horizon (the map-load hook is Indev-gated). */
+void IndevTest_ApplySurroundings(void) {
+	if (!indev_surKnown) return;
+	Indev_ApplySurroundings(indev_surGround, indev_surWater, indev_surFluid);
+}
+
 /* Map loading runs Game_Reset, which wipes ALL custom block definitions - */
 /*  the Indev block ids survive in the map data but rendered as undefined */
 /*  (the reported "green blocks"). Re-define them once the map is in. Also */
@@ -2183,13 +2239,17 @@ static void OnNewMapLoaded(void) {
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
 
-	/* Genuine Indev draws NO engine border walls or horizon plane - the
-	    visible rim is the map's real border blocks (bedrock shell + grass/
-	    dirt cap from World.generate), void beyond. Applies to LOADED
-	    .mclevel maps too, which otherwise keep the engine's bedrock-wall
-	    defaults (freshly generated maps get this from IndevGen as well). */
-	Env_SetSidesBlock(BLOCK_AIR);
-	Env_SetEdgeBlock(BLOCK_AIR);
+	/* Genuine surroundings: no border walls, but the OOB ground/fluid
+	    horizon planes (see Indev_ApplySurroundings). When the generator
+	    didn't record levels, pin them from what the map loader left in the
+	    engine env (mclevel: SidesHeight = SurroundingGroundHeight,
+	    EdgeHeight = SurroundingWaterHeight, EdgeBlock = water type) BEFORE
+	    applying - the apply mutates those env fields, and the .mclevel
+	    saver reads the pinned values back. */
+	if (!indev_surKnown) {
+		IndevTest_SetSurroundings(Env_SidesHeight, Env.EdgeHeight, Env.EdgeBlock);
+	}
+	IndevTest_ApplySurroundings();
 
 	indev_baseSky      = Env.SkyCol;
 	indev_baseFog      = Env.FogCol;
@@ -2353,6 +2413,7 @@ static void OnNewMap(void) {
 	int i;
 	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
 	indev_openTE = -1;
+	indev_surKnown = false; /* each map records its own surroundings */
 	IndevFire_Reset();
 }
 

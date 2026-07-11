@@ -1420,15 +1420,18 @@ cc_bool IndevGen_ApplyPostLoad(struct LocationUpdate* update) {
 	Env_SetCloudsHeight(indevgen_cloudHeight);
 	Env_SetEdgeHeight(indevgen_waterLevel);
 	Env_SetSidesOffset(indevgen_groundLevel - indevgen_waterLevel);
-	/* Genuine Indev draws NO engine border walls or horizon plane - the
-	    visible rim IS the real border blocks World.generate writes (bedrock
-	    shell up to groundLevel-2, a grass/dirt cap at groundLevel-1, fluid
-	    to waterLevel), with the void beyond and below the map. Air walls
-	    also stop the engine from culling the boundary faces, so the
-	    grass-capped rim actually renders. (The old bedrock sides painted
-	    the whole border as a bedrock wall - user report.) */
-	Env_SetEdgeBlock(BLOCK_AIR);
-	Env_SetSidesBlock(BLOCK_AIR);
+	/* Genuine Indev draws no border WALLS (the rim is the map's real border
+	    blocks), but it DOES draw the OOB ground/fluid horizon planes -
+	    RenderGlobal.oobGroundRenderer/oobWaterRenderer - which is why a
+	    Flat/Inland world is ringed by an infinite grass plane at ground
+	    level (and an Island by ocean). The setter records World.groundLevel/
+	    waterLevel/defaultFluid; the IndevTest map-load hook maps them onto
+	    the engine's edge/sides planes. (An earlier fix set both to AIR -
+	    that killed the horizon entirely, so the sun was visible under the
+	    world near dawn/dusk - user report.) */
+	IndevTest_SetSurroundings(indevgen_groundLevel, indevgen_waterLevel,
+		indevgen_theme == 1 ? BLOCK_LAVA : BLOCK_WATER);
+	IndevTest_ApplySurroundings();
 
 	/* spawn inside the house, facing the genuine rotSpawn = 180.
 	    Genuine preparePlayerToSpawn puts the bounding box CENTRE at ySpawn,

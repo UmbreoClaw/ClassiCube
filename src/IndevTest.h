@@ -190,6 +190,15 @@ void IndevTest_RandomDisplayTicks(void);
 /* Block.canPlaceBlockAt for the Indev additions (currently the chest's
     no-triples rule) - true if placing block b at pos is legal. */
 cc_bool IndevTest_CanPlaceBlockAt(BlockID b, IVec3 pos);
+/* World.groundLevel/waterLevel/defaultFluid ("the surroundings") - genuine
+    draws no border walls but DOES draw OOB ground/fluid horizon planes
+    (RenderGlobal.oobGround/WaterRenderer). Set by the generator/.mclevel
+    loader, applied to the engine's edge/sides planes, written back on save. */
+void IndevTest_SetSurroundings(int groundLevel, int waterLevel, int fluid);
+void IndevTest_ApplySurroundings(void);
+int  IndevTest_SurroundGroundLevel(void);
+int  IndevTest_SurroundWaterLevel(void);
+int  IndevTest_SurroundFluid(void);
 /* Full-daylight base env colours (the live Env colours are time-scaled). */
 PackedCol IndevTest_BaseSkyCol(void);
 PackedCol IndevTest_BaseFogCol(void);
