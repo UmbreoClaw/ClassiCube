@@ -1274,7 +1274,7 @@ static cc_bool SurvivalTest_ExplosionImmune(BlockID b) {
 /* level.explode(attacker, x, y, z, radius) - destroys a sphere of blocks and */
 /*  damages every entity in range. Defined after Mob_Hurt/st_mobs (it damages */
 /*  mobs as well as the player); forward-declared here since TNT calls it. */
-static void SurvivalTest_Explode(Vec3 center, int radius);
+static void SurvivalTest_Explode(struct Entity* exploder, Vec3 center, float radius);
 
 
 /*########################################################################################################################*
@@ -1766,7 +1766,7 @@ static void SurvivalTest_TickTnt(void) {
 		}
 
 		tnt->active = false;
-		SurvivalTest_Explode(tnt->pos, EXPLOSION_RADIUS);
+		SurvivalTest_Explode(NULL, tnt->pos, (float)EXPLOSION_RADIUS);
 
 		/* PrimedTnt.tick: 100 TNT-textured TerrainParticles burst out at */
 		/*  gaussian offsets after the blast. Approximated with the engine's */
@@ -2636,7 +2636,7 @@ static void Mob_CreeperExplode(struct Mob* m) {
 	Vec3 center = m->Base.Position;
 	IVec3 coords;
 	center.y += mobTypeInfo[m->type].heightOff;
-	SurvivalTest_Explode(center, EXPLOSION_RADIUS);
+	SurvivalTest_Explode(&m->Base, center, (float)EXPLOSION_RADIUS);
 
 	/* CreeperAI.beforeRemove: 500 LEAVES-textured TerrainParticles burst out */
 	/*  at gaussian offsets. Approximated with the engine's block-break burst */
@@ -2683,7 +2683,7 @@ static void Mob_IndevCreeperBlast(struct Mob* m) {
 	Vec3 center = m->Base.Position;
 	IVec3 coords;
 	center.y += mobTypeInfo[m->type].heightOff;
-	SurvivalTest_Explode(center, 3);
+	SurvivalTest_Explode(&m->Base, center, 3.0f);
 
 	IVec3_Floor(&coords, &center);
 	Particles_BreakBlockEffect(coords, BLOCK_LEAVES, BLOCK_AIR);
@@ -2812,6 +2812,294 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	}
 }
 
+/*------------------------------------------------------------------------*/
+/* Indev World.createExplosion (World.java:1102-1233), ported in genuine   */
+/* order: sound, 1352-boundary-ray block collection, entity damage over    */
+/* the INTACT world (density raycast), then descending-order destruction   */
+/* with the Indev drop table at 30% chance and TNT chain arming.           */
+/*------------------------------------------------------------------------*/
+
+/* Block.getExplosionResistance() = resistance/5, from setResistance(x*3) /
+    setHardness(max(cur, h*5)) chains in Block.java's static init. Values
+    below are the effective per-id results (engine ids; classic 1-49 map
+    1:1 onto the genuine ids). */
+static float Indev_ExplosionResistance(BlockID b) {
+	switch (b) {
+	case BLOCK_STONE: case BLOCK_COBBLE: case BLOCK_GOLD: case BLOCK_IRON:
+	case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB: case BLOCK_BRICK:
+	case BLOCK_MOSSY_ROCKS: case BLOCK_OBSIDIAN: /* obsidian is NOT special in Indev */
+		return 6.0f;
+	case BLOCK_WOOD: return 3.0f;
+	case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE:
+	case 56 /* diamond ore */: return 3.0f;
+	case BLOCK_LOG: return 2.0f;
+	case BLOCK_BOOKSHELF: return 1.5f;
+	/* BlockFluid's ctor resistance 6 is raised to 500 by setHardness(100):
+	    water and STILL lava are effectively blast-proof... */
+	case BLOCK_WATER: case BLOCK_STILL_WATER: case BLOCK_STILL_LAVA:
+		return 100.0f;
+	/* ...but flowing lava's setHardness(0) leaves the ctor's 6 -> 1.2 */
+	case BLOCK_LAVA: return 1.2f;
+	case BLOCK_BEDROCK: return 3600000.0f;
+	case BLOCK_RED: case BLOCK_ORANGE: case BLOCK_YELLOW: case BLOCK_LIME:
+	case BLOCK_GREEN: case BLOCK_TEAL: case BLOCK_AQUA: case BLOCK_CYAN:
+	case BLOCK_BLUE: case BLOCK_INDIGO: case BLOCK_VIOLET: case BLOCK_MAGENTA:
+	case BLOCK_PINK: case BLOCK_BLACK: case BLOCK_GRAY: case BLOCK_WHITE:
+		return 0.8f;
+	case BLOCK_GRASS: case BLOCK_GRAVEL: case BLOCK_SPONGE:
+	case 83: case 84 /* farmland */: return 0.6f;
+	case BLOCK_DIRT: case BLOCK_SAND: return 0.5f;
+	case BLOCK_GLASS: return 0.3f;
+	case BLOCK_LEAVES: return 0.2f;
+	case 54: case 71: case 72: case 73: case 74: /* chest + facings */
+	case 58 /* workbench */: return 2.5f;
+	case 61: case 62: case 75: case 76: case 77: case 78:
+	case 79: case 80: case 81: case 82: /* furnaces */ return 3.5f;
+	/* sapling, flowers, mushrooms, TNT, torch 50, fire 51, crops 85-92,
+	    wall torches 94-97, air: resistance 0 */
+	default: return 0.0f;
+	}
+}
+
+/* World.rayTraceBlocks stand-in for the density test: does any collidable
+    block sit between the two points? Fluids, fire and sprite-draw blocks
+    pass through (genuine isCollidable()==false / tiny collision bounds).
+    Sample-marched at quarter-block resolution, capped like the genuine
+    20-cell DDA. */
+static cc_bool Indev_RayBlocked(Vec3 from, Vec3 to) {
+	float dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z;
+	float len = Math_SqrtF(dx * dx + dy * dy + dz * dz);
+	float t, px, py, pz;
+	int i, steps, bx, by, bz;
+	BlockID b;
+
+	if (len < 0.0001f) return false;
+	steps = (int)(len / 0.25f) + 1;
+	if (steps > 80) steps = 80; /* ~20 blocks, the genuine DDA cap */
+
+	for (i = 1; i < steps; i++) {
+		t  = (float)i / (float)steps;
+		px = from.x + dx * t; py = from.y + dy * t; pz = from.z + dz * t;
+		bx = (int)px; by = (int)py; bz = (int)pz;
+		if (!World_Contains(bx, by, bz)) continue;
+
+		b = World_GetBlock(bx, by, bz);
+		if (b == BLOCK_AIR)                      continue;
+		if (Blocks.Draw[b] == DRAW_SPRITE)       continue;
+		if (Blocks.Collide[b] == COLLIDE_LIQUID) continue;
+		if (IndevFire_IsFire(b))                 continue;
+		return true;
+	}
+	return false;
+}
+
+/* World.getBlockDensity: the fraction of grid samples over the entity's
+    AABB with unobstructed line of sight to the blast centre (0 = fully
+    shielded, 1 = fully exposed). Grid step = 1/(size*2+1) per axis. */
+static float Indev_BlockDensity(Vec3 center, struct Entity* e) {
+	struct AABB bb;
+	Vec3 s;
+	float fx, fy, fz, sx, sy, sz;
+	int seen = 0, total = 0;
+
+	Entity_GetBounds(e, &bb);
+	sx = 1.0f / ((bb.Max.x - bb.Min.x) * 2.0f + 1.0f);
+	sy = 1.0f / ((bb.Max.y - bb.Min.y) * 2.0f + 1.0f);
+	sz = 1.0f / ((bb.Max.z - bb.Min.z) * 2.0f + 1.0f);
+
+	for (fx = 0.0f; fx <= 1.0f; fx += sx)
+	for (fy = 0.0f; fy <= 1.0f; fy += sy)
+	for (fz = 0.0f; fz <= 1.0f; fz += sz) {
+		s.x = bb.Min.x + (bb.Max.x - bb.Min.x) * fx;
+		s.y = bb.Min.y + (bb.Max.y - bb.Min.y) * fy;
+		s.z = bb.Min.z + (bb.Max.z - bb.Min.z) * fz;
+		if (!Indev_RayBlocked(s, center)) seen++;
+		total++;
+	}
+	return total ? (float)seen / (float)total : 0.0f;
+}
+
+/* dropBlockAsItemWithChance(..., 0.3F) through the INDEV idDropped table -
+    the 30% gate rolls FIRST, then idDropped's own rolls, like genuine.
+    Crops drop wheat only at full growth and never seeds (the seed rolls
+    live in onBlockDestroyedByPlayer, player mining only). */
+static void Indev_ExplodeDrops(IVec3 coords, BlockID oldBlock) {
+	int dropId = oldBlock;
+	if (Random_Float(&st_dropRng) > 0.3f) return;
+
+	switch (oldBlock) {
+	case BLOCK_GRASS:    dropId = BLOCK_DIRT;   break;
+	case BLOCK_STONE: case BLOCK_OBSIDIAN:
+	                     dropId = BLOCK_COBBLE; break;
+	case BLOCK_COAL_ORE: dropId = 256 + 7;      break;
+	case 56:             dropId = 256 + 8;      break; /* diamond ore */
+	case BLOCK_LEAVES:
+		if (Random_Next(&st_dropRng, 10) != 0) return;
+		dropId = BLOCK_SAPLING; break;
+	case BLOCK_GRAVEL:
+		dropId = Random_Next(&st_dropRng, 10) == 0 ? 256 + 62 : BLOCK_GRAVEL;
+		break;
+	case BLOCK_DOUBLE_SLAB: dropId = BLOCK_SLAB; break;
+	case BLOCK_GLASS: case BLOCK_BOOKSHELF:
+	case BLOCK_WATER: case BLOCK_STILL_WATER:
+	case BLOCK_LAVA:  case BLOCK_STILL_LAVA:
+		return;
+	case 83: case 84:    dropId = BLOCK_DIRT;   break; /* farmland */
+	case 92:             dropId = 256 + 40;     break; /* ripe crops -> wheat */
+	case 85: case 86: case 87: case 88:
+	case 89: case 90: case 91:                  return; /* growing crops */
+	case 94: case 95: case 96: case 97:
+	                     dropId = 50;           break; /* wall torches */
+	case 71: case 72: case 73: case 74:
+	                     dropId = 54;           break; /* chest facings */
+	case 62: case 75: case 76: case 77: case 78:
+	case 79: case 80: case 81: case 82:
+	                     dropId = 61;           break; /* furnaces */
+	default: break;
+	}
+	SurvivalTest_SpawnDrop(coords, (cc_uint16)dropId);
+}
+
+/* Sets/tests bits in a +-16 window around the truncated blast centre
+    (ray reach maxes out around 7 blocks, well inside). */
+#define EXPL_DIM 33
+static cc_uint8 expl_bits[(EXPL_DIM * EXPL_DIM * EXPL_DIM + 7) / 8];
+
+static void Indev_CreateExplosion(struct Entity* exploder, Vec3 center, float r) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	struct Mob* m;
+	int cx = (int)center.x, cy = (int)center.y, cz = (int)center.z;
+	float dirx, diry, dirz, len, power, px, py, pz;
+	float diam, dx, dy, dz, dist, d, dens, f;
+	int i, j, k, bx, by, bz, rel, dmg, slot;
+	BlockID id;
+	IVec3 coords;
+
+	Mem_Set(expl_bits, 0, sizeof(expl_bits));
+	Indev_PlaySoundAt(center, MOBSND_EXPLODE, 4.0f,
+		(1.0f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f) * 0.7f);
+
+	/* (a) 16^3 boundary rays collect the destroy set. Power seeds
+	    r*(0.7+rand*0.6), pays (resistance+0.3)*0.3 per occupied cell and a
+	    flat 0.225 per 0.3-block step; cells passed while power > 0 die.
+	    Plain (int) casts (truncation) match genuine. */
+	for (i = 0; i < 16; i++)
+	for (j = 0; j < 16; j++)
+	for (k = 0; k < 16; k++) {
+		if (!(i == 0 || i == 15 || j == 0 || j == 15 || k == 0 || k == 15)) continue;
+
+		dirx = (float)i / 15.0f * 2.0f - 1.0f;
+		diry = (float)j / 15.0f * 2.0f - 1.0f;
+		dirz = (float)k / 15.0f * 2.0f - 1.0f;
+		len  = Math_SqrtF(dirx * dirx + diry * diry + dirz * dirz);
+		dirx /= len; diry /= len; dirz /= len;
+
+		power = r * (0.7f + Random_Float(&st_dropRng) * 0.6f);
+		px = center.x; py = center.y; pz = center.z;
+
+		while (power > 0.0f) {
+			bx = (int)px; by = (int)py; bz = (int)pz;
+			if (World_Contains(bx, by, bz)) {
+				id = World_GetBlock(bx, by, bz);
+				if (id != BLOCK_AIR)
+					power -= (Indev_ExplosionResistance(id) + 0.3f) * 0.3f;
+				if (power > 0.0f) {
+					rel = (bx - cx + 16) + (by - cy + 16) * EXPL_DIM +
+					      (bz - cz + 16) * EXPL_DIM * EXPL_DIM;
+					if (rel >= 0 && rel < EXPL_DIM * EXPL_DIM * EXPL_DIM)
+						expl_bits[rel >> 3] |= (cc_uint8)(1 << (rel & 7));
+				}
+			}
+			px += dirx * 0.3f; py += diry * 0.3f; pz += dirz * 0.3f;
+			power -= 0.22500001f;
+		}
+	}
+
+	/* (b) entity phase - BEFORE any block is removed, so the density rays
+	    see the intact world. Range is 2*radius; damage
+	    (int)((f^2+f)/2 * 8 * 2r + 1) with f = (1 - dist/2r) * density, and
+	    an unconditional, uncapped velocity kick of dir * f on top. */
+	diam = r * 2.0f;
+
+	if (p && exploder != &p->Base) {
+		struct Entity* e = &p->Base;
+		dx = e->Position.x           - center.x;
+		dy = (e->Position.y + 1.62f) - center.y;
+		dz = e->Position.z           - center.z;
+		dist = Math_SqrtF(dx * dx + dy * dy + dz * dz);
+		d    = dist / diam;
+		if (d <= 1.0f) {
+			dens = Indev_BlockDensity(center, e);
+			f    = (1.0f - d) * dens;
+			dmg  = (int)((f * f + f) / 2.0f * 8.0f * diam + 1.0f);
+			if (exploder) SurvivalTest_HurtFrom(dmg, exploder->Position);
+			else          SurvivalTest_Hurt(dmg);
+			if (dist > 0.0001f) {
+				e->Velocity.x += dx / dist * f;
+				e->Velocity.y += dy / dist * f;
+				e->Velocity.z += dz / dist * f;
+			}
+		}
+	}
+
+	/* the exploding creeper's own mob slot, for correct aggro attribution */
+	slot = -1;
+	for (i = 0; exploder && i < MOB_MAX; i++) {
+		if (&st_mobs[i].Base == exploder) { slot = i; break; }
+	}
+
+	for (i = 0; i < MOB_MAX; i++) {
+		struct Entity* e;
+		m = &st_mobs[i];
+		if (!m->active || m->health <= 0) continue;
+		if (exploder && &m->Base == exploder) continue; /* getEntities excludes var1 */
+
+		e = &m->Base;
+		dx = e->Position.x - center.x;
+		dy = (e->Position.y + mobTypeInfo[m->type].heightOff) - center.y;
+		dz = e->Position.z - center.z;
+		dist = Math_SqrtF(dx * dx + dy * dy + dz * dz);
+		d    = dist / diam;
+		if (d > 1.0f) continue;
+
+		dens = Indev_BlockDensity(center, e);
+		f    = (1.0f - d) * dens;
+		dmg  = (int)((f * f + f) / 2.0f * 8.0f * diam + 1.0f);
+
+		st_hurtCauseSlot = slot; /* -1 = environmental/TNT, else the creeper */
+		Mob_Hurt(m, exploder, dmg, false);
+		if (dist > 0.0001f) {
+			e->Velocity.x += dx / dist * f;
+			e->Velocity.y += dy / dist * f;
+			e->Velocity.z += dz / dist * f;
+		}
+	}
+
+	/* (c) destruction, in genuine reverse-TreeSet order (descending z, y, x):
+	    drops roll before the clear; consumed TNT arms a 10-29 tick fuse. */
+	for (k = EXPL_DIM - 1; k >= 0; k--)
+	for (j = EXPL_DIM - 1; j >= 0; j--)
+	for (i = EXPL_DIM - 1; i >= 0; i--) {
+		rel = i + j * EXPL_DIM + k * EXPL_DIM * EXPL_DIM;
+		if (!(expl_bits[rel >> 3] & (1 << (rel & 7)))) continue;
+
+		bx = cx + i - 16; by = cy + j - 16; bz = cz + k - 16;
+		if (!World_Contains(bx, by, bz)) continue;
+		id = World_GetBlock(bx, by, bz);
+		if (id == BLOCK_AIR) continue;
+
+		coords.x = bx; coords.y = by; coords.z = bz;
+		if (id == BLOCK_TNT) {
+			Game_UpdateBlock(bx, by, bz, BLOCK_AIR);
+			SurvivalTest_ArmTnt(coords, 10 + Random_Next(&st_dropRng, 20));
+		} else {
+			Indev_ExplodeDrops(coords, id);
+			Game_UpdateBlock(bx, by, bz, BLOCK_AIR);
+			IndevTest_NotifyBlockRemoved(coords, id);
+		}
+	}
+}
+
 /* Level.explode's entity damage: (int)((1 - dist/radius)*15 + 1) - 16 HP */
 /*  point-blank tapering to 1 HP at the rim, 0 beyond. Distance is measured */
 /*  from genuine entity.y = feet + heightOffset (1.62 player/humanoids, 1.72 */
@@ -2829,12 +3117,21 @@ static int Explosion_Damage(struct Entity* e, float heightOff, Vec3 center, floa
 /*  both TNT (PrimedTnt's expiry) and the creeper's death blast. */
 /* Explosion kills never credit the player's score: attacker is null for TNT */
 /*  and the creeper itself for a creeper blast, and awardKillScore only fires */
-/*  for a Player attacker - so mobs are hurt with playerCredit=false. attacker */
-/*  is passed null (no knockback), matching TNT, the common case; the only */
-/*  nuance dropped is a creeper blast knocking surviving mobs back. */
-static void SurvivalTest_Explode(Vec3 center, int radius) {
+/*  for a Player attacker - so mobs are hurt with playerCredit=false. The */
+/*  attacker IS forwarded (genuine hurt(var1, dmg)), so creeper blasts knock */
+/*  surviving entities back while TNT (null attacker) doesn't - genuine. */
+static void SurvivalTest_Explode(struct Entity* exploder, Vec3 center, float fradius) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	struct Mob* m;
+	int radius = (int)fradius;
+	int exploderSlot = -1, es;
+
+	/* Indev replaces Level.explode entirely with World.createExplosion */
+	if (IndevTest_Enabled) { Indev_CreateExplosion(exploder, center, fradius); return; }
+
+	for (es = 0; exploder && es < MOB_MAX; es++) {
+		if (&st_mobs[es].Base == exploder) { exploderSlot = es; break; }
+	}
 	/* Level.explode's exact box: (int)(c - r - 1) to (int)(c + r + 1), each */
 	/*  block tested by the distance from its centre (+0.5) to the blast point, */
 	/*  strictly inside r. */
@@ -2887,14 +3184,24 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 		}
 	}}}
 
-	if (p && (dmg = Explosion_Damage(&p->Base, 1.62f, center, inv))) SurvivalTest_Hurt(dmg);
+	/* Level.explode: hurt(var1, dmg) - the attacker carries through, so a
+	    creeper-attributed blast knocks the player and mobs back through the
+	    normal Mob.hurt knockback (TNT's null attacker doesn't - genuine). */
+	if (p && (!exploder || exploder != &p->Base) &&
+		(dmg = Explosion_Damage(&p->Base, 1.62f, center, inv))) {
+		if (exploder) SurvivalTest_HurtFrom(dmg, exploder->Position);
+		else          SurvivalTest_Hurt(dmg);
+	}
 
 	for (i = 0; i < MOB_MAX; i++) {
 		m = &st_mobs[i];
 		if (!m->active || m->health <= 0) continue;
+		if (exploder && &m->Base == exploder) continue;
 
 		dmg = Explosion_Damage(&m->Base, mobTypeInfo[m->type].heightOff, center, inv);
-		if (dmg) Mob_Hurt(m, NULL, dmg, false);
+		if (!dmg) continue;
+		st_hurtCauseSlot = exploderSlot; /* -1 = TNT/environment */
+		Mob_Hurt(m, exploder, dmg, false);
 	}
 }
 
