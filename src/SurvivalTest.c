@@ -178,6 +178,8 @@ static cc_bool SurvivalTest_IsHeadInWater(struct Entity* e);
 /*  section below (skeletons firing/death-bursting arrows) can spawn them. */
 static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float force,
 									 int damage, cc_uint8 type, cc_bool ownerIsPlayer, int ownerMobSlot);
+static void SurvivalTest_SpawnArrowIndev(Vec3 pos, Vec3 rawDir, float speed,
+										  float spreadFactor, cc_bool ownerIsPlayer, int ownerMobSlot);
 /* Defined later, in the Mobs section - the Indev entity-sound funnel (a no-op
     in c0.30 mode) and the standard living-sound pitch jitter, forward declared
     for the player damage / drops / arrows / explosion code that plays them. */
@@ -1119,12 +1121,15 @@ int SurvivalTest_PlayerArmorValue(void) {
 	return SurvivalTest_ArmorValue();
 }
 
-static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
+/* Returns whether the hit landed (EntityPlayer.attackEntityFrom's boolean) - */
+/*  false on god mode / death / the Indev invuln-window miss / armor rounding */
+/*  the damage to zero. Indev arrows bounce off the player on false. */
+static cc_bool SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 	struct LocalPlayer* p = Entities.CurPlayer;
-	if (!SurvivalTest_Enabled || !p) return;
-	if (st_isDead)             return;
-	if (st_godMode)            return; /* debug invincibility - blocks every damage source */
-	if (damage <= 0)           return;
+	if (!SurvivalTest_Enabled || !p) return false;
+	if (st_isDead)             return false;
+	if (st_godMode)            return false; /* debug invincibility - blocks every damage source */
+	if (damage <= 0)           return false;
 
 	if (IndevTest_Enabled) {
 		/* EntityPlayer.attackEntityFrom: unlike c0.30 there is NO delta
@@ -1133,7 +1138,7 @@ static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 		    Every worn piece is worn down by the raw damage, even when the
 		    final result rounds to zero. */
 		int scaled, k;
-		if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) return;
+		if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) return false;
 
 		scaled = damage * (25 - SurvivalTest_ArmorValue()) + st_damageRemainder;
 		for (k = 0; k < SURVIVAL_ARMOR_SLOTS; k++) {
@@ -1148,11 +1153,11 @@ static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 
 		damage             = scaled / 25;
 		st_damageRemainder = scaled % 25;
-		if (damage == 0) return;
+		if (damage == 0) return false;
 	}
 
 	if (st_invincTimer > INVULN_DURATION_SECS * 0.5f) {
-		if (st_lastHealth - damage >= SurvivalTest_Health) return;
+		if (st_lastHealth - damage >= SurvivalTest_Health) return false;
 		SurvivalTest_Health = st_lastHealth - damage;
 	} else {
 		st_lastHealth  = SurvivalTest_Health;
@@ -1174,6 +1179,7 @@ static void SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 		SurvivalTest_DropInventory();
 		GameOverScreen_Show();
 	}
+	return true;
 }
 
 void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, NULL); }
@@ -2645,35 +2651,30 @@ static void Mob_CreeperExplode(struct Mob* m) {
 	Particles_BreakBlockEffect(coords, BLOCK_LEAVES, BLOCK_AIR);
 }
 
-/* Indev EntitySkeleton.attackEntity's bow shot: the arrow arcs up by
-    horizontal-distance * 0.2, flies at speed 0.6 with inaccuracy 12
-    (gaussian * 0.0075 * 12 per velocity axis ~ roughly +-5 degrees,
-    approximated uniformly), and plays random.bow at the genuine pitch. */
+/* Indev EntitySkeleton.attackEntity's bow shot: the raw UNNORMALIZED aim
+    vector (dx, dy-to-target-eye-minus-0.2 + horizontal-distance * 0.2 lob,
+    dz) goes straight into setArrowHeading(0.6F, 12.0F) - speed 0.6, spread
+    factor 12 (gaussian sigma 0.09 per velocity axis), random.bow at the
+    genuine pitch. Damage is the tick's flat 4 for every Indev arrow. */
 static void Mob_IndevShootArrow(struct Mob* m, struct Entity* te) {
 	struct Entity* e = &m->Base;
 	Vec3 from = Entity_GetEyePosition(e);
-	float dx, dy, dz, hor, yaw, pitch, spread;
+	Vec3 aim;
+	float hor;
 	int slot = (int)(m - st_mobs);
 
 	from.y += 1.0f; /* shootArrow: ++arrow.posY above the (eye-anchored) spawn */
-	dx  = te->Position.x - e->Position.x;
-	dz  = te->Position.z - e->Position.z;
+	aim.x = te->Position.x - e->Position.x;
+	aim.z = te->Position.z - e->Position.z;
 	/* Genuine aims at target.posY - 0.2 where posY is the EYE-anchored Java
 	    position - CC's Position.y is the feet, which made arrows dive at the
 	    player's ankles. Aim relative to the target's eye point instead. */
-	dy  = (Entity_GetEyePosition(te).y - 0.2f) - from.y;
-	hor = Math_SqrtF(dx * dx + dz * dz);
-	dy += hor * 0.2f; /* the lob that lets skeleton shots clear mid-range dips */
-
-	spread = 12.0f * 0.0075f * MATH_RAD2DEG; /* ~5.2 degrees */
-	yaw    = Math_Atan2f(-dz, dx) * MATH_RAD2DEG
-	         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * spread;
-	pitch  = -Math_Atan2f(hor, dy) * MATH_RAD2DEG
-	         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * spread;
+	aim.y = (Entity_GetEyePosition(te).y - 0.2f) - from.y;
+	hor   = Math_SqrtF(aim.x * aim.x + aim.z * aim.z);
+	aim.y += hor * 0.2f; /* the lob that lets skeleton shots clear mid-range dips */
 
 	Mob_PlaySound(m, MOBSND_BOW, 1.0f, 1.0f / (Random_Float(&st_mobRng) * 0.4f + 0.8f));
-	/* damage 4 = Indev EntityArrow's flat attackEntityFrom(this, 4) */
-	SurvivalTest_SpawnArrow(from, yaw, pitch, 0.6f, 4, 1, false, slot);
+	SurvivalTest_SpawnArrowIndev(from, aim, 0.6f, 12.0f, false, slot);
 }
 
 /* Indev EntityCreeper.attackEntity's fuse expiry: createExplosion(radius 3)
@@ -2702,14 +2703,17 @@ static void Mob_IndevCreeperBlast(struct Mob* m) {
 /*  add to the player's score", matching `awardKillScore` being a no-op for */
 /*  every Entity except Player. Arrow hits forward credit via the arrow's */
 /*  owner (Arrow.awardKillScore), so they can't just check attacker==player. */
-static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool playerCredit) {
+/* Returns whether the hit actually landed (attackEntityFrom's boolean) - */
+/*  false when fully absorbed by the invulnerability window, or a no-op. */
+/*  Indev arrows bounce off on false (EntityArrow.java:131-139). */
+static cc_bool Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool playerCredit) {
 	struct Entity* e = &m->Base;
 	float dx, dz, dist;
 	IVec3 coords;
 	int woolCount, i;
 
-	if (m->health <= 0)        return;
-	if (damage <= 0)           return;
+	if (m->health <= 0)        return false;
+	if (damage <= 0)           return false;
 
 	/* Sheep.hurt(): a Player punch against a still-furred sheep shears it */
 	/*  instead of dealing damage at all - drops 1-3 white wool and clears */
@@ -2744,7 +2748,7 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 		coords.y = Math_Floor(e->Position.y);
 		coords.z = Math_Floor(e->Position.z);
 		for (i = 0; i < woolCount; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_WHITE); }
-		return;
+		return false; /* c0.30 shear replaces the hit entirely - no damage landed */
 	}
 
 	/* ai.hurt(cause, damage): aggro + the despawn-timer reset happen on every */
@@ -2774,7 +2778,7 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 	/*  that equal-damage hits register at most every 10 ticks (0.5s) - half */
 	/*  the old flat 1s block - so rapid clicking actually lands repeat hits. */
 	if (m->invincTicks > MOB_INVINC_TICKS / 2) {
-		if (m->lastHealth - damage >= m->health) return; /* absorbed */
+		if (m->lastHealth - damage >= m->health) return false; /* absorbed */
 		m->health = m->lastHealth - damage;
 	} else {
 		m->lastHealth  = m->health;
@@ -2810,6 +2814,7 @@ static void Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_bool
 		m->health = 0;
 		Mob_Die(m, playerCredit);
 	}
+	return true;
 }
 
 /*------------------------------------------------------------------------*/
@@ -4869,6 +4874,13 @@ struct ArrowEntity {
 	cc_int8  ownerMobSlot; /* index into st_mobs when fired by a mob, else -1 */
 	cc_bool  active;
 
+	/* Indev EntityArrow state (unused in c0.30 mode) */
+	cc_uint8 arrowShake;  /* 7 on stick, decays 1/tick - gates pickup */
+	int      airTicks;    /* ticksInAir - owner-grace clock, reset on bounce/re-loosen */
+	IVec3    stuckTile;   /* xTile/yTile/zTile + inTile: the block stuck into - */
+	BlockID  stuckBlock;  /*  mining it re-loosens the arrow */
+	Vec3     stickVel;    /* remnant motion at stick time, scaled by the re-loosen kick */
+
 	/* TakeEntityAnim - like item drops, a collected arrow flies to the player */
 	/*  over 3 ticks ((t/3)^2 ease) before being removed. */
 	cc_bool  pickingUp;
@@ -4932,6 +4944,61 @@ static void SurvivalTest_SpawnArrow(Vec3 pos, float yaw, float pitch, float forc
 	a->active        = true;
 }
 
+/* Standard-normal sample via Box-Muller over a Random_Float pair. Genuine
+    java.util.Random.nextGaussian (Marsaglia polar with a cached second value)
+    cannot be sequence-matched anyway - the arrow RNG is time-seeded - so
+    distribution-shape parity is the target. ln(u) = log2(u) * ln(2). */
+static float ST_NextGaussian(RNGState* rng) {
+	float u1 = 1.0f - Random_Float(rng); /* (0,1] - guards log(0) */
+	float u2 = Random_Float(rng);
+	return Math_SqrtF(-2.0f * (float)(Math_Log2(u1) * 0.6931471805599453)) *
+	       Math_CosF(2.0f * MATH_PI * u2);
+}
+
+/* Indev EntityArrow.setArrowHeading: normalize the raw aim vector, nudge each
+    velocity axis by an independent gaussian * 0.0075 * spreadFactor (player
+    bow 1.0, skeleton 12.0), then scale by speed WITHOUT re-normalizing.
+    Damage is the flat 4 of EntityArrow.onEntityUpdate's attackEntityFrom -
+    Indev has no per-owner damage, and RenderArrow has no per-type texture
+    row either, so type is always 0. gravity field is unused by Indev tick. */
+static void SurvivalTest_SpawnArrowIndev(Vec3 pos, Vec3 rawDir, float speed,
+										  float spreadFactor, cc_bool ownerIsPlayer, int ownerMobSlot) {
+	struct ArrowEntity* a;
+	float len;
+	int slot = SurvivalTest_FindFreeArrowSlot();
+
+	a = &st_arrows[slot];
+	Mem_Set(a, 0, sizeof(struct ArrowEntity));
+
+	len = Math_SqrtF(rawDir.x * rawDir.x + rawDir.y * rawDir.y + rawDir.z * rawDir.z);
+	if (len < 0.0001f) { rawDir.x = 0.0f; rawDir.y = 1.0f; rawDir.z = 0.0f; len = 1.0f; }
+	rawDir.x /= len; rawDir.y /= len; rawDir.z /= len;
+
+	rawDir.x += ST_NextGaussian(&st_arrowRng) * 0.0075f * spreadFactor;
+	rawDir.y += ST_NextGaussian(&st_arrowRng) * 0.0075f * spreadFactor;
+	rawDir.z += ST_NextGaussian(&st_arrowRng) * 0.0075f * spreadFactor;
+
+	a->velocity.x = rawDir.x * speed;
+	a->velocity.y = rawDir.y * speed;
+	a->velocity.z = rawDir.z * speed;
+
+	a->pos     = pos; /* callers apply the constructor hand offset themselves */
+	a->prevPos = pos;
+	len = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
+	if (len > 0.0001f) {
+		a->facing.x = a->velocity.x / len;
+		a->facing.y = a->velocity.y / len;
+		a->facing.z = a->velocity.z / len;
+	} else { a->facing.y = 1.0f; }
+
+	a->gravity       = 1.0f; /* unused by the Indev flight model */
+	a->type          = 0;
+	a->damage        = 4;
+	a->ownerIsPlayer = ownerIsPlayer;
+	a->ownerMobSlot  = (cc_int8)ownerMobSlot;
+	a->active        = true;
+}
+
 static void Arrow_BoxAt(Vec3* pos, struct AABB* out) {
 	/* Entity.setPos centres the bb on the tracked position on ALL axes
 	   (bb.y0 = y - bbHeight/2), so the arrow's position is the box CENTRE,
@@ -4957,7 +5024,9 @@ static void Arrow_ExpandBox(struct AABB* bb, Vec3* d) {
 }
 
 /* level.getCubes(box).size() > 0 - true if any solid block overlaps the box. */
-static cc_bool Arrow_BlockCollision(struct AABB* bb) {
+/* hitTile/hitBlock (optional) record the first overlapping cell - the swept- */
+/*  box stand-in for Indev rayTraceBlocks' hit cell, needed for re-loosening. */
+static cc_bool Arrow_BlockCollision(struct AABB* bb, IVec3* hitTile, BlockID* hitBlock) {
 	int x0, x1, y0, y1, z0, z1, x, y, z;
 	BlockID b;
 	struct AABB blockBB;
@@ -4976,7 +5045,11 @@ static cc_bool Arrow_BlockCollision(struct AABB* bb) {
 		blockBB.Min.x = x + Blocks.MinBB[b].x; blockBB.Max.x = x + Blocks.MaxBB[b].x;
 		blockBB.Min.y = y + Blocks.MinBB[b].y; blockBB.Max.y = y + Blocks.MaxBB[b].y;
 		blockBB.Min.z = z + Blocks.MinBB[b].z; blockBB.Max.z = z + Blocks.MaxBB[b].z;
-		if (AABB_Intersects(bb, &blockBB)) return true;
+		if (AABB_Intersects(bb, &blockBB)) {
+			if (hitTile)  { hitTile->x = x; hitTile->y = y; hitTile->z = z; }
+			if (hitBlock) { *hitBlock = b; }
+			return true;
+		}
 	}}}
 	return false;
 }
@@ -4990,9 +5063,18 @@ static cc_bool Arrow_EntityCollision(struct ArrowEntity* a, struct AABB* bb,
 	struct AABB other;
 	struct Mob* m;
 	int i;
+	/* Indev: owner grace is ticksInAir < 5 (re-arms on bounce/re-loosen since
+	    those reset ticksInAir); c0.30 gates on the arrow's total age. Indev
+	    also grows the TARGET's box 0.3 each side (bb.expand(0.3F,0.3F,0.3F))
+	    before the intercept test. */
+	cc_bool ownerShielded = IndevTest_Enabled ? a->airTicks < 5
+	                                          : a->age <= ARROW_OWNER_GRACE_TICKS;
+	float grow = IndevTest_Enabled ? 0.3f : 0.0f;
 
-	if (p && !(a->ownerIsPlayer && a->age <= ARROW_OWNER_GRACE_TICKS)) {
+	if (p && !(a->ownerIsPlayer && ownerShielded)) {
 		Entity_GetBounds(&p->Base, &other);
+		other.Min.x -= grow; other.Min.y -= grow; other.Min.z -= grow;
+		other.Max.x += grow; other.Max.y += grow; other.Max.z += grow;
 		if (AABB_Intersects(bb, &other)) {
 			*outEntity = &p->Base; *outMob = NULL; return true;
 		}
@@ -5001,9 +5083,11 @@ static cc_bool Arrow_EntityCollision(struct ArrowEntity* a, struct AABB* bb,
 	for (i = 0; i < MOB_MAX; i++) {
 		m = &st_mobs[i];
 		if (!m->active || m->health <= 0) continue;
-		if (!a->ownerIsPlayer && a->ownerMobSlot == i && a->age <= ARROW_OWNER_GRACE_TICKS) continue;
+		if (!a->ownerIsPlayer && a->ownerMobSlot == i && ownerShielded) continue;
 
 		Entity_GetBounds(&m->Base, &other);
+		other.Min.x -= grow; other.Min.y -= grow; other.Min.z -= grow;
+		other.Max.x += grow; other.Max.y += grow; other.Max.z += grow;
 		if (AABB_Intersects(bb, &other)) {
 			*outEntity = &m->Base; *outMob = m; return true;
 		}
@@ -5014,8 +5098,13 @@ static cc_bool Arrow_EntityCollision(struct ArrowEntity* a, struct AABB* bb,
 /* entity.hurt(this, damage) - knockback is computed from the ARROW's own */
 /*  position (not the original shooter's), exactly as Mob.hurt()/Arrow.tick() */
 /*  do in the decompiled source (the arrow passes itself as the cause). */
-static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, struct Mob* hitMob) {
+/* Returns whether the arrow was consumed. c0.30 always consumes silently; */
+/*  Indev plays random.drr on a landed hit, and an ABSORBED hit (invuln */
+/*  window / armor zero-round, attackEntityFrom returning false) BOUNCES: */
+/*  motion *= -0.1 per axis, ticksInAir reset, arrow keeps flying. */
+static cc_bool Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, struct Mob* hitMob) {
 	struct Entity fakeAttacker = { 0 };
+	cc_bool landed;
 	fakeAttacker.Position = a->pos;
 	st_hurtViaArrow = true;
 
@@ -5024,23 +5113,42 @@ static void Arrow_ApplyHit(struct ArrowEntity* a, struct Entity* hitEntity, stru
 		/*  struck by a skeleton's arrow aggros onto that skeleton (-1 = the */
 		/*  player fired it, aggroing onto the player as before). */
 		st_hurtCauseSlot = a->ownerIsPlayer ? -1 : a->ownerMobSlot;
-		Mob_Hurt(hitMob, &fakeAttacker, a->damage, a->ownerIsPlayer);
+		landed = Mob_Hurt(hitMob, &fakeAttacker, a->damage, a->ownerIsPlayer);
 	st_hurtViaArrow = false;
 	} else {
-		SurvivalTest_HurtFrom(a->damage, a->pos);
+		landed = SurvivalTest_Damage(a->damage, &a->pos);
 	}
-	a->active = false; /* entity hits remove() the arrow immediately - it never sticks */
+
+	if (!IndevTest_Enabled || landed) {
+		/* Indev EntityArrow: a landed hit plays random.drr then removes */
+		Indev_PlaySoundAt(a->pos, MOBSND_DRR,
+			1.0f, 1.2f / (Random_Float(&st_arrowRng) * 0.2f + 0.9f));
+		a->active = false;
+		return true;
+	}
+
+	a->velocity.x *= -0.1f;
+	a->velocity.y *= -0.1f;
+	a->velocity.z *= -0.1f;
+	a->airTicks = 0; /* re-arms the owner grace */
+	return false;
 }
 
-/* Arrow.tick() - drag+gravity, then a subdivided sweep (so fast arrows can't */
-/*  tunnel through thin obstacles) checking blocks first, then entities. */
+/* c0.30 Arrow.tick(): drag+gravity FIRST, then a subdivided sweep (so fast */
+/*  arrows can't tunnel through thin obstacles) checking blocks then entities. */
+/* Indev EntityArrow.onEntityUpdate: movement FIRST at full current velocity, */
+/*  then drag (0.99 air / 0.8 water) and a flat 0.03 gravity - plus stuck- */
+/*  block re-loosening, the 1200-tick despawn, and the arrowShake decay. */
 static void Arrow_Tick(struct ArrowEntity* a) {
 	struct AABB bb, swept;
 	struct Entity* hitEntity;
 	struct Mob* hitMob;
 	Vec3 step;
-	float len;
+	IVec3 hitTile;
+	BlockID hitBlock = BLOCK_AIR;
+	float len, drag;
 	int steps, s;
+	cc_bool indev = IndevTest_Enabled;
 	cc_bool collided = false;
 
 	a->age++;
@@ -5048,26 +5156,48 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 	/*  RenderArrows blends prevPos->pos by the partial-tick t every frame, */
 	/*  same as Arrow.render()'s xo/x blending in the decompiled source. */
 	a->prevPos = a->pos;
+	if (indev && a->arrowShake > 0) a->arrowShake--;
 
 	if (a->hasHit) {
-		a->stickTime++;
-		if (IndevTest_Enabled) {
+		if (!indev) {
+			a->stickTime++;
+			if (a->type == 0) {
+				if (a->stickTime >= ARROW_STICK_PLAYER_MIN_TICKS &&
+					Random_Float(&st_arrowRng) < ARROW_STICK_PLAYER_DESPAWN_CHANCE) a->active = false;
+			} else {
+				if (a->stickTime >= ARROW_STICK_MOB_TICKS) a->active = false;
+			}
+			return;
+		}
+		/* Indev: still stuck only while the recorded block is unchanged */
+		if (World_Contains(a->stuckTile.x, a->stuckTile.y, a->stuckTile.z) &&
+			World_GetBlock(a->stuckTile.x, a->stuckTile.y, a->stuckTile.z) == a->stuckBlock) {
+			a->stickTime++;
 			/* genuine EntityArrow: ANY stuck arrow dies at exactly
 			    ticksInGround == 1200, no random roll, player and mob alike */
 			if (a->stickTime >= 1200) a->active = false;
-		} else if (a->type == 0) {
-			if (a->stickTime >= ARROW_STICK_PLAYER_MIN_TICKS &&
-				Random_Float(&st_arrowRng) < ARROW_STICK_PLAYER_DESPAWN_CHANCE) a->active = false;
-		} else {
-			if (a->stickTime >= ARROW_STICK_MOB_TICKS) a->active = false;
+			return;
 		}
-		return;
+		/* the block was mined out - re-loosen with a random fraction of the
+		    remnant stick motion (three independent nextFloat rolls) and fall
+		    through to the flight code THIS tick, exactly like genuine */
+		a->hasHit     = false;
+		a->velocity.x = a->stickVel.x * Random_Float(&st_arrowRng) * 0.2f;
+		a->velocity.y = a->stickVel.y * Random_Float(&st_arrowRng) * 0.2f;
+		a->velocity.z = a->stickVel.z * Random_Float(&st_arrowRng) * 0.2f;
+		a->stickTime  = 0;
+		a->airTicks   = 0;
 	}
 
-	a->velocity.x *= ARROW_DRAG;
-	a->velocity.y *= ARROW_DRAG;
-	a->velocity.z *= ARROW_DRAG;
-	a->velocity.y -= 0.02f * a->gravity;
+	if (indev) a->airTicks++;
+
+	if (!indev) {
+		/* c0.30: drag + speed-scaled gravity BEFORE the move */
+		a->velocity.x *= ARROW_DRAG;
+		a->velocity.y *= ARROW_DRAG;
+		a->velocity.z *= ARROW_DRAG;
+		a->velocity.y -= 0.02f * a->gravity;
+	}
 
 	len   = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
 	steps = (int)(len / ARROW_SUBSTEP_LEN + 1.0f);
@@ -5081,11 +5211,14 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 		swept = bb;
 		Arrow_ExpandBox(&swept, &step);
 
-		if (Arrow_BlockCollision(&swept)) collided = true;
+		if (Arrow_BlockCollision(&swept, &hitTile, &hitBlock)) collided = true;
 
 		if (Arrow_EntityCollision(a, &swept, &hitEntity, &hitMob)) {
-			Arrow_ApplyHit(a, hitEntity, hitMob);
-			return; /* entity hits short-circuit the whole tick, exactly as in Arrow.tick() */
+			if (Arrow_ApplyHit(a, hitEntity, hitMob)) return;
+			/* Indev absorbed-hit bounce: velocity reversed - stop sweeping
+			    and let the same tick's drag/gravity act on it */
+			collided = false;
+			break;
 		}
 
 		if (!collided) {
@@ -5096,14 +5229,51 @@ static void Arrow_Tick(struct ArrowEntity* a) {
 
 	if (collided) {
 		a->hasHit = true;
+		if (indev) {
+			/* xTile/yTile/zTile + inTile + the remnant motion the re-loosen
+			    kick later scales; arrowShake gates pickup for 7 ticks */
+			a->stuckTile  = hitTile;
+			a->stuckBlock = hitBlock;
+			a->stickVel   = a->velocity;
+			a->arrowShake = 7;
+		}
 		a->velocity.x = a->velocity.y = a->velocity.z = 0.0f;
 		/* Indev EntityArrow: sticking into a block plays random.drr */
 		Indev_PlaySoundAt(a->pos, MOBSND_DRR,
 			1.0f, 1.2f / (Random_Float(&st_arrowRng) * 0.2f + 0.9f));
-	} else if (len > 0.0001f) {
-		a->facing.x = a->velocity.x / len;
-		a->facing.y = a->velocity.y / len;
-		a->facing.z = a->velocity.z / len;
+		return;
+	}
+
+	/* re-measure - an Indev bounce reversed + shrank the velocity mid-sweep */
+	if (indev) len = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
+
+	if (len > 0.0001f) {
+		if (indev) {
+			/* rot = prevRot + (rot - prevRot) * 0.2F - the visual heading
+			    lags the velocity, approximated as a vector lerp */
+			a->facing.x += (a->velocity.x / len - a->facing.x) * 0.2f;
+			a->facing.y += (a->velocity.y / len - a->facing.y) * 0.2f;
+			a->facing.z += (a->velocity.z / len - a->facing.z) * 0.2f;
+			Vec3_Normalise(&a->facing);
+		} else {
+			a->facing.x = a->velocity.x / len;
+			a->facing.y = a->velocity.y / len;
+			a->facing.z = a->velocity.z / len;
+		}
+	}
+
+	if (indev) {
+		/* move -> drag -> flat gravity, per Entity/EntityArrow order. The
+		    handleWaterMovement band (bb.expand(0,-0.4,0) of a 0.5-tall box)
+		    degenerates to ~the centre cell - test the centre block. */
+		drag = 0.99f;
+		if (World_Contains(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z)) &&
+			ST_IsWaterBlock(World_GetBlock(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z))))
+			drag = 0.8f;
+		a->velocity.x *= drag;
+		a->velocity.y *= drag;
+		a->velocity.z *= drag;
+		a->velocity.y -= 0.03f;
 	}
 }
 
@@ -5115,6 +5285,8 @@ static void Arrow_TryPickup(struct ArrowEntity* a) {
 	struct AABB arrowBB, playerBB;
 	if (!a->hasHit || !a->ownerIsPlayer)      return;
 	if (!IndevTest_Enabled && st_playerArrows >= ARROW_PLAYER_MAX) return;
+	/* genuine playerTouch: pickup only after the 7-tick arrowShake decays */
+	if (IndevTest_Enabled && a->arrowShake > 0) return;
 
 	p = Entities.CurPlayer;
 	if (!p) return;
@@ -5371,12 +5543,12 @@ int SurvivalTest_ArrowCount(void) { return st_playerArrows; }
 
 /* ItemBow.onItemRightClick: consumeInventoryItem(arrow) - the FIRST slot
     holding arrows, in inventory order - then the bow twang and an arrow at
-    the genuine 1.5 speed / 4 damage. The bow itself has NO durability in
-    in-20100223, and the click is handled either way (a dry bow just does
-    nothing, it never falls through to block placement). */
+    the genuine 1.5 speed / spread 1.0 (damage is the tick's flat 4). The bow
+    itself has NO durability in in-20100223, and the click is handled either
+    way (a dry bow just does nothing, never falling through to placement). */
 #define INDEV_ITEM_ARROW (256 + 6)
-#define INDEV_ARROW_FIRE_FORCE 1.5f
-#define INDEV_ARROW_DAMAGE     4
+#define INDEV_ARROW_FIRE_SPEED  1.5f /* EntityArrow ctor's setArrowHeading(..., 1.5F, 1.0F) */
+#define INDEV_ARROW_FIRE_SPREAD 1.0f
 
 static void SurvivalTest_SyncHotbar(void);
 
@@ -5400,10 +5572,20 @@ cc_bool SurvivalTest_TryUseBow(void) {
 
 	e   = &p->Base;
 	eye = Entity_GetEyePosition(e);
-	Indev_PlaySoundAt(e->Position, MOBSND_BOW, 1.0f,
-		1.0f / (Random_Float(&st_arrowRng) * 0.4f + 0.8f));
-	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
-							 INDEV_ARROW_FIRE_FORCE, INDEV_ARROW_DAMAGE, 0, true, -1);
+	{
+		/* EntityArrow's constructor offset: 0.1 down and 0.16 sideways along
+		    the yaw's horizontal perpendicular (the bow hand), then the unit
+		    aim vector into setArrowHeading(1.5F, 1.0F). */
+		float yawRad = e->Yaw * MATH_DEG2RAD;
+		Vec3 dir = Vec3_GetDirVector(yawRad, e->Pitch * MATH_DEG2RAD);
+		eye.x += Math_CosF(yawRad) * 0.16f;
+		eye.y -= 0.1f;
+		eye.z += Math_SinF(yawRad) * 0.16f;
+		Indev_PlaySoundAt(e->Position, MOBSND_BOW, 1.0f,
+			1.0f / (Random_Float(&st_arrowRng) * 0.4f + 0.8f));
+		SurvivalTest_SpawnArrowIndev(eye, dir,
+			INDEV_ARROW_FIRE_SPEED, INDEV_ARROW_FIRE_SPREAD, true, -1);
+	}
 	return true;
 }
 
@@ -7116,9 +7298,15 @@ void SurvivalTest_DebugShootArrow(void) {
 
 	/* Same as a Tab-fire (eye-height, player force/damage), but free - doesn't */
 	/*  spend an arrow from the count, so you can spam them while testing. */
+	/*  In Indev mode fire through the genuine bow physics instead. */
 	eye = Entity_GetEyePosition(e);
-	SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
-							ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
+	if (IndevTest_Enabled) {
+		Vec3 dir = Vec3_GetDirVector(e->Yaw * MATH_DEG2RAD, e->Pitch * MATH_DEG2RAD);
+		SurvivalTest_SpawnArrowIndev(eye, dir, 1.5f, 1.0f, true, -1);
+	} else {
+		SurvivalTest_SpawnArrow(eye, e->Yaw, e->Pitch,
+								ARROW_PLAYER_FIRE_FORCE, ARROW_PLAYER_DAMAGE, 0, true, -1);
+	}
 }
 
 /* Whether the local player is alight (drives the first-person flames). */

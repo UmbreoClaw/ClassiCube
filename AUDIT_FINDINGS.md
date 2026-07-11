@@ -184,9 +184,13 @@ Indev hardness overrides, hoe till, bow behaviour.
 11. [P] Mirrored recipe matching missing: genuine tries mirrored layouts
     (CraftingRecipe.java:19-32); axe/hoe/bow/flint&steel can't be crafted
     mirrored in ours (IndevTest.c:443-466).
-12. [P] Indev arrow physics: drag 0.99 (0.8 water), gravity flat 0.03,
-    gaussian spread 0.0075/axis (EntityArrow.java:43-60,177-189); ours uses
-    c0.30 constants in both modes (SurvivalTest.c:4498, 4581, 4723).
+12. [V] Indev arrow physics: FIXED in round 3 (arrows) - full EntityArrow
+    port: setArrowHeading gaussian spread (0.0075/axis, player 1.0 /
+    skeleton 12.0), move-then-drag order, drag 0.99 air / 0.8 water, flat
+    0.03 gravity, flat damage 4, bounce on absorbed hits (-0.1/axis),
+    stuck-block re-loosen kick, arrowShake pickup gate, 0.3/side target
+    grow, airTicks owner grace, facing 0.2 lerp. c0.30 paths byte-kept.
+    Rig-verified: |v|=1.509 at spawn, one tick = *0.99 - 0.03 exactly.
 13. [P] Lit furnace should drop LIT furnace (62) in Indev (no idDropped
     override); ours canonicalises to idle. Low priority; notes claim wrong.
 14. [P] Mushroom eating is c0.30-only (SurvivalGameMode.useItem); ours
