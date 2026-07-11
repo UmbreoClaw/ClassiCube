@@ -4557,6 +4557,88 @@ confirmed to carry the beta armor strip.
 
 ---
 
+## Round 3: genuine-model ports (dig time, arrows, environment ticks)
+
+One spec at a time (session-limit workflow): extract the genuine model
+from the Java, then port + rig-verify + commit before the next.
+
+### Indev dig-time model (commit f326483)
+Block.blockStrength is a PER-TICK float progress accumulator, not the
+c0.30 integer hit counter:
+- `IndevTest_StrVsBlock` (replaces the MiningSpeed dig-sound proxy):
+  genuine blocksEffectiveAgainst id lists - pickaxe {4,43,44,1,48,15,42,
+  16,41,14,56}, axe {5,47,17,54 - Block.crate IS the chest}, spade
+  {2,3,12,13}; (tier+1)*2 on match (gold = tier 0 = wood speed), sword
+  flat 1.5f vs everything, hoes/others 1.0f. Chest/furnace directional
+  variants fold to canonical first. Workbench/brick/obsidian/furnace in
+  NO list = genuine quirk (75s/105s digs).
+- `Indev_BlockStrength`: bedrock -> 0 (genuine -1 sentinel; our uint16
+  table can't store it), hardness 0 -> instant, non-harvestable ->
+  1/hardness/100 with NO tool speed and NO penalties, else
+  strVsBlock (/5 head-in-water via the eye-column sample, /5 airborne)
+  / hardness / 30. Table stores genuine seconds*20, so hardness =
+  st_hardness/20.0f (exact for every table value).
+- TickBreaking splits by mode: Indev st_breakDamage += strength, break
+  >= 1.0; c0.30 restored to pure hits++/hardness+1. blockHitWait 5 both.
+- BreakProgress feeds the crack overlay the raw 0..1 damage in Indev.
+gdb-verified per-tick values exact: stone bare hand 0.0066667
+(1/1.5/100), iron pick 0.133333 (6/1.5/30), obsidian w/o diamond pick
+0.001, leaves 0.166667; bare-hand planks broke in the genuine 3s.
+
+### Indev arrow physics (commit e5f082f)
+Full EntityArrow port behind IndevTest_Enabled (c0.30 byte-kept):
+- setArrowHeading: normalize raw aim, +gaussian*0.0075*spreadFactor per
+  velocity axis (player bow speed 1.5/spread 1.0; skeleton 0.6/12.0
+  fed the raw unnormalized dx,dy+lob,dz), scale by speed, NO renorm.
+  New Box-Muller ST_NextGaussian on st_arrowRng (distribution parity -
+  sequence parity impossible vs a time-seeded Marsaglia polar).
+- Flight order: move FIRST, then drag 0.99 (0.8 when the centre block
+  is water) and flat 0.03 gravity (no 1/force scale). Facing lags the
+  velocity by the genuine 0.2 lerp (vector-space stand-in).
+- Flat damage 4 for every Indev arrow; landed hit plays random.drr;
+  ABSORBED hit (invuln window / armor zero-round) bounces at -0.1x with
+  ticksInAir reset. Mob_Hurt + SurvivalTest_Damage now return cc_bool
+  "landed" (attackEntityFrom's boolean) - public Hurt/HurtFrom wrappers
+  stay void.
+- Stick records xTile/yTile/zTile + inTile + remnant motion; mining the
+  block re-loosens with the nextFloat()*0.2 kick the same tick;
+  arrowShake=7 decays 1/tick and gates pickup. Owner grace airTicks>=5.
+  Entity intercept grows the TARGET box 0.3/side.
+- Player bow applies the ctor hand offset (0.16 sideways, 0.1 down).
+rig: spawn |v| = 1.509, one tick = *0.99 - 0.03 exact, stick recorded.
+
+### Environment tick batch (commit e941a27)
+- **setBlockWithNotify hook**: Game_UpdateBlock -> IndevTest_BlockUpdated
+  on every mutation (depth-capped 8). Centralizes: torch support pops,
+  crop pops (stage 7 -> 1 wheat via Indev_PopCrop), farmland cover
+  revert (now immediate like onNeighborBlockChange), fire lifecycle,
+  chest scatter/TE removal (same-container-kind swaps skip - furnace
+  lit/unlit + facing rotation keep the TE). UserEvents handler keeps
+  only player-intent logic. IndevFire's explicit Fire_Schedule-after-set
+  calls removed (the hook schedules onBlockAdded now).
+- **Trampling**: IndevTest_TrampleStep (1-in-4 -> dirt) on step events -
+  mobs from their walkDist trigger, player from a new 0.6x horizontal
+  accumulator (foot block at feetY-0.2, not onGround-gated, skipped
+  flying/noclip). Sneaking does NOT prevent it (no such mechanic).
+- **Crops canBlockStay**: checkFlowerChange first on every random tick:
+  (light>=8 || light>=4+sky) && farmland below, else pop.
+- **Torch placement**: CanPlaceBlockAt refuses no-support torches before
+  placement (nothing consumed/played); place-then-pop arm deleted.
+- **Night brightness + easing**: sun/shadow through the genuine
+  lightBrightnessTable curve ((1-v)/(3v+1)*0.95+0.05 - night 0.129 not
+  linear 0.267) via public IndevTest_BrightnessOfLight; sky level eases
+  1 step/tick (11-step dawn/dusk fade, gradual /time catch-up); crops/
+  zombie-burn/spawn reads use the eased value like getBlockLightValue.
+- **c0.30 random ticks**: Physics_TickRandomBlocksC030 = Level.tick's
+  volume/200 loop (randId*3+1013904223 LCG) for c0.30 survival; the
+  engine 3-per-chunk loop (volume/1365, ~6.8x sparser) stays for
+  creative. Both mode randIds now seeded per map (were 0 forever).
+rig: curve values exact, night sun colour 0x202020, torch mid-air
+refused, gdb trample -> dirt + crop popped through the hook, raw
+Game_UpdateBlock support removal pops a standing torch.
+
+---
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.
