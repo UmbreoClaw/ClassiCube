@@ -1938,6 +1938,14 @@ void IndevTest_RenderSky(void) {
 	hadFog = Gfx_GetFog();
 	if (hadFog) Gfx_SetFog(false);
 	Gfx_SetDepthWrite(false);
+	/* The engine's sky ceiling (EnvRenderer_RenderSky) draws at only
+	    cameraY + 8 WITH depth writes - our quads orbit at camera +-100, so
+	    with depth testing on the whole upper hemisphere gets rejected and
+	    the sun/moon only ever peek out BELOW the horizon (user report).
+	    Genuine renders its entire sky with glDepthMask(false); ignore the
+	    plane's depth here - clouds and terrain draw after us and cover the
+	    quads correctly. */
+	Gfx_SetDepthTest(false);
 	Gfx_SetAlphaTest(false);
 	Gfx_SetAlphaBlendingAdditive(true); /* dst + src, like glBlendFunc(ONE, ONE) */
 
@@ -1980,6 +1988,7 @@ void IndevTest_RenderSky(void) {
 
 	Gfx_SetAlphaBlendingAdditive(false);
 	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthTest(true);
 	Gfx_SetDepthWrite(true);
 	if (hadFog) Gfx_SetFog(true);
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
