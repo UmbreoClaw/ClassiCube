@@ -101,6 +101,8 @@ static struct TickQueue lavaQ, waterQ;
 #define PHYSICS_DELAY_SHIFT 27
 #define PHYSICS_ONE_DELAY   (1U << PHYSICS_DELAY_SHIFT)
 #define PHYSICS_LAVA_DELAY (30U << PHYSICS_DELAY_SHIFT)
+/* Indev BlockFlowing.tickRate(): lava reflows every 25 ticks, not 30 */
+#define PHYSICS_LAVA_DELAY_NOW ((IndevTest_Enabled ? 25U : 30U) << PHYSICS_DELAY_SHIFT)
 #define PHYSICS_WATER_DELAY (5U << PHYSICS_DELAY_SHIFT)
 
 static void Physics_OnNewMapLoaded(void* obj) {
@@ -329,7 +331,7 @@ static void Physics_HandleMushroom(int index, BlockID block) {
 
 
 static void Physics_PlaceLava(int index, BlockID block) {
-	TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY | index);
+	TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY_NOW | index);
 }
 
 static void Physics_PropagateLava(int posIndex, int x, int y, int z) {
@@ -345,7 +347,7 @@ static void Physics_PropagateLava(int posIndex, int x, int y, int z) {
 			Game_UpdateBlock(x, y, z, BLOCK_STONE);
 		}
 	} else if (Blocks.Draw[block] == DRAW_GAS) {
-		TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY | posIndex);
+		TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY_NOW | posIndex);
 		Game_UpdateBlock(x, y, z, BLOCK_LAVA);
 	}
 }

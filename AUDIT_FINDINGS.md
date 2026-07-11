@@ -187,6 +187,18 @@ Indev hardness overrides, hoe till, bow behaviour.
 15. [P] Hardness-0 blocks don't wear tools in our insta-break path; genuine
     onBlockDestroyed always fires.
 
+FIXED in batch 5: domain-4 items 1, 2, 3, 4, 7, 14 (TNT fuse 80 +
+chain 10..29 + fuse sound + no Indev defuse, pickup delay 10, lava
+tickRate 25). Item 6 was already fixed in batch 3.
+STILL OPEN (next session): 5 (Indev explosion drop table), 8 (item
+lava pop/burn/push-out), 9 (drop spin/bob rates + instant pickup),
+10 (TNT render swell/flash), 11+mobs-4 (Indev explosion ray-march +
+damage curve + knockback, one combined fix), 12 (farmland trampling),
+13 (crops canBlockStay), 15 (c0.30 random-tick rate), 16 (night
+brightness curve), 17 (physics change notifications), 18 (torch
+placement fail), 19 (death-scatter notes decision - ASK USER),
+plus mobs 9/10/12, items 7-partial/9/10/12/13/15, GUI 4/6/8/13/14c.
+
 ## Domain 4: Entities + environment (audit complete)
 
 MATCHES confirmed for: EntityItem core physics/pickup/toss/despawn, render

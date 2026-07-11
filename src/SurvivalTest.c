@@ -191,7 +191,9 @@ static void  Indev_EntitySplash(Vec3 pos, Vec3 vel, float width);
 /*  fuseTicks lets callers other than mining (the explosion chain-reaction) */
 /*  arm a shorter, randomized fuse instead of the full PrimedTnt default. */
 static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks);
-#define TNT_FUSE_TICKS 40   /* PrimedTnt's default life */
+#define TNT_FUSE_TICKS 40   /* c0.30 PrimedTnt's default life */
+/* Indev EntityTNTPrimed defaults to fuse = 80 (4 seconds) */
+#define TNT_FUSE_DEFAULT() (IndevTest_Enabled ? 80 : TNT_FUSE_TICKS)
 /* Defined later (TNT section, where its billboard-render siblings live) - */
 /*  forward declared so RenderDrops above it can draw item-id drop sprites. */
 static void SurvivalTest_RenderItemDropSprites(float t);
@@ -529,6 +531,9 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	d->age         = 0.0f;
 	d->prevAge     = 0.0f; /* seed so the first frame doesn't lerp in from a stale phase */
 	d->rot0        = Random_Float(&st_dropRng) * 360.0f;
+	/* Indev Block.dropBlockAsItemWithChance: every block drop spawns with
+	    delayBeforeCanPickup = 10 ticks (c0.30 has no such delay) */
+	d->pickupDelay = IndevTest_Enabled ? 10.0f / 20.0f : 0.0f;
 	d->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
 	d->active      = true;
 }
@@ -642,7 +647,7 @@ static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	oldBlock = IndevTest_CanonicalBlock(oldBlock);
 	dropId   = oldBlock; /* most blocks drop themselves */
 
-	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); return; }
+	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); return; }
 
 	/* BlockCrops: wheat only at full stage, plus up to 3 bonus seed rolls */
 	/*  weighted by the stage. Farmland drops dirt (BlockFarmland.idDropped). */
@@ -693,7 +698,7 @@ static void SurvivalTest_SpawnDropsForBlock(IVec3 coords, BlockID oldBlock) {
 
 	if (oldBlock == BLOCK_TNT) {
 		/* TNTPhysics.onBreak spawns a PrimedTnt with the full default fuse. */
-		SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS);
+		SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT());
 		return;
 	}
 	if (!SurvivalTest_GetBlockDrop(oldBlock, &dropBlock, &count)) return;
@@ -1635,6 +1640,11 @@ static void SurvivalTest_ArmTnt(IVec3 coords, int fuseTicks) {
 		SurvivalTest_SpawnDropAt(pos, BLOCK_TNT, 1);
 		return;
 	}
+	/* BlockTNT.onBlockDestroyedByPlayer plays random.fuse 1.0/1.0 when a
+	    full-fuse Indev TNT is primed (mined or consumed by fire); the
+	    partial-fuse chain-reaction arms stay silent like genuine */
+	if (IndevTest_Enabled && fuseTicks >= 80)
+		SurvivalTest_PlaySoundAtBlock(coords.x, coords.y, coords.z, MOBSND_FUSE, 1.0f, 1.0f);
 	tnt = &st_tnt[slot];
 
 	/* InputHandler_DeleteBlock already cleared the block to air; unlike before */
@@ -2860,7 +2870,10 @@ static void SurvivalTest_Explode(Vec3 center, int radius) {
 		coords.x = xx; coords.y = yy; coords.z = zz;
 		if (block == BLOCK_TNT) {
 			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
-			SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS / 8 + Random_Next(&st_dropRng, TNT_FUSE_TICKS / 4));
+			{
+				int f = TNT_FUSE_DEFAULT(); /* 5..14 c0.30, 10..29 Indev */
+				SurvivalTest_ArmTnt(coords, f / 8 + Random_Next(&st_dropRng, f / 4));
+			}
 		} else {
 			SurvivalTest_ExplodeDropsForBlock(coords, block);
 			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
@@ -4475,7 +4488,8 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/*  hit a lit TNT and defuse it (hurt() with a Player attacker) instead of a */
 	/*  mob. Only if it's closer than the best mob though (cap the reach at that */
 	/*  mob's distance), so whichever the crosshair actually lands on wins. */
-	if (SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
+	if (!IndevTest_Enabled && /* Indev primed TNT cannot be punched out */
+		SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
 		HeldBlockRenderer_ClickAnim(true);
 		return true;
 	}
@@ -5794,7 +5808,7 @@ void SurvivalTest_DebugGiveItem(int id) {
 void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
 void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
 /* Fire consuming a TNT block arms it (onBlockDestroyedByPlayer) */
-void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled) SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS); }
+void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled) SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); }
 
 /* .mclevel entity save: iterates live mobs (returns the next active index */
 /*  after prev, or -1) and physical item drops, for the Entities list. */
@@ -6737,7 +6751,7 @@ void SurvivalTest_DebugSpawnTnt(void) {
 	coords.x = Math_Floor(pos.x);
 	coords.y = Math_Floor(pos.y);
 	coords.z = Math_Floor(pos.z);
-	SurvivalTest_ArmTnt(coords, TNT_FUSE_TICKS);
+	SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT());
 }
 
 void SurvivalTest_DebugShootArrow(void) {
