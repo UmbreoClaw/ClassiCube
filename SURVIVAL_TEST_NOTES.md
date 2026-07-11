@@ -4720,6 +4720,33 @@ Round 3 status: all six spec domains DONE (dig-time f326483, explosion
 c0812dd, arrows e5f082f, env ticks e941a27, entity polish c9d2494,
 GUI leftovers 843508a).
 
+### User-reported fixes after round 3 (commit 5d98a00)
+- **Paperdoll facing is BACKEND-DEPENDENT**: D3D9/D3D11 use a reversed
+  depth buffer (ZFUNC GREATEREQUAL; GL is LEQUAL) with the same ortho z
+  row, so which side of the doll wins the depth test flips per backend.
+  The GL-side 180-yaw fix flipped the user's D3D9 doll. Now
+  DOLL_BASE_YAW is 0 on CC_BUILD_D3D9/D3D11, 180 elsewhere. Cursor
+  tracking is backend-independent (same screen x/y, only occlusion
+  differs). LESSON: anything that relies on depth ordering inside our
+  custom GUI 3D passes must account for the reversed-Z backends.
+- **OOB horizon planes are genuine**: the earlier "genuine draws no
+  border walls or horizon plane" note was HALF wrong - no walls, but
+  RenderGlobal.oobGroundRenderer/oobWaterRenderer draw infinite planes
+  outside the map: ground at World.groundLevel (grass.png when
+  groundLevel > waterLevel && defaultFluid == water, else dirt.png) and
+  the fluid at waterLevel. Air-walls-only left Flat/Inland ringed by
+  void with the sun visible UNDER the world near dawn/dusk (user
+  report). Now IndevTest_SetSurroundings pins groundLevel/waterLevel/
+  defaultFluid (IndevGen post-gen values incl. the genuine per-type
+  adjustments; .mclevel Surrounding* tags on load - GroundHeight read
+  SIGNED, floating maps store -128) and maps them onto the engine
+  planes: dry -> grass/dirt edge plane at groundLevel + sides AIR;
+  water -> still fluid at waterLevel + dirt sides skirt to groundLevel
+  (approximates the submerged OOB ground plane); floating -> void.
+  The .mclevel saver writes the pinned values back (the live env is
+  the remapped form - deriving from Env.EdgeHeight post-apply would
+  corrupt round-trips).
+
 ---
 
 ## ENGINE NOTES (useful pointers)
