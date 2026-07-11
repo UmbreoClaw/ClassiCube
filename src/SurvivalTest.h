@@ -135,6 +135,8 @@ int  SurvivalTest_PaintingNext(int prev, IVec3* tile, int* dir, const char** mot
 void SurvivalTest_RestorePainting(int tileX, int tileY, int tileZ, int dir, const cc_string* motive);
 /* Held-item helpers for the Indev layer (hoe wear, seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount);
+/* Wears the held tool by its onBlockDestroyed amount (insta-break path). */
+void SurvivalTest_WearHeldToolForBlockBreak(void);
 void SurvivalTest_ConsumeHeld(void);
 /* World.playSoundAtPlayer for a block-centre sound source (Indev only). */
 void SurvivalTest_PlaySoundAtBlock(int x, int y, int z, int type, float vol, float pitch);

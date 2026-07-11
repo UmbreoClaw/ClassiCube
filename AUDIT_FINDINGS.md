@@ -132,10 +132,11 @@ mob push (player push superseded note confirmed implemented).
 8. [P] Indev aggro-on-hit: no same-species exemption in Indev
    (EntityMob.java:38-42); ours applies c0.30 exclusion in both modes
    (SurvivalTest.c:2737-2742).
-9. [P] Indev drowning: 2 HP every 20 ticks (air==-20 reset) + 8-bubble
+9. [V] FIXED in round 3 (entity polish): Indev drowning: 2 HP every 20 ticks (air==-20 reset) + 8-bubble
    burst (EntityLiving.java:85-100); ours c0.30 cadence (~2 HP/10 ticks),
    no bubbles (SurvivalTest.c:3706-3711).
-10. [P] Mob bbox sizes come from engine models, differ from genuine
+10. [V] FIXED in round 3 (entity polish - per-mode setSize tables +
+    Mob_ApplySize re-applied on every model swap): Mob bbox sizes come from engine models, differ from genuine
     (c0.30 pig/sheep/spider 1.4 wide; ours ~0.875-0.94). Wide impact but
     engine-model constraint — decide: override Size per mode?
 11. [P] Indev kill score: genuine awards none; ours adds c0.30 deathScore
@@ -191,12 +192,15 @@ Indev hardness overrides, hoe till, bow behaviour.
     stuck-block re-loosen kick, arrowShake pickup gate, 0.3/side target
     grow, airTicks owner grace, facing 0.2 lerp. c0.30 paths byte-kept.
     Rig-verified: |v|=1.509 at spawn, one tick = *0.99 - 0.03 exactly.
-13. [P] Lit furnace should drop LIT furnace (62) in Indev (no idDropped
-    override); ours canonicalises to idle. Low priority; notes claim wrong.
+13. [V] Lit furnace drop: FIXED in round 3 (entity polish) - new
+    IndevTest_DropFormBlock keeps lit 62 in the drop paths (mining +
+    explosion); CanonicalBlock untouched for recipes/naming; placed lit
+    furnaces rotate like idle ones and genuinely stay lit until used.
 14. [P] Mushroom eating is c0.30-only (SurvivalGameMode.useItem); ours
     allows in Indev too (SurvivalTest.c:5872-5878).
-15. [P] Hardness-0 blocks don't wear tools in our insta-break path; genuine
-    onBlockDestroyed always fires.
+15. [V] Insta-break tool wear: FIXED in round 3 (entity polish) -
+    SurvivalTest_WearHeldToolForBlockBreak in InputHandler_DeleteBlock
+    (wear before removal, like sendBlockRemoved's onBlockDestroyed).
 
 FIXED in batch 5: domain-4 items 1, 2, 3, 4, 7, 14 (TNT fuse 80 +
 chain 10..29 + fuse sound + no Indev defuse, pickup delay 10, lava
@@ -231,13 +235,22 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
 6. [P] Indev obsidian mined drop -> cobble. FIXED in batch 3 (overlap).
 7. [P] Mined drops need delayBeforeCanPickup=10 (Block.java:287); ours 0
    (only Q-toss gets 40) - items vacuum instantly.
-8. [P] Indev EntityItem lava pop + burn (health 5) + push-out-of-solid
-   missing; drops rest inert in lava.
-9. [P] Indev drop spin 2.86deg/tick + bob arg 0.1 rad/tick w/ random
-   hoverStart phase; ours c0.30 3deg/0.3 both modes. Indev pickup is
-   instant (no fly-in anim).
-10. [P] Indev TNT render: swell 1+t^4*0.3 last 10 ticks, flash fuse/5%2
-    alpha (1-(fuse+1)/100)*0.8, smoke at y+0.5; ours c0.30 pattern.
+8. [V] Indev EntityItem lava/fire: FIXED in round 3 (entity polish) -
+   health 5, isBoundingBoxBurning (fire/lava ids, UNSHRUNK box; the agent's
+   handleLavaMovement claim was wrong - the -0.4 shrink degenerates for a
+   0.25 box) deals 1/tick, silent death; centre-cell lava fizz-bounce
+   (motionY 0.2, x/z (r-r)*0.2, random.fizz 0.4/2.0+r*0.4); pushOutOfBlocks
+   six-face minimum-exit port. Rig-verified death in a walled lava pocket.
+9. [V] Indev drop spin/bob: FIXED in round 3 (entity polish) - Drop_SpinDeg/
+   Drop_Bob mode split: Indev (age_ticks/20 + hoverStart) rad spin + 
+   sin(age_ticks/10 + hoverStart) bob (1/3 the c0.30 frequency), rot0
+   folded to hoverStart. NOTE pickup delay was ALREADY correct (10-tick
+   block drops - genuine is NOT instant; c0.30 is the instant one).
+10. [V] Indev TNT render: FIXED in round 3 (entity polish) - swell
+    (1-(fuse-t+1)/10 clamped)^4*0.3+1 over the last 10 ticks on cube+glow
+    (render-only, pick box unswollen), flash only while fuse/5%2==0 at
+    alpha (1-(fuse-t+1)/100)*0.8, smoke at y+0.5 (c0.30 keeps +0.6).
+    gdb-verified: swell(5)=1.00768, swell(0,t=.5)=1.24435 exact.
 11. [P] Indev explosion ray-march block destruction + entity velocity
     knockback (overlaps mobs finding 4 - one combined fix).
 12. [V] **Farmland trampling**: FIXED in round 3 (env batch) -

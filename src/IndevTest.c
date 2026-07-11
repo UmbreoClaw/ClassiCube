@@ -664,10 +664,12 @@ static cc_bool Indev_IsFurnaceLit(BlockID b) {
 	return b == INDEV_BLOCK_FURNACE_LIT || (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3);
 }
 
-/* Inventory/drop form of a block (directional variants -> canonical id). */
-/* BlockFurnace.idDropped is Block.stoneOvenIdle for BOTH furnace states, so */
-/*  every lit form (base or directional) canonicalises to the idle furnace - */
-/*  mining a burning furnace must never put a lit one in the inventory. */
+/* Inventory/naming form of a block (directional variants -> canonical id, */
+/*  lit furnace -> idle). NOTE this is NOT the drop form: in-20100223 */
+/*  BlockFurnace has no idDropped override, so Block.idDropped returns the */
+/*  block's own id and a LIT furnace genuinely drops the lit block (62) - */
+/*  see IndevTest_DropFormBlock. This fold is for recipes/naming/placement */
+/*  bookkeeping only. */
 BlockID IndevTest_CanonicalBlock(BlockID b) {
 	if (Indev_IsWallTorch(b)) return INDEV_BLOCK_TORCH;
 	if (b >= INDEV_BLOCK_CHEST_V0 && b <= INDEV_BLOCK_CHEST_V0 + 3) return INDEV_BLOCK_CHEST;
@@ -675,6 +677,13 @@ BlockID IndevTest_CanonicalBlock(BlockID b) {
 	if (b >= INDEV_BLOCK_FURNL_V0 && b <= INDEV_BLOCK_FURNL_V0 + 3) return INDEV_BLOCK_FURNACE;
 	if (b == INDEV_BLOCK_FURNACE_LIT) return INDEV_BLOCK_FURNACE;
 	return b;
+}
+
+/* Block.idDropped form: directional variants fold to canonical, but a lit
+    furnace keeps its lit id (no idDropped override in in-20100223). */
+BlockID IndevTest_DropFormBlock(BlockID b) {
+	if (Indev_IsFurnaceLit(b)) return INDEV_BLOCK_FURNACE_LIT;
+	return IndevTest_CanonicalBlock(b);
 }
 
 /* Indev facing metadata (2-5) of a container block; canonical ids face -Z. */
@@ -2135,7 +2144,8 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 	/* Player placed a canonical chest/furnace: rotate it so the front faces */
 	/*  the player (BlockFurnace.setDefaultDirection / Beta onBlockPlacedBy: */
 	/*  quadrant of the placer's yaw picks metadata 2/5/3/4). */
-	if (block == INDEV_BLOCK_CHEST || block == INDEV_BLOCK_FURNACE) {
+	if (block == INDEV_BLOCK_CHEST || block == INDEV_BLOCK_FURNACE ||
+		block == INDEV_BLOCK_FURNACE_LIT) { /* placed lit furnace (drop of a mined one) */
 		p = &Entities.CurPlayer->Base;
 		q = (int)Math_Floor(p->Yaw * 4.0f / 360.0f + 0.5f) & 3;
 		/* ClassiCube's yaw is 180 degrees from Beta's convention (live-test */

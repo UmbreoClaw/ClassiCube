@@ -427,6 +427,9 @@ static void InputHandler_DeleteBlock(void) {
 	/*  hitBlock(x,y,z) override (which does nothing for hardness > 0 blocks). */
 	if (!SurvivalTest_CanInstaBreak(old)) return;
 
+	/* sendBlockRemoved: Item.onBlockDestroyed wears the held tool even on
+	    the instant-click path (wear before the removal, like genuine) */
+	SurvivalTest_WearHeldToolForBlockBreak();
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
 }

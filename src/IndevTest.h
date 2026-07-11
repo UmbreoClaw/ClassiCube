@@ -145,6 +145,9 @@ BlockRaw IndevTest_BlockFromIndev(BlockRaw b);
 /*  block, its Indev facing metadata (2-5), and the directional variant of */
 /*  a canonical container for a given metadata. */
 BlockID IndevTest_CanonicalBlock(BlockID b);
+/* Block.idDropped form: like CanonicalBlock but a lit furnace keeps its */
+/*  lit id (in-20100223 BlockFurnace has no idDropped override). */
+BlockID IndevTest_DropFormBlock(BlockID b);
 int     IndevTest_BlockFacingMeta(BlockID b);
 BlockID IndevTest_FacingVariant(BlockID canonical, int meta);
 /* Runs the container-removal lifecycle (chest scatter + tile entity */

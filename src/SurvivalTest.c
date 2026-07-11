@@ -285,6 +285,7 @@ struct DropItem {
 	float   pickupTime;  /* seconds into the pickup-fly animation */
 	Vec3    pickupFrom;  /* position captured the instant pickup started */
 	cc_bool wasInWater;  /* last tick's water state - the air->water edge splashes */
+	cc_int8 health;      /* EntityItem.health = 5; fire/lava contact deals 1/tick */
 };
 static struct DropItem st_drops[DROP_MAX];
 /* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
@@ -327,6 +328,27 @@ static GfxResourceID st_glowVB;
 /*  animation instead of one that steps once per 20 Hz tick. */
 static float DropItem_Phase(struct DropItem* d, float age) {
 	return d->rot0 + age * DROP_SPIN_DEG_PER_SEC;
+}
+
+/* Indev RenderItem.doRender animates from EntityItem.hoverStart instead:
+    spin = (age_ticks/20 + hoverStart) radians (57.3 deg/sec, close to
+    c0.30's 60), bob = sin(age_ticks/10 + hoverStart) * 0.1 + 0.1 - a THIRD
+    of c0.30's bob frequency. rot0 (uniform 0..360 deg) doubles as
+    hoverStart (uniform 0..2pi) via a deg->rad fold. */
+static float Drop_SpinDeg(struct DropItem* d, float age) {
+	if (IndevTest_Enabled) {
+		float hover = d->rot0 * MATH_DEG2RAD;
+		return (age + hover) * MATH_RAD2DEG; /* age secs = age_ticks/20 */
+	}
+	return DropItem_Phase(d, age);
+}
+
+static float Drop_Bob(struct DropItem* d, float age) {
+	if (IndevTest_Enabled) {
+		float hover = d->rot0 * MATH_DEG2RAD;
+		return Math_SinF(age * 2.0f + hover) * 0.1f + 0.1f; /* 2 rad/sec */
+	}
+	return Math_SinF(DropItem_Phase(d, age) / 10.0f) * 0.1f + 0.1f;
 }
 
 /* Survival Test redrew the item in additive white once per ~second for a */
@@ -393,13 +415,12 @@ static void DropItem_RotatedCorners(float half, float cx, float cz, float angleR
 /*  shared by the item cube, its glow shell, and the sprite-quad drop variant. */
 static void DropItem_ComputeGeometry(struct DropItem* d, Vec3 pos, float age, float* yLo, float* yHi,
 									  Vec3* a, Vec3* b, Vec3* c, Vec3* e) {
-	float var3 = DropItem_Phase(d, age);
-	float bob  = Math_SinF(var3 / 10.0f) * 0.1f + 0.1f;
+	float bob = Drop_Bob(d, age);
 	*yLo = pos.y + bob;
 	*yHi = *yLo + DROP_ITEM_HALF * 2.0f;
 
 	DropItem_RotatedCorners(DROP_ITEM_HALF, pos.x, pos.z,
-							 var3 * MATH_DEG2RAD, a, b, c, e);
+							 Drop_SpinDeg(d, age) * MATH_DEG2RAD, a, b, c, e);
 }
 
 /* Appends the 6-face, 24-vertex textured cube for one drop (cropped to the */
@@ -537,6 +558,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	    delayBeforeCanPickup = 10 ticks (c0.30 has no such delay) */
 	d->pickupDelay = IndevTest_Enabled ? 10.0f / 20.0f : 0.0f;
 	d->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
+	d->health      = 5;    /* EntityItem.health */
 	d->active      = true;
 }
 
@@ -645,8 +667,9 @@ static void SurvivalTest_SpawnIndevDrops(IVec3 coords, BlockID oldBlock) {
 	cc_uint16 dropId;
 	int count = 1, i;
 
-	/* Directional chest/furnace variants drop their canonical block */
-	oldBlock = IndevTest_CanonicalBlock(oldBlock);
+	/* Directional chest/furnace variants drop their canonical block - but a
+	    LIT furnace drops the lit block 62 (no idDropped override in Indev) */
+	oldBlock = IndevTest_DropFormBlock(oldBlock);
 	dropId   = oldBlock; /* most blocks drop themselves */
 
 	if (oldBlock == BLOCK_TNT) { SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); return; }
@@ -811,6 +834,64 @@ static void SurvivalTest_DropTryPickup(struct DropItem* d, struct Entity* pe) {
 	d->pickupFrom = d->position;
 }
 
+/* World.isBoundingBoxBurning for a drop: any fire or lava block overlapping
+    the item's (unshrunk) box. NOTE: genuine handleLavaMovement's 10-damage
+    hit never fires for the 0.25-tall item box - the -0.4 Y shrink makes the
+    test band degenerate/empty - so burning contact at 1 damage/tick (dead
+    in 5 ticks, silent - EntityItem.attackEntityFrom has no sound/particles)
+    is the only kill path. Item fire counters are irrelevant at 5 health. */
+static cc_bool Drop_BoxBurning(struct DropItem* d) {
+	int x0 = Math_Floor(d->position.x - DROP_ITEM_HALF), x1 = Math_Floor(d->position.x + DROP_ITEM_HALF);
+	int y0 = Math_Floor(d->position.y),                  y1 = Math_Floor(d->position.y + DROP_ITEM_HALF * 2.0f);
+	int z0 = Math_Floor(d->position.z - DROP_ITEM_HALF), z1 = Math_Floor(d->position.z + DROP_ITEM_HALF);
+	int x, y, z;
+	BlockID b;
+	for (x = x0; x <= x1; x++) {
+	for (y = y0; y <= y1; y++) {
+	for (z = z0; z <= z1; z++) {
+		if (!World_Contains(x, y, z)) continue;
+		b = World_GetBlock(x, y, z);
+		if (IndevFire_IsFire(b) || ST_IsLavaBlock(b)) return true;
+	}}}
+	return false;
+}
+
+/* EntityItem.pushOutOfBlocks: when the item's centre cell is a full opaque
+    cube, pick the nearest OPEN face among the six neighbours and overwrite
+    that single axis's velocity (0.1..0.3 blocks/tick) toward it. Runs every
+    tick, so a buried item oozes out over a few ticks. */
+static void Drop_PushOutOfBlocks(struct DropItem* d) {
+	float px = d->position.x, py = d->position.y + DROP_ITEM_HALF, pz = d->position.z;
+	int bx = Math_Floor(px), by = Math_Floor(py), bz = Math_Floor(pz);
+	float fx, fy, fz, best, mag;
+	int face;
+
+	if (!World_Contains(bx, by, bz))                     return;
+	if (!Blocks.FullOpaque[World_GetBlock(bx, by, bz)]) return;
+
+	fx = px - bx; fy = py - by; fz = pz - bz;
+	face = -1; best = 9999.0f;
+	#define DROP_OPEN(X, Y, Z) (!World_Contains(X, Y, Z) || !Blocks.FullOpaque[World_GetBlock((X), (Y), (Z))])
+	if (DROP_OPEN(bx - 1, by, bz))                        { face = 0; best = fx; }
+	if (DROP_OPEN(bx + 1, by, bz) && 1.0f - fx < best)    { face = 1; best = 1.0f - fx; }
+	if (DROP_OPEN(bx, by - 1, bz) && fy < best)           { face = 2; best = fy; }
+	if (DROP_OPEN(bx, by + 1, bz) && 1.0f - fy < best)    { face = 3; best = 1.0f - fy; }
+	if (DROP_OPEN(bx, by, bz - 1) && fz < best)           { face = 4; best = fz; }
+	if (DROP_OPEN(bx, by, bz + 1) && 1.0f - fz < best)    { face = 5; }
+	#undef DROP_OPEN
+	if (face < 0) return;
+
+	mag = (Random_Float(&st_dropRng) * 0.2f + 0.1f) * 20.0f; /* per-second */
+	switch (face) {
+	case 0: d->velocity.x = -mag; break;
+	case 1: d->velocity.x =  mag; break;
+	case 2: d->velocity.y = -mag; break;
+	case 3: d->velocity.y =  mag; break;
+	case 4: d->velocity.z = -mag; break;
+	case 5: d->velocity.z =  mag; break;
+	}
+}
+
 static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 	struct DropItem* d;
 	float distance;
@@ -841,6 +922,29 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 
 		d->age += delta;
 		if (d->age >= DROP_LIFETIME_SECS) { d->active = false; continue; }
+
+		/* Indev EntityItem: fire/lava contact + the lava fizz-bounce + the
+		    push-out-of-solid-blocks nudge (c0.30 items have none of these) */
+		if (IndevTest_Enabled) {
+			if (Drop_BoxBurning(d)) {
+				d->health--;
+				if (d->health <= 0) { d->active = false; continue; }
+			}
+			{
+				int cx = Math_Floor(d->position.x);
+				int cy = Math_Floor(d->position.y + DROP_ITEM_HALF);
+				int cz = Math_Floor(d->position.z);
+				if (World_Contains(cx, cy, cz) && ST_IsLavaBlock(World_GetBlock(cx, cy, cz))) {
+					/* motion is per-tick in genuine; drop velocity per-second */
+					d->velocity.y = 0.2f * 20.0f;
+					d->velocity.x = (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.2f * 20.0f;
+					d->velocity.z = (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.2f * 20.0f;
+					Indev_PlaySoundAt(d->position, MOBSND_FIZZ,
+						0.4f, 2.0f + Random_Float(&st_dropRng) * 0.4f);
+				}
+			}
+			Drop_PushOutOfBlocks(d);
+		}
 		SurvivalTest_DropPhysics(d, delta);
 
 		/* Entity.onEntityUpdate: items splash when they land in water too */
@@ -1767,7 +1871,9 @@ static void SurvivalTest_TickTnt(void) {
 		/*  so a life=40 TNT smokes on 40 ticks (centre + 0.6, drifting up off the */
 		/*  top of the cube) and detonates on the 41st, with no puff that tick. */
 		if (tnt->ticksLeft-- > 0) {
-			SurvivalTest_SpawnTntSmoke(tnt->pos.x, tnt->pos.y + 0.6f, tnt->pos.z);
+			/* smoke spawn height: Indev EntityTNTPrimed uses +0.5, c0.30 +0.6 */
+			SurvivalTest_SpawnTntSmoke(tnt->pos.x,
+				tnt->pos.y + (IndevTest_Enabled ? 0.5f : 0.6f), tnt->pos.z);
 			continue;
 		}
 
@@ -1796,6 +1902,22 @@ static float TntFuse_GlowAlpha(int ticksLeft) {
 	return alpha;
 }
 
+/* Indev RenderTNTPrimed: the cube swells over the LAST 10 fuse ticks -
+    s = (1 - (fuse - partial + 1)/10) clamped 0..1, then ^4, scale
+    1.0 -> 1.3. Render-only: pick/defuse boxes stay a full block. c0.30
+    has no swell (returns 1). */
+static float TntFuse_Swell(int ticksLeft, float t) {
+	float f, s;
+	if (!IndevTest_Enabled) return 1.0f;
+	f = (float)ticksLeft - t + 1.0f;
+	if (f >= 10.0f) return 1.0f;
+	s = 1.0f - f / 10.0f;
+	if (s < 0.0f) s = 0.0f;
+	if (s > 1.0f) s = 1.0f;
+	s *= s; s *= s;
+	return 1.0f + s * 0.3f;
+}
+
 /* Untextured white glow shell, drawn additively over the lit TNT cube - same */
 /*  technique as the dropped-item twinkle (DropItem_BuildGlowCube), just an */
 /*  axis-aligned full block instead of a small spinning item cube. */
@@ -1812,11 +1934,11 @@ static GfxResourceID st_tntCubeVB;
 #define TNT_SMOKE_MAX_VERTICES (TNT_SMOKE_MAX * 4)
 static GfxResourceID st_tntSmokeVB;
 
-static void TntFuse_BuildGlowCube(float ox, float oy, float oz, PackedCol col, struct VertexColoured** vertices) {
+static void TntFuse_BuildGlowCube(float ox, float oy, float oz, float size, PackedCol col, struct VertexColoured** vertices) {
 	struct VertexColoured* v = *vertices;
-	float x0 = ox, x1 = ox + 1.0f;
-	float y0 = oy, y1 = oy + 1.0f;
-	float z0 = oz, z1 = oz + 1.0f;
+	float x0 = ox, x1 = ox + size;
+	float y0 = oy, y1 = oy + size;
+	float z0 = oz, z1 = oz + size;
 
 	#define TNT_GLOW_V(px, py, pz) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v++;
 	TNT_GLOW_V(x0,y0,z0) TNT_GLOW_V(x1,y0,z0) TNT_GLOW_V(x1,y0,z1) TNT_GLOW_V(x0,y0,z1) /* bottom */
@@ -1833,12 +1955,12 @@ static void TntFuse_BuildGlowCube(float ox, float oy, float oz, PackedCol col, s
 /*  at ox,oy,oz), tinted by a single uniform brightness - matching the original */
 /*  model.renderAll(x-0.5, y-0.5, z-0.5, brightness), which does no per-face */
 /*  shading. The four corners per face are wound so the tile sits upright. */
-static void TntCube_BuildFace(float ox, float oy, float oz, int face,
+static void TntCube_BuildFace(float ox, float oy, float oz, float size, int face,
 							   TextureRec r, PackedCol col, struct VertexTextured** vertices) {
 	struct VertexTextured* v = *vertices;
-	float x0 = ox, x1 = ox + 1.0f;
-	float y0 = oy, y1 = oy + 1.0f;
-	float z0 = oz, z1 = oz + 1.0f;
+	float x0 = ox, x1 = ox + size;
+	float y0 = oy, y1 = oy + size;
+	float z0 = oz, z1 = oz + size;
 
 	#define TNT_TV(px, py, pz, uu, vv) v->x = (px); v->y = (py); v->z = (pz); v->Col = col; v->U = (uu); v->V = (vv); v++;
 	switch (face) {
@@ -1871,6 +1993,7 @@ static void SurvivalTest_RenderTntCubes(float t) {
 	TextureRec rec;
 	PackedCol col;
 	Vec3 pos;
+	float swell;
 	int i, f, atlas, idx, count;
 	cc_bool any = false;
 
@@ -1894,12 +2017,14 @@ static void SurvivalTest_RenderTntCubes(float t) {
 			if (!tnt->active) continue;
 
 			Vec3_Lerp(&pos, &tnt->prevPos, &tnt->pos, t);
-			col = DropItem_WorldColor(&pos);
+			col   = DropItem_WorldColor(&pos);
+			swell = TntFuse_Swell(tnt->ticksLeft, t);
 			for (f = 0; f < FACE_COUNT; f++) {
 				loc = Block_Tex(BLOCK_TNT, f);
 				if (Atlas1D_Index(loc) != atlas) continue;
 				rec = Atlas1D_TexRec(loc, 1, &idx);
-				TntCube_BuildFace(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f, f, rec, col, &ptr);
+				TntCube_BuildFace(pos.x - 0.5f * swell, pos.y - 0.5f * swell,
+								  pos.z - 0.5f * swell, swell, f, rec, col, &ptr);
 				count += 4;
 			}
 		}
@@ -1919,6 +2044,7 @@ static void SurvivalTest_RenderTntGlow(float t) {
 	struct TntFuse* tnt;
 	PackedCol col;
 	Vec3 pos;
+	float alpha, swell;
 	int i, count = 0;
 	cc_bool any = false;
 
@@ -1939,8 +2065,24 @@ static void SurvivalTest_RenderTntGlow(float t) {
 		if (!tnt->active) continue;
 
 		Vec3_Lerp(&pos, &tnt->prevPos, &tnt->pos, t);
-		col = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * TntFuse_GlowAlpha(tnt->ticksLeft)));
-		TntFuse_BuildGlowCube(pos.x - 0.5f, pos.y - 0.5f, pos.z - 0.5f, col, &ptr);
+		if (IndevTest_Enabled) {
+			/* RenderTNTPrimed: overlay only while fuse/5 % 2 == 0 (5 ticks
+			    on / 5 off), alpha ramping (1 - (fuse+1)/100) * 0.8 - ~0.17
+			    freshly armed up to 0.8 at detonation. Additive shell kept
+			    as the established stand-in for genuine's SRC_ALPHA/
+			    DST_ALPHA framebuffer blend. */
+			int fuse = tnt->ticksLeft < 0 ? 0 : tnt->ticksLeft;
+			if (fuse / 5 % 2 != 0) continue;
+			alpha = (1.0f - ((float)fuse - t + 1.0f) / 100.0f) * 0.8f;
+			if (alpha < 0.0f) alpha = 0.0f;
+			if (alpha > 1.0f) alpha = 1.0f;
+		} else {
+			alpha = TntFuse_GlowAlpha(tnt->ticksLeft);
+		}
+		swell = TntFuse_Swell(tnt->ticksLeft, t);
+		col   = PackedCol_Make(255, 255, 255, (cc_uint8)(255.0f * alpha));
+		TntFuse_BuildGlowCube(pos.x - 0.5f * swell, pos.y - 0.5f * swell,
+							  pos.z - 0.5f * swell, swell, col, &ptr);
 		count += TNT_GLOW_VERTICES_PER_BLOCK;
 	}
 	Gfx_UnlockDynamicVb(st_tntGlowVB);
@@ -2018,8 +2160,8 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 
 		Vec3_Lerp(&pos, &d->prevPos, &d->position, t);
 		renderAge = Math_Lerp(d->prevAge, d->age, t);
-		/* same bob the block cubes use (sin(phase/10) * 0.1 + 0.1) */
-		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
+		/* same bob the block cubes use (mode-split in Drop_Bob) */
+		bob = Drop_Bob(d, renderAge);
 		pos.y += bob + 0.125f;
 
 		/* RenderItem.doRender: 0.5-unit UPRIGHT quads (yaw-only billboard), */
@@ -2050,7 +2192,7 @@ static void SurvivalTest_RenderItemDropSprites(float t) {
 
 		Vec3_Lerp(&pos, &d->prevPos, &d->position, t);
 		renderAge = Math_Lerp(d->prevAge, d->age, t);
-		bob = Math_SinF(DropItem_Phase(d, renderAge) / 10.0f) * 0.1f + 0.1f;
+		bob = Drop_Bob(d, renderAge);
 		pos.y += bob + 0.125f;
 
 		copies = Drop_Copies(d->count);
@@ -2242,17 +2384,26 @@ struct MobTypeInfo {
 	int         deathScore; /* points awarded to the player on a credited kill (Mob.deathScore) */
 	float       heightOff;  /* Entity.heightOffset - genuine entity.y is feet + this (an */
 	                        /*  eye-ish anchor), used for blast distances and LOS rays */
+	float       w030, h030;   /* c0.30 setSize(width, height) */
+	float       wIndev, hIndev; /* Indev setSize - pig/sheep shrink vs c0.30 */
 };
 /* Order matches MobSpawner.spawn's `type = random.nextInt(6)` exactly, so */
 /*  Mob_SpawnerRun can index straight into this table with that roll. */
+/* Collision sizes are the genuine setSize values (Entity default 0.6x1.8; */
+/*  c0.30 QuadrupedMob 1.4x1.2, Sheep 1.4x1.72, Spider 1.4x0.9; Indev */
+/*  shrinks EntityPig to 0.9x0.9 and EntitySheep to 0.9x1.3) - the engine */
+/*  models' GetCollisionSize boxes were all slightly small. */
 static const struct MobTypeInfo mobTypeInfo[MOB_TYPE_COUNT] = {
-	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false,  80, 1.62f },
-	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false, 120, 1.62f },
-	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f },
-	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200, 1.62f },
-	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105, 0.72f },
-	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f },
+	/* ZOMBIE   */ { "zombie",   MOB_AI_ATTACK,     1.00f, 30.0f, 6, false,  80, 1.62f, 0.6f,1.8f,  0.6f,1.8f },
+	/* SKELETON */ { "skeleton", MOB_AI_ATTACK,     0.30f,  0.0f, 8, false, 120, 1.62f, 0.6f,1.8f,  0.6f,1.8f },
+	/* PIG      */ { "pig",      MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f, 1.4f,1.2f,  0.9f,0.9f },
+	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200, 1.62f, 0.6f,1.8f,  0.6f,1.8f },
+	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105, 0.72f, 1.4f,0.9f,  1.4f,0.9f },
+	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f, 1.4f,1.72f, 0.9f,1.3f },
 };
+
+struct Mob;
+static void Mob_ApplySize(struct Mob* m);
 
 struct Mob {
 	struct Entity Base;
@@ -2330,6 +2481,16 @@ struct Mob {
 	cc_bool noAI;
 };
 static struct Mob st_mobs[MOB_MAX];
+
+/* Genuine Entity.setSize per mob type and mode. Entity_SetModel resets
+    Base.Size from the engine model's GetCollisionSize (all slightly small),
+    so this is re-applied after EVERY model swap (sheep shearing). */
+static void Mob_ApplySize(struct Mob* m) {
+	const struct MobTypeInfo* info = &mobTypeInfo[m->type];
+	float w = IndevTest_Enabled ? info->wIndev : info->w030;
+	float h = IndevTest_Enabled ? info->hIndev : info->h030;
+	Vec3_Set(m->Base.Size, w, h, w);
+}
 /* Which st_mobs[] slot dealt the hurt currently being applied (-1 = player or
     environment). Set by attack/arrow code right before Mob_Hurt so BasicAttack-
     AI.hurt's attackTarget=cause aggro can identify a mob attacker. */
@@ -2728,7 +2889,7 @@ static cc_bool Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_b
 		    c0.30, the code falls through to super.attackEntityFrom, so the
 		    hit still deals its damage after shearing. */
 		m->hasFur = false;
-		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); }
+		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); Mob_ApplySize(m); }
 		woolCount = 1 + Random_Next(&st_mobRng, 3);
 
 		coords.x = Math_Floor(e->Position.x);
@@ -2740,7 +2901,7 @@ static cc_bool Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_b
 		m->hasFur = false;
 		/* Sheep.renderModel only draws the fur layer while hasFur - swap to */
 		/*  the engine's furless sheep model so shearing is actually visible. */
-		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); }
+		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); Mob_ApplySize(m); }
 		woolCount = (int)(Random_Float(&st_mobRng) * 3.0f + 1.0f); /* 1-3 */
 
 		coords.x = Math_Floor(e->Position.x);
@@ -2956,9 +3117,10 @@ static void Indev_ExplodeDrops(IVec3 coords, BlockID oldBlock) {
 	                     dropId = 50;           break; /* wall torches */
 	case 71: case 72: case 73: case 74:
 	                     dropId = 54;           break; /* chest facings */
-	case 62: case 75: case 76: case 77: case 78:
-	case 79: case 80: case 81: case 82:
-	                     dropId = 61;           break; /* furnaces */
+	case 75: case 76: case 77: case 78:
+	                     dropId = 61;           break; /* idle furnace facings */
+	case 62: case 79: case 80: case 81: case 82:
+	                     dropId = 62;           break; /* LIT furnace drops lit (no idDropped) */
 	default: break;
 	}
 	SurvivalTest_SpawnDrop(coords, (cc_uint16)dropId);
@@ -3726,6 +3888,7 @@ static void Mob_SheepUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 					cc_string mdl = String_FromReadonly("sheep");
 					m->hasFur = true;
 					Entity_SetModel(&m->Base, &mdl);
+					Mob_ApplySize(m); /* SetModel resets Size from the model */
 				}
 			}
 			m->moveStrafe  = 0.0f;
@@ -4040,8 +4203,28 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	/*  damage (see Mob_Hurt), so e.g. lava only actually ticks roughly once */
 	/*  per second rather than truly every tick. */
 	if (SurvivalTest_IsHeadInWater(e)) {
-		if (m->airTicks > 0) { m->airTicks--; }
-		else                 { Mob_Hurt(m, NULL, 2, false); }
+		if (IndevTest_Enabled) {
+			/* EntityLiving.onEntityUpdate: --air; the -20 underflow IS the
+			    damage timer - at exactly -20, 8 bubbles + 2 damage and reset
+			    to 0. First hit 320 ticks after submerging, then every 20. */
+			m->airTicks--;
+			if (m->airTicks == -20) {
+				Vec3 eye = Entity_GetEyePosition(e);
+				int b;
+				m->airTicks = 0;
+				for (b = 0; b < 8; b++) {
+					Indev_SpawnBubbleFX(
+						e->Position.x + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						eye.y         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						e->Position.z + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						e->Velocity.x, e->Velocity.y, e->Velocity.z);
+				}
+				Mob_Hurt(m, NULL, 2, false);
+			}
+		} else {
+			if (m->airTicks > 0) { m->airTicks--; }
+			else                 { Mob_Hurt(m, NULL, 2, false); }
+		}
 	} else {
 		m->airTicks = MOB_AIR_TICKS;
 	}
@@ -4339,6 +4522,8 @@ static struct Mob* SurvivalTest_SpawnMobAt(cc_uint8 type, Vec3 pos) {
 
 	model = String_FromReadonly(mobTypeInfo[type].model);
 	Entity_SetModel(&m->Base, &model);
+	m->type = type;
+	Mob_ApplySize(m); /* genuine setSize - the model's collision box is off */
 
 	m->Base.Position = pos;
 
@@ -6301,6 +6486,17 @@ void SurvivalTest_DebugGiveItem(int id) {
 /* Public wrappers for the Indev layer's held-item actions (hoe wear, */
 /*  seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
+
+/* PlayerControllerSP.sendBlockRemoved runs Item.onBlockDestroyed for EVERY
+    removal - including clickBlock's instant path - so insta-breaking a
+    hardness-0 block (flowers, saplings, torches, crops, TNT...) wears the
+    held tool exactly like a mined block. No-ops outside Indev survival
+    (DamageHeldTool is Indev-gated and ToolUseWear returns 0 for non-tools). */
+void SurvivalTest_WearHeldToolForBlockBreak(void) {
+	if (!SurvivalTest_Enabled) return;
+	SurvivalTest_DamageHeldTool(
+		IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, false));
+}
 void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
 /* Fire consuming a TNT block arms it (onBlockDestroyedByPlayer) */
 void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled) SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); }
@@ -6923,6 +7119,8 @@ static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_
     sounds are leg-swing based and can't be reused for this). */
 static float st_walkDist;
 static int   st_nextStep = 1;
+/* Indev Entity.air in ticks (max 300); c0.30 keeps st_airTimer seconds */
+static int   st_airTicks = 300;
 
 static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	struct LocalPlayer* p;
@@ -7016,16 +7214,40 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		if (inLava) st_playerFire = 600;
 	}
 
-	/* Drowning - Mob.tick: airSupply-- while the head is underwater, then */
-	/*  hurt(null, 2) every tick once it's empty; instant refill on surfacing. */
+	/* Drowning. c0.30 Mob.tick: airSupply-- while the head is underwater,
+	    then hurt(null, 2) every tick once it's empty (the invuln window
+	    shapes that into ~2 per half second); instant refill on surfacing.
+	    Indev EntityLiving.onEntityUpdate: --air with the -20 underflow as
+	    the damage timer - at -20, 8 bubble particles + 2 damage, air reset
+	    to 0 (so first hit 320 ticks under, then exactly every 20). */
 	st_headInWater = headInWater; /* exposed to the HUD for the air bubbles */
 	if (headInWater) {
-		st_airTimer -= delta;
-		if (st_airTimer <= 0.0f) {
-			st_airTimer = 0.0f;
-			SurvivalTest_Hurt(DROWN_DAMAGE);
+		if (IndevTest_Enabled) {
+			st_airTicks--;
+			if (st_airTicks == -20) {
+				Vec3 eye = Entity_GetEyePosition(e);
+				int b;
+				st_airTicks = 0;
+				for (b = 0; b < 8; b++) {
+					Indev_SpawnBubbleFX(
+						e->Position.x + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						eye.y         + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						e->Position.z + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)),
+						e->Velocity.x, e->Velocity.y, e->Velocity.z);
+				}
+				SurvivalTest_Hurt(DROWN_DAMAGE);
+			}
+			/* keep the HUD's seconds-based air source coherent (clamped 0) */
+			st_airTimer = st_airTicks > 0 ? (float)st_airTicks / 20.0f : 0.0f;
+		} else {
+			st_airTimer -= delta;
+			if (st_airTimer <= 0.0f) {
+				st_airTimer = 0.0f;
+				SurvivalTest_Hurt(DROWN_DAMAGE);
+			}
 		}
 	} else {
+		st_airTicks = 300; /* Entity.maxAir */
 		st_airTimer = AIR_SUPPLY_SECS;
 	}
 
@@ -7086,6 +7308,7 @@ void SurvivalTest_Respawn(void) {
 	st_hurtTicks    = 0;
 	st_falling      = false;
 	st_airTimer     = 20.0f / 20.0f; /* airSupply = 20 ticks, not 300 */
+	st_airTicks     = 20;
 	st_playerArrows = IndevTest_Enabled ? 0 : ARROW_PLAYER_START;
 	st_playerFire   = 0;
 	st_isDead       = false;
@@ -7118,6 +7341,7 @@ static void SurvivalTest_ResetState(void) {
 	st_walkDist     = 0.0f;
 	st_nextStep     = 1; /* Entity.nextStepDistance's field initialiser */
 	st_airTimer     = AIR_SUPPLY_SECS;
+	st_airTicks     = 300;
 	SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
