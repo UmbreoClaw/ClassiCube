@@ -745,13 +745,15 @@ void MapRenderer_OnBlockChanged(int x, int y, int z, BlockID block) {
 static void OnEnvVariableChanged(void* obj, int envVar) {
 	if (envVar == ENV_VAR_SUN_COLOR || envVar == ENV_VAR_SHADOW_COLOR) {
 		RefreshChunks();
-	} else if (envVar == ENV_VAR_EDGE_HEIGHT || envVar == ENV_VAR_SIDES_OFFSET) {
-		int oldClip        = Builder_EdgeLevel;
-		Builder_SidesLevel = max(0, Env_SidesHeight);
-		Builder_EdgeLevel  = max(0, Env.EdgeHeight);
+	} else if (envVar == ENV_VAR_EDGE_HEIGHT || envVar == ENV_VAR_SIDES_OFFSET ||
+			   envVar == ENV_VAR_SIDES_BLOCK || envVar == ENV_VAR_EDGE_BLOCK) {
+		int oldClip = max(Builder_EdgeLevel, Builder_SidesLevel);
+		/* Air sides/edge draw no walls - they must not occlude boundary faces */
+		Builder_SidesLevel = Blocks.Draw[Env.SidesBlock] == DRAW_GAS ? 0 : max(0, Env_SidesHeight);
+		Builder_EdgeLevel  = Blocks.Draw[Env.EdgeBlock]  == DRAW_GAS ? 0 : max(0, Env.EdgeHeight);
 
 		/* Only need to refresh chunks on map borders up to highest edge level.*/
-		RefreshBorderChunks(max(oldClip, Builder_EdgeLevel));
+		RefreshBorderChunks(max(oldClip, max(Builder_EdgeLevel, Builder_SidesLevel)));
 	}
 }
 

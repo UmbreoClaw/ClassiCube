@@ -191,13 +191,19 @@ static RNGState fire_rnd;
 static cc_bool  fire_rndInited;
 
 static void FireAnimation_TickOne(int inst, int tileLoc) {
-	BitmapCol pixels[16 * 16];
+	BitmapCol pixels[64 * 64]; /* like LIQUID_ANIM_MAX, capped for HD packs */
 	struct Bitmap bmp;
 	float heat, b;
-	int x, y, nx, ny, denom, i;
+	int x, y, nx, ny, denom, i, size;
 
-	/* the sim is fixed 16x16 like the original - skip HD terrain packs */
-	if (Atlas2D.TileSize != 16) return;
+	/* The sim itself is fixed 16x16 like the original; the OUTPUT is
+	    nearest-neighbour upscaled to the pack's tile size (capped at 64,
+	    like the liquid animations). Without this, non-16px texture packs
+	    never got the fire tiles painted at all - and since those tiles
+	    are deliberately EMPTY in the atlas, fire rendered fully
+	    transparent: an invisible block that still burns (user report). */
+	size = min(Atlas2D.TileSize, 64);
+	if (size < 16) return; /* sub-16px packs can't fit the sim */
 	if (!fire_rndInited) {
 		Random_SeedFromCurrentTime(&fire_rnd);
 		fire_rndInited = true;
@@ -225,19 +231,22 @@ static void FireAnimation_TickOne(int inst, int tileLoc) {
 	}
 	Mem_Copy(fire_heat[inst], fire_next[inst], sizeof(fire_heat[0]));
 
-	for (i = 0; i < 16 * 16; i++) {
-		b = fire_heat[inst][i] * 1.8f;
-		Math_Clamp(b, 0.0f, 1.0f);
+	for (y = 0; y < size; y++) {
+		for (x = 0; x < size; x++) {
+			i = (x * 16 / size) + (y * 16 / size) * 16;
+			b = fire_heat[inst][i] * 1.8f;
+			Math_Clamp(b, 0.0f, 1.0f);
 
-		pixels[i] = BitmapCol_Make(
-			b * 155.0f + 100.0f,
-			b * b * 255.0f,
-			b * b * b * b * b * b * b * b * b * b * 255.0f,
-			b < 0.5f ? 0 : 255);
+			pixels[x + y * size] = BitmapCol_Make(
+				b * 155.0f + 100.0f,
+				b * b * 255.0f,
+				b * b * b * b * b * b * b * b * b * b * 255.0f,
+				b < 0.5f ? 0 : 255);
+		}
 	}
 
-	Bitmap_Init(bmp, 16, 16, pixels);
-	Animations_Update(tileLoc, &bmp, 16);
+	Bitmap_Init(bmp, size, size, pixels);
+	Animations_Update(tileLoc, &bmp, size);
 }
 
 static void FireAnimation_Tick(void) {

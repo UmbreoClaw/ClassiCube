@@ -1420,11 +1420,15 @@ cc_bool IndevGen_ApplyPostLoad(struct LocationUpdate* update) {
 	Env_SetCloudsHeight(indevgen_cloudHeight);
 	Env_SetEdgeHeight(indevgen_waterLevel);
 	Env_SetSidesOffset(indevgen_groundLevel - indevgen_waterLevel);
-	Env_SetEdgeBlock(theme == 1 ? BLOCK_STILL_LAVA : BLOCK_STILL_WATER);
-	/* the genuine border wall is a bedrock shell (World.generate); bedrock
-	    sides also give floating maps their empty bedrock basin, since the
-	    engine always draws a SidesBlock plane at y=0 beneath the map */
-	Env_SetSidesBlock(BLOCK_BEDROCK);
+	/* Genuine Indev draws NO engine border walls or horizon plane - the
+	    visible rim IS the real border blocks World.generate writes (bedrock
+	    shell up to groundLevel-2, a grass/dirt cap at groundLevel-1, fluid
+	    to waterLevel), with the void beyond and below the map. Air walls
+	    also stop the engine from culling the boundary faces, so the
+	    grass-capped rim actually renders. (The old bedrock sides painted
+	    the whole border as a bedrock wall - user report.) */
+	Env_SetEdgeBlock(BLOCK_AIR);
+	Env_SetSidesBlock(BLOCK_AIR);
 
 	/* spawn inside the house, facing the genuine rotSpawn = 180.
 	    Genuine preparePlayerToSpawn puts the bounding box CENTRE at ySpawn,

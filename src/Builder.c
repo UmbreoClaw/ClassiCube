@@ -1923,8 +1923,10 @@ static void OnInit(void) {
 }
 
 static void OnNewMapLoaded(void) {
-	Builder_SidesLevel = max(0, Env_SidesHeight);
-	Builder_EdgeLevel  = max(0, Env.EdgeHeight);
+	/* Air sides/edge draw no walls, so they must not occlude the map's
+	    boundary faces either (Indev shows its real border blocks) */
+	Builder_SidesLevel = Blocks.Draw[Env.SidesBlock] == DRAW_GAS ? 0 : max(0, Env_SidesHeight);
+	Builder_EdgeLevel  = Blocks.Draw[Env.EdgeBlock]  == DRAW_GAS ? 0 : max(0, Env.EdgeHeight);
 }
 
 struct IGameComponent Builder_Component = {

@@ -2051,6 +2051,14 @@ static void OnNewMapLoaded(void) {
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
 
+	/* Genuine Indev draws NO engine border walls or horizon plane - the
+	    visible rim is the map's real border blocks (bedrock shell + grass/
+	    dirt cap from World.generate), void beyond. Applies to LOADED
+	    .mclevel maps too, which otherwise keep the engine's bedrock-wall
+	    defaults (freshly generated maps get this from IndevGen as well). */
+	Env_SetSidesBlock(BLOCK_AIR);
+	Env_SetEdgeBlock(BLOCK_AIR);
+
 	indev_baseSky      = Env.SkyCol;
 	indev_baseFog      = Env.FogCol;
 	indev_baseClouds   = Env.CloudsCol;
