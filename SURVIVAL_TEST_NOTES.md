@@ -4747,6 +4747,30 @@ GUI leftovers 843508a).
   the remapped form - deriving from Env.EdgeHeight post-apply would
   corrupt round-trips).
 
+### User feedback round: HUD/GUI/sky fixes (commits 05b11da, d9b4287)
+- **Stars through mobs**: the sky fix's depth-test-off was wrong; now the
+  celestial pass keeps depth TESTING (entities occlude it) and the ENGINE
+  sky ceiling stops writing depth in Indev (EnvRenderer_RenderSky,
+  genuine glDepthMask(false) sky) - that's what un-hides the upper
+  hemisphere. Sun re-verified overhead at noon.
+- **Chat over hearts**: chat stack now anchors 10 GUI px (hearts row)
+  above the hotbar in survival.
+- **HUD item sprites 1 GUI px right**: genuine GuiIngame icon x is
+  cell + 2 (dead centre), not +3. Most visible on coal/diamond.
+- **"plumbing active" banner removed.**
+- **Death screen sizing**: fonts/buttons now built in genuine GUI px x
+  the survival GUI scale (title 8px-font at 2x, buttons 200x20 GUI px),
+  rebuilt on scale change - offsets used to scale while widgets stayed
+  tiny. Matches the user's genuine Indev reference screenshot.
+- **Stale death FOV**: loading a world from Game Over kept the ~3x
+  death zoom (projection never rebuilt after st_isDead cleared);
+  SurvivalTest_ResetState now calls Camera_UpdateProjection.
+- **Paperdoll saga concluded** (313b004 + 2549d0c): CC_BUILD_D3D9 is NOT
+  a macro - backend checks must compare CC_GFX_BACKEND against
+  CC_GFX_BACKEND_D3D9/D3D11. Reversed-depth backends need the view Z
+  negated (yaw swaps leave a mirror); yaw tracking sign is global (the
+  x-mirror inverts it everywhere); scene tilt sign follows DOLL_Z.
+
 ---
 
 ## ENGINE NOTES (useful pointers)
