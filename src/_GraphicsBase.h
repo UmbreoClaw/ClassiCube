@@ -63,6 +63,13 @@ void Gfx_SetAlphaBlending(cc_bool enabled) {
 void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) { Gfx_SetAlphaBlending(enabled); }
 #endif
 
+#if CC_GFX_BACKEND_IS_GL() || (CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9)
+/* Real inverted-blending implementations are defined in the backends */
+#else
+/* No inverting blend on this backend - the crosshair draws plainly instead */
+void Gfx_SetInvertedBlending(cc_bool enabled) { Gfx_SetAlphaBlending(enabled); }
+#endif
+
 /* Initialises/Restores render state */
 CC_NOINLINE static void Gfx_RestoreState(void);
 /* Destroys render state, but can be restored later */

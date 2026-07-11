@@ -486,6 +486,15 @@ void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
 	IDirect3DDevice9_SetRenderState(device, D3DRS_DESTBLEND, enabled ? D3DBLEND_ONE : D3DBLEND_INVSRCALPHA);
 }
 
+void Gfx_SetInvertedBlending(cc_bool enabled) {
+	gfx_alphaBlend = enabled;
+	if (Gfx.LostContext) return;
+	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert */
+	IDirect3DDevice9_SetRenderState(device, D3DRS_ALPHABLENDENABLE, enabled);
+	IDirect3DDevice9_SetRenderState(device, D3DRS_SRCBLEND,  enabled ? D3DBLEND_INVDESTCOLOR : D3DBLEND_SRCALPHA);
+	IDirect3DDevice9_SetRenderState(device, D3DRS_DESTBLEND, enabled ? D3DBLEND_INVSRCCOLOR  : D3DBLEND_INVSRCALPHA);
+}
+
 void Gfx_SetAlphaArgBlend(cc_bool enabled) {
 	D3DTEXTUREOP op = enabled ? D3DTOP_MODULATE : D3DTOP_SELECTARG1;
 	if (Gfx.LostContext) return;

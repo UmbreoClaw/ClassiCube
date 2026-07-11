@@ -477,6 +477,21 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	static struct Texture tex = { 0, Tex_Rect(0,0,0,0), Tex_UV(0.0f,0.0f, 15/256.0f,15/64.0f) };
 	int extent;
 
+	if (SurvivalTest_Enabled) {
+		/* GuiIngame/HUDScreen: a 16x16 icon anchored at (w/2-7, h/2-7) -
+		    one GUI px up-left of exact centring - sampling the full
+		    (0,0)-(16,16) sprite */
+		float scale = Gui_GetCrosshairScale();
+		tex.x = (Window_Main.Width  / 2) - (int)(7 * scale * 2);
+		tex.y = (Window_Main.Height / 2) - (int)(7 * scale * 2);
+		tex.width  = (int)(16 * scale * 2);
+		tex.height = (int)(16 * scale * 2);
+		tex.uv.u2 = 16/256.0f; tex.uv.v2 = 16/64.0f;
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, ptr);
+		tex.uv.u2 = 15/256.0f; tex.uv.v2 = 15/64.0f;
+		return;
+	}
+
 	extent = (int)(CH_EXTENT * Gui_GetCrosshairScale());
 	tex.x  = (Window_Main.Width  / 2) - extent;
 	tex.y  = (Window_Main.Height / 2) - extent;
@@ -545,13 +560,13 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	/* Survival Test draws the heart row flush with the hotbar's left edge */
 	/*  (not centred), so the bar grows rightwards from the first slot. */
 	x = s->hotbar.x;
-	y = s->hotbar.y - heartSize - (int)(2.0f * scale);
+	y = s->hotbar.y - heartSize - (int)(1.0f * scale);
 
 	/* HUDScreen seeds its jitter RNG with ticks * 312871, so the offsets are */
 	/*  stable within a tick but reroll each tick - and each heart jitters */
 	/*  INDEPENDENTLY (only at 2 hearts / 4 HP or less). */
 	Random_Seed(&jitterRng, (int)(Game.Time * 20.0) * 312871);
-	shaking = SurvivalTest_Health > 0 && SurvivalTest_Health <= 4;
+	shaking = SurvivalTest_Health <= 4; /* genuine shakes at 0 too */
 
 	tex.ID = Gui.IconsTex;
 
@@ -851,7 +866,11 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (!Gui.HideCrosshair && Gui.IconsTex && !tablist_active) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
+			/* GuiIngame draws the Indev crosshair with the colour-inverting
+			    glBlendFunc(ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR) */
+			if (IndevTest_Enabled) Gfx_SetInvertedBlending(true);
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+			if (IndevTest_Enabled) Gfx_SetInvertedBlending(false);
 		}
 
 		/* Indev: item sprites over hotbar slots holding item ids (256+). */
@@ -860,7 +879,9 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (IndevTest_Enabled && IndevTest_ItemsTex()) {
 			struct Texture itex;
 			float slotW = s->hotbar.width / (float)INVENTORY_BLOCKS_PER_HOTBAR;
-			int size = (int)(slotW * 0.72f), k;
+			/* GuiIngame: 16x16 GUI-px icons at (cell + 3, height - 19) - a
+			    16/20 cell fraction, one px right of centred */
+			int size = (int)(slotW * (16.0f / 20.0f)), k;
 
 			for (k = 0; k < SURVIVAL_HOTBAR_SLOTS; k++) {
 				int id = SurvivalTest_SlotId(k);
@@ -869,8 +890,8 @@ static void HUDScreen_Render(void* screen, float delta) {
 
 				int maxDmg, dmg;
 				itex.ID     = IndevTest_ItemsTex();
-				itex.x      = (short)(s->hotbar.x + k * slotW + (slotW - size) / 2);
-				itex.y      = (short)(s->hotbar.y + (s->hotbar.height - size) / 2);
+				itex.x      = (short)(s->hotbar.x + k * slotW + slotW * (3.0f / 20.0f));
+				itex.y      = (short)(s->hotbar.y + s->hotbar.height * (3.0f / 22.0f));
 				itex.width  = (cc_uint16)size;
 				itex.height = (cc_uint16)size;
 				Texture_Render(&itex);
@@ -3005,6 +3026,13 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
 	int i, slotX, slotY, b;
 
+	/* GuiContainer.drawScreen begins with drawDefaultBackground(): a
+	    full-screen gradient (0x60050500 -> 0xA0303060) dimming the world
+	    behind every container screen. */
+	Gfx_Draw2DGradient(0, 0, Game.Width, Game.Height,
+		PackedCol_Make(0x05, 0x05, 0x00, 0x60),
+		PackedCol_Make(0x30, 0x30, 0x60, 0xA0));
+
 	/* Sampled from a reference classic-style inventory screenshot. */
 	PackedCol panelBorder = PackedCol_Make( 55,  55,  55, 255);
 	PackedCol panelBg     = PackedCol_Make(198, 198, 198, 255);
@@ -3518,25 +3546,30 @@ void SurvivalInvScreen_Show(void) {
 /*########################################################################################################################*
 *------------------------------------------------------GameOverScreen-----------------------------------------------------*
 *#########################################################################################################################*/
-/* Shown when the player dies in Survival Test. The genuine c0.30 screen has */
-/*  a Respawn button (clear inventory, restore health, back to spawn - see */
-/*  SurvivalTest_Respawn) alongside its exit option; "Generate new level" and */
-/*  "Quit game" fill the main-menu role in this port. */
+/* Shown when the player dies in Survival Test. Both ground truths
+    (GameOverScreen.java c0.30, GuiGameOver.java Indev) offer exactly two
+    buttons - "Generate new level..." at (w/2-100, h/4+72) and "Load
+    level.." at (w/2-100, h/4+96) - there is NO respawn: death means
+    starting or loading another level. Title "Game over!" 2x-scaled at
+    virtual y=60, "Score: &eN" at y=100, both top-anchored. (An earlier
+    note here claimed a genuine Respawn button - the decompile has none.) */
 static struct GameOverScreen {
 	Screen_Body
 	struct FontDesc titleFont, messageFont, btnFont;
 	struct TextWidget title, message;
-	struct ButtonWidget respawn, gen, quit;
-	struct Widget* __widgets[5];
+	struct ButtonWidget gen, load;
+	struct Widget* __widgets[4];
 } GameOverScreen CC_BIG_VAR;
 
 static void GameOverScreen_Layout(void* screen) {
 	struct GameOverScreen* s = (struct GameOverScreen*)screen;
-	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -70);
-	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -30);
-	Widget_SetLocation(&s->respawn, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  20);
-	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  70);
-	Widget_SetLocation(&s->quit,    ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 120);
+	/* genuine coordinates are in ScaledResolution units - top-anchored. */
+	/*  (hotbar scale = raw scale x window scale, the survival HUD's GUI px) */
+	int scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_MIN, 0,  60 * scale);
+	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_MIN, 0, 100 * scale);
+	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_MIN, 0, Game.Height / 4 + 72 * scale);
+	Widget_SetLocation(&s->load,    ANCHOR_CENTRE, ANCHOR_MIN, 0, Game.Height / 4 + 96 * scale);
 }
 
 static void GameOverScreen_ContextLost(void* screen) {
@@ -3565,14 +3598,8 @@ static void GameOverScreen_ContextRecreated(void* screen) {
 	String_Format1(&msg, "Score: &e%i", &score);
 	TextWidget_Set(&s->message, &msg, &s->messageFont);
 
-	ButtonWidget_SetConst(&s->respawn, "Respawn",               &s->btnFont);
-	ButtonWidget_SetConst(&s->gen,     "Generate new level...", &s->btnFont);
-	ButtonWidget_SetConst(&s->quit,    "Quit game",             &s->btnFont);
-}
-
-static void GameOverScreen_OnRespawn(void* screen, void* w) {
-	Gui_Remove((struct Screen*)&GameOverScreen);
-	SurvivalTest_Respawn();
+	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
+	ButtonWidget_SetConst(&s->load, "Load level..",          &s->btnFont);
 }
 
 static void GameOverScreen_OnGen(void* screen, void* w) {
@@ -3580,8 +3607,9 @@ static void GameOverScreen_OnGen(void* screen, void* w) {
 	GenLevelScreen_Show();
 }
 
-static void GameOverScreen_OnQuit(void* screen, void* w) {
-	Window_RequestClose();
+static void GameOverScreen_OnLoad(void* screen, void* w) {
+	Gui_Remove((struct Screen*)&GameOverScreen);
+	LoadLevelScreen_Show();
 }
 
 static void GameOverScreen_Init(void* screen) {
@@ -3592,9 +3620,8 @@ static void GameOverScreen_Init(void* screen) {
 
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->message);
-	ButtonWidget_Add(s, &s->respawn, 400, GameOverScreen_OnRespawn);
-	ButtonWidget_Add(s, &s->gen,     400, GameOverScreen_OnGen);
-	ButtonWidget_Add(s, &s->quit,    400, GameOverScreen_OnQuit);
+	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
+	ButtonWidget_Add(s, &s->load, 400, GameOverScreen_OnLoad);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }

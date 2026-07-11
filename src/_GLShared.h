@@ -266,6 +266,13 @@ void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
 	_glBlendFunc(GL_SRC_ALPHA, enabled ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
 }
 
+void Gfx_SetInvertedBlending(cc_bool enabled) {
+	Gfx_SetAlphaBlending(enabled);
+	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert */
+	if (enabled) { _glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_COLOR); }
+	else         { _glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); }
+}
+
 static void GL_ClearColor(PackedCol color) {
 	_glClearColor(PackedCol_R(color) / 255.0f, PackedCol_G(color) / 255.0f,
 				  PackedCol_B(color) / 255.0f, PackedCol_A(color) / 255.0f);

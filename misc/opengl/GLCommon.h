@@ -47,6 +47,8 @@ typedef cc_uintptr GLpointer;
 #define GL_BLEND                 0x0BE2
 #define GL_SRC_ALPHA             0x0302
 #define GL_ONE_MINUS_SRC_ALPHA   0x0303
+#define GL_ONE_MINUS_SRC_COLOR   0x0301
+#define GL_ONE_MINUS_DST_COLOR   0x0307
 
 #define GL_UNSIGNED_BYTE         0x1401
 #define GL_UNSIGNED_SHORT        0x1403
