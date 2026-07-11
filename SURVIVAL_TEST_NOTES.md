@@ -657,7 +657,8 @@ Roadmap stage 2. Everything below is Indev-gated; c0.30 mode untouched.
   (SURVIVAL_ARMOR_BASE). SlotPtr/SlotClick route them; SlotArmor.isItemValid
   is enforced in SlotClick (placement/swap needs the matching piece; taking
   out is always allowed). ResetState/Respawn clear them; death drops them
-  (genuine dropAllItems includes armor).
+  (DELIBERATE DEVIATION - see the death-scatter entry below; there is no
+  dropAllItems in either ground truth).
 - **Damage absorption** (SurvivalTest_Damage, Indev branch): genuine
   EntityPlayer.attackEntityFrom - NO delta damage during the invulnerability
   window (c0.30's ghost-heart delta stays c0.30-only), armorValue =
@@ -2560,11 +2561,17 @@ decompiled Java (`Item`, `PrimedTnt`, `Level.explode`, `Mob`, `BasicAI`,
 - Hardness: dirt/sand 12, slab/double-slab 20, **brick 0** (absent from
   `getHardness`'s switch → instant break; looks like an upstream omission but
   it IS the ground truth); cracks = `(hits-1)/hardness`.
-- **Respawn exists** (previous "c0.30-s has no respawn" note was wrong —
-  `GameOverScreen.java` has the button): clears inventory, health 20,
-  arrows 20, air **20 ticks** (genuine quirk, not 300), teleport to spawn,
-  score kept. Death drops carry each slot's full stack count (one drop per
-  slot, `Item(level, x,y,z, block, count)`), so they can be re-collected.
+- **CORRECTED by the systematic audit**: the claim here that
+  "GameOverScreen.java has the [Respawn] button" was WRONG - neither
+  ground truth has one (both death screens offer only Generate new
+  level... / Load level..), and the genuine death screen was restored in
+  audit batch 1 (0876ebd). SurvivalTest_Respawn survives as dead code for
+  future use. **Death inventory scatter is a DELIBERATE DEVIATION** (user
+  decision 2026-07-11): neither c0.30 Player.die nor Indev
+  EntityPlayer.onDeath drops any items (no dropAllItems exists), but the
+  scatter is kept intentionally because multiplayer support is planned -
+  where corpse drops matter. Revisit the gating (option key) when
+  multiplayer work starts.
 - Arrow pickup uses the item pickup's `bb.grow(1,0,1)` reach.
 
 ### Mobs (same commit)

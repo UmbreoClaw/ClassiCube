@@ -1065,7 +1065,9 @@ static void SurvivalTest_DropInventory(void) {
 		if (st_inv[i].id == BLOCK_AIR || st_inv[i].count <= 0) continue;
 		SurvivalTest_SpawnDropAt(pos, st_inv[i].id, st_inv[i].count);
 	}
-	/* genuine dropAllItems drops the worn armor too */
+	/* DELIBERATE DEVIATION: neither ground truth drops ANY inventory on
+	    death (no dropAllItems exists in either decompile) - kept, armor
+	    included, because planned multiplayer support wants corpse drops */
 	for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
 		if (st_armor[i].id == BLOCK_AIR || st_armor[i].count <= 0) continue;
 		SurvivalTest_SpawnDropAt(pos, st_armor[i].id, st_armor[i].count);

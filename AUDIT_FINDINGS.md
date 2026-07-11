@@ -243,8 +243,8 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     torch/crop/fire neighbour pops miss non-player changes.
 18. [P] Torch placement with no support should FAIL (canPlaceBlockAt),
     not place-then-pop.
-19. [P] **NOTES ERROR**: death inventory scatter is NOT genuine - neither
-    ground truth drops inventory on death (no dropAllItems exists).
-    SurvivalTest_DropInventory is an invention; decide with user (it
-    interacts with the no-respawn death screen fix: genuine death = world
-    over, items moot). Fix notes either way.
+19. RESOLVED (user decision 2026-07-11): death inventory scatter is NOT
+    genuine (no dropAllItems in either ground truth) but is KEPT as a
+    deliberate deviation because multiplayer support is planned; may
+    later be gated behind a multiplayer option when that work starts.
+    Notes + code comments corrected.
