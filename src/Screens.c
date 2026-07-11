@@ -2806,6 +2806,20 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 	Entity_SetModel(&s->doll, &human);
 }
 
+/* D3D9/D3D11 run a REVERSED depth buffer (ZFUNC GREATEREQUAL vs GL's
+    LEQUAL) with the same ortho z row, so with culling off the depth test
+    picks the model's FAR side there. Negating the view's Z axis makes the
+    reversed test select exactly the fragments GL's test selects (screen
+    x/y untouched). The scene camera-tilt rotation is applied AFTER that
+    flip, so its visual sense inverts with it - DOLL_Z doubles as the
+    tilt's sign (user-verified per backend: D3D leaned backwards with the
+    unsigned tilt). */
+#if CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9 || CC_GFX_BACKEND == CC_GFX_BACKEND_D3D11
+	#define DOLL_Z -1.0f
+#else
+	#define DOLL_Z  1.0f
+#endif
+
 /* Renders the 3D player-skin paperdoll, confined to the doll preview box. */
 /*  The body always faces forward; only the head turns to track the cursor. */
 /* Indev mode: verified against GuiInventory.drawGuiContainerBackgroundLayer */
@@ -2874,8 +2888,11 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		    0). WHICH depth direction is "toward the camera" differs per
 		    backend (see DOLL_Z below), but the base yaw is the same for
 		    all of them once the view z is normalised. */
-		s->doll.RotY  = 180.0f + t * 20.0f;   /* body: light HORIZONTAL track */
-		s->doll.Yaw   = 180.0f + t * 40.0f;   /* head: double strength */
+		/* The view's x-mirror inverts the visual sense of model yaw on
+		    EVERY backend (user-verified on both OGL and D3D), so the
+		    genuine +t offsets are negated around the 180 base. */
+		s->doll.RotY  = 180.0f - t * 20.0f;   /* body: light HORIZONTAL track */
+		s->doll.Yaw   = 180.0f - t * 40.0f;   /* head: double strength */
 		/* Rig-derived signs (the x+y view mirror inverts the MODEL-local
 		    pitch sense but not the post-mirror scene rotation): head pitch
 		    -lean, scene tilt +lean - both toward the cursor, head at
@@ -2885,7 +2902,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
 		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
 		s->doll.RotZ  = 0.0f;
-		s->dollCamPitch = lean * 20.0f;       /* the vertical tilt is a CAMERA
+		s->dollCamPitch = DOLL_Z * lean * 20.0f; /* the vertical tilt is a CAMERA
 		    rotation applied to the whole scene, not a body lean - genuine's
 		    glRotatef(-atan(dy/40)*20, 1,0,0) before rendering the entity.
 		    Our mirrored frame flips the pitch sense, so the sign here is
@@ -2927,19 +2944,6 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 			px = (float)(boxSize - 2) * 0.5f;
 			py = (float)(boxH - 2) * (67.0f / 70.0f);
 		}
-		/* D3D9/D3D11 run a REVERSED depth buffer (ZFUNC GREATEREQUAL vs
-		    GL's LEQUAL) with the same ortho z row, so with culling off the
-		    depth test picks the model's FAR side there - which renders as
-		    a horizontally-mirrored back view (screen x/y come from the
-		    same matrix either way). Flipping the view's Z axis makes the
-		    reversed test select exactly the fragments GL's test selects,
-		    with x/y untouched - pixel-identical output on every backend
-		    (winding inverts, but the doll pass has culling off). */
-#if CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9 || CC_GFX_BACKEND == CC_GFX_BACKEND_D3D11
-		#define DOLL_Z -1.0f
-#else
-		#define DOLL_Z  1.0f
-#endif
 		Matrix_Scale(&flip, -aspect, -aspect, DOLL_Z * aspect);
 		Matrix_RotateX(&camPitch, s->dollCamPitch * MATH_DEG2RAD);
 		Matrix_Translate(&place, px, py, 50.0f);
