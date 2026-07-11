@@ -1149,6 +1149,15 @@ int IndevTest_FurnaceBurnScaled(void) {
 	return te->burnTime * 12 / te->currentBurn; /* getBurnTimeRemainingScaled */
 }
 
+/* TileEntityFurnace.isBurning - drives the GUI flame (drawn even when the
+    12-step scaled height has hit 0, leaving the genuine 2px ember stub). */
+int IndevTest_FurnaceIsBurning(void) {
+	struct IndevTE* te;
+	if (indev_openTE < 0) return 0;
+	te = &indev_tes[indev_openTE];
+	return te->kind == INDEV_CONTAINER_FURNACE && te->burnTime > 0;
+}
+
 int IndevTest_FurnaceCookScaled(void) {
 	struct IndevTE* te;
 	if (indev_openTE < 0) return 0;

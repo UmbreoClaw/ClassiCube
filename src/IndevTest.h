@@ -131,6 +131,7 @@ struct SurvivalSlot* IndevTest_ContainerSlot(int i);
 /*  and arrow width 0..24 (cookTime*24/200) of the OPEN furnace. */
 int  IndevTest_FurnaceBurnScaled(void);
 int  IndevTest_FurnaceCookScaled(void);
+int  IndevTest_FurnaceIsBurning(void);
 
 /* .mclevel format support: bidirectional block id mapping between the */
 /*  genuine Indev id space (torch 50, chest 54, workbench 58, furnace 61/62) */

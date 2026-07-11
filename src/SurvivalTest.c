@@ -5632,8 +5632,9 @@ void SurvivalTest_SwapSlots(int a, int b) {
 	SurvivalTest_SyncHotbar();
 }
 
-int SurvivalTest_CraftSlotId(int i)    { return st_craft[i].id; }
-int SurvivalTest_CraftSlotCount(int i) { return st_craft[i].count; }
+int SurvivalTest_CraftSlotId(int i)     { return st_craft[i].id; }
+int SurvivalTest_CraftSlotCount(int i)  { return st_craft[i].count; }
+int SurvivalTest_CraftSlotDamage(int i) { return st_craft[i].damage; }
 
 /* Builds the 2x2 grid of full-space ids and asks the Indev recipe engine what */
 /*  it makes. Returns the result id (0 if nothing), and its count via outCount. */

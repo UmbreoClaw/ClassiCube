@@ -179,6 +179,7 @@ void SurvivalTest_CursorReturn(void);
 /* 2x2 crafting grid cell contents (i = 0..SURVIVAL_CRAFT_SLOTS-1). */
 int SurvivalTest_CraftSlotId(int i);
 int SurvivalTest_CraftSlotCount(int i);
+int SurvivalTest_CraftSlotDamage(int i);
 /* Current crafted output for the grid: result id (0 = nothing craftable) and */
 /*  its yield via outCount. Recomputed from the grid via the Indev recipe engine. */
 int SurvivalTest_CraftResult(int* outCount);

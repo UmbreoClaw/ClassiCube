@@ -2609,7 +2609,11 @@ static void SurvivalInv_CraftXY(struct SurvivalInvScreen* s, int i, int* ox, int
 }
 
 static cc_bool SurvivalInv_InSlot(int mx, int my, int x, int y, int size) {
-	return mx >= x && mx < x + size && my >= y && my < y + size;
+	/* Slot.isAtCursorPos: [xPos-1, xPos+17) - one GUI px around the 16px
+	    item area, i.e. shifted 1 left/up of the 18px cell */
+	int one = size / 18;
+	return mx >= x - one && mx < x + size - one &&
+	       my >= y - one && my < y + size - one;
 }
 
 /* Active craft cells: dim*dim (pocket 4, workbench 9); none outside Indev, */
@@ -2767,7 +2771,10 @@ static void SurvivalInv_SlotDamage(int slot, int* dmg, int* maxDmg) {
 		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
 		id = p->id; count = p->count; *dmg = p->damage;
 	} else if (slot >= SURVIVAL_CRAFT_BASE) {
-		return; /* craft grid tools keep damage internally, bar not shown */
+		/* GuiContainer renders overlays for EVERY slot - grid cells too */
+		id     = SurvivalTest_CraftSlotId(slot - SURVIVAL_CRAFT_BASE);
+		count  = SurvivalTest_CraftSlotCount(slot - SURVIVAL_CRAFT_BASE);
+		*dmg   = SurvivalTest_CraftSlotDamage(slot - SURVIVAL_CRAFT_BASE);
 	} else {
 		id = SurvivalTest_SlotId(slot); count = SurvivalTest_SlotCount(slot);
 		*dmg = SurvivalTest_SlotDamage(slot);
@@ -3008,7 +3015,9 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 		/* Cursor-held stack count follows the mouse (blocks and items alike). */
 		if (SurvivalTest_CursorCount() > 1 && s->mouseX >= 0) {
 			int cc    = SurvivalTest_CursorCount();
-			int half  = (int)(s->texF * 8.0f);
+			/* renderItemIntoGUI draws at cursor-8, the count right-aligned to
+			    +17 of that - so the count's right/bottom edge is cursor+9 */
+			int half  = (int)(s->texF * 9.0f);
 			s->countAtlas.tex.y = s->mouseY + half - s->countAtlas.tex.height;
 			s->countAtlas.curX  = s->mouseX + half - SurvivalInv_CountWidth(&s->countAtlas, cc);
 			TextAtlas_AddInt(&s->countAtlas, cc, &cur);
@@ -3069,7 +3078,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 71.0f / 256.0f;
 			Texture_Render(&panel);
 			panel.y      = (short)(s->panelY + topH);
-			panel.height = (cc_uint16)(s->panelH - topH);
+			/* the strip is 96 texels drawn 96 units tall (GuiChest paints
+			    71 + 96 = 167 of the 168-unit ySize; the last unit is bare) */
+			panel.height = (cc_uint16)(int)(96 * s->texF);
 			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
 			Texture_Render(&panel);
 		} else {
@@ -3089,7 +3100,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			int h = IndevTest_FurnaceBurnScaled();
 			int w = IndevTest_FurnaceCookScaled();
 			ovl.ID = guiTex;
-			if (h > 0) {
+			/* GuiFurnace draws the flame whenever isBurning() - the h+2 rect
+			    leaves a 2px ember stub visible right up until burnout */
+			if (IndevTest_FurnaceIsBurning()) {
 				ovl.x      = (short)(s->panelX + (int)(56 * s->texF));
 				ovl.y      = (short)(s->panelY + (int)((36 + 12 - h) * s->texF));
 				ovl.width  = (cc_uint16)(int)(14 * s->texF);

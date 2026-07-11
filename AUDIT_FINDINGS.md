@@ -23,6 +23,13 @@ armor row, bubble count formula, stack-count placement, score/arrows labels
 furnace/chest), label positions/colors, empty-armor silhouettes, hover
 highlight, death tint, held-stack centering.
 
+FIXED in batch 1 (0876ebd): 1, 2, 3, 5, 7, 14a.
+FIXED in batch 2: 9, 10, 11, 12, 14b.
+STILL OPEN: 4 (scale quantization - decide Indev integer ScaledResolution),
+6 (pop anim curves - needs IsometricDrawer asymmetric scale support),
+8 (label rasterisation vs panel scale), 13 (doll anchor constants),
+14c (label draw order over held stack).
+
 1. [V] **Container GUI background dim missing** (HIGH).
    Genuine GuiContainer.drawScreen -> drawDefaultBackground() ->
    drawGradientRect(0,0,w,h, 0x60050500, 0xA0303060) behind EVERY container
