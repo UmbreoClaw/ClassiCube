@@ -1,0 +1,181 @@
+# Systematic Fidelity Audit — Findings Queue
+
+User delegated systematic auditing of everything (GUI placement/scale,
+gameplay, mob mechanics, all between) against the decompiled ground truths:
+`/tmp/indev_eagler` (in-20100223) and `/tmp/mcraft_client` (c0.30).
+Four domain audits were run; three completed, the fourth (entities +
+environment: drops/arrows/TNT/paintings/day-night/random ticks/fluids)
+was cut off by a usage limit and MUST BE RE-RUN next session.
+
+Status legend: [V] = independently verified against the Java by the main
+session; [P] = pending verification (audit finding, not yet re-checked).
+Every [P] item must be verified against the genuine source before fixing.
+
+VERIFICATION RULE: subagent findings are leads, not verdicts.
+
+---
+
+## Domain 1: GUI placement & scale (audit complete)
+
+MATCHES confirmed for: hotbar rects/highlight, heart UVs/fill/jitter/glow,
+armor row, bubble count formula, stack-count placement, score/arrows labels
+(absent in Indev, correct), all container slot grids (inventory/workbench/
+furnace/chest), label positions/colors, empty-armor silhouettes, hover
+highlight, death tint, held-stack centering.
+
+1. [V] **Container GUI background dim missing** (HIGH).
+   Genuine GuiContainer.drawScreen -> drawDefaultBackground() ->
+   drawGradientRect(0,0,w,h, 0x60050500, 0xA0303060) behind EVERY container
+   screen (GuiContainer.java:22, GuiScreen.java:94-97). Ours draws the panel
+   with no dim (Screens.c SurvivalInvScreen_Render). Engine helper exists:
+   Gfx_Draw2DGradient.
+2. [V] **Death screen: Respawn button is NOT genuine** (MEDIUM, gameplay).
+   BOTH ground truths have exactly two 200-wide buttons: "Generate new
+   level..." (w/2-100, h/4+72) and "Load level.." (w/2-100, h/4+96) — no
+   respawn (GameOverScreen.java:7-14; GuiGameOver.java:10-16). Title 2x at
+   on-screen y=60 top-anchored, "Score: &e<n>" at y=100 (Indev shows score
+   on death too). Our earlier notes claim of a genuine respawn button is
+   WRONG — fix notes too. Our layout is centre-anchored: change to genuine
+   top-anchored offsets. Keep our "Quit game" only if replacing nothing —
+   genuine has no quit button on this screen.
+3. [V] **Indev crosshair invert blend missing + 1px anchor** (MEDIUM).
+   GuiIngame.java:44-46: crosshair at (w/2-7, h/2-7), 16x16, drawn with
+   glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_COLOR) — colour-
+   inverting. Ours: exactly centred, 15px UV sample, plain blending.
+   Needs a Gfx invert-blend mode (GL: glBlendFunc; D3D9: D3DBLEND_INVDESTCOLOR/
+   INVSRCCOLOR; D3D11: D3D11_BLEND_INV_DEST_COLOR/INV_SRC_COLOR) + default
+   fallback in _GraphicsBase.h. Indev only; c0.30 has no invert.
+4. [P] **GUI scale quantization** (MEDIUM). Genuine Indev ScaledResolution:
+   largest integer scale keeping >=320x240 (1080p -> 4x); c0.30 HUD:
+   continuous h/240 (1080p -> 4.5x). Engine: 1+min(w/640,h/480) (1080p -> 3x)
+   so the whole survival GUI is a step smaller than genuine. Plan: in Indev
+   mode make Gui window scale = max(1, min(w/320, h/240)) integer; leave
+   c0.30 on engine behaviour (conservative).
+5. [P] Hearts/bubbles row 1 GUI px too high: our gap 2*scale above hotbar,
+   genuine y = height-32 = gap 1 (HUDScreen.java:69; Screens.c:548).
+6. [P] Hotbar slot pop animation: genuine c0.30 X=sin(t^2*pi)+1 but
+   Y=sin(t*pi)+1 (HUDScreen.java:119-124); genuine Indev is a squash
+   glScalef(1/(1+t), (2+t)/2, 1) around (x+8, y+12) (GuiIngame.java:137-143).
+   Ours: uniform sin(t^2*pi)+1 both axes, both modes (Widgets.c:457-467).
+7. [P] HUD hotbar item sprites: genuine 16x16 GUI px at (cell+3, height-19)
+   (GuiIngame.java:133-134); ours 0.72*slotW centred (Screens.c:862-875).
+8. [P] Container label/count text rasterised at fixed pt (14/16pt), doesn't
+   track panel scale (Screens.c:3314-3334); genuine 8px GUI font scales with
+   panel. Medium effort (re-rasterise on scale change).
+9. [P] Chest bottom strip stretched 96 texels over 97 units — chest panel
+   should be 71+96=167 units tall, ours 168 (Screens.c:3037-3046).
+10. [P] Slot hit region: genuine xPos-1..xPos+17 (Slot.java:22-28); ours
+    xPos..xPos+18 (Screens.c:2590-2592) — shifted +1.
+11. [P] Craft-grid slots suppress durability bars (Screens.c:2748-2750);
+    genuine renders overlays in every slot.
+12. [P] Furnace flame stub: genuine draws flame while isBurning() even at
+    h==0 (2px stub); ours gates h > 0 (Screens.c:3064). Needs an is-burning
+    accessor.
+13. [P] Paperdoll anchors: genuine panel (51,75) feet anchor, fixed scale 30,
+    mouse anchor (x+51, y+25) (GuiInventory.java:100-118); ours box-derived
+    (~1-3 units off, scale 29.1). Convert to panel-relative constants.
+14. [P] Minor: (a) heart shake gated health>0, genuine shakes at <=4 incl 0;
+    (b) held-stack count anchor +8*texF vs genuine +9; (c) foreground labels
+    drawn before items, genuine draws them last (over held stack).
+
+## Domain 2: Mob mechanics (audit complete)
+
+MATCHES confirmed for: species stat table, c0.30 wander/attack AI constants,
+spider lunge, skeleton fire/death-burst, creeper, sheep grazing/shear, hurt/
+knockback/invuln, despawn, fall/air/lava, Indev fire ignition, Indev creature
+AI + pathfinder, spawner rules (except 5 below), death drops (except 2),
+mob push (player push superseded note confirmed implemented).
+
+1. [P] **c0.30 look-pitch double sqrt** (MEDIUM): BasicAttackAI.java:51-53
+   pitch = -atan2(dy, dist3d); ours uses sqrt(dist3d) as adjacent
+   (SurvivalTest.c:3518-3520) -> steep over-pitch, affects skeleton arrows.
+   Notes:3080 repeats the wrong claim — fix notes.
+2. [P] **c0.30 sheep death drop** (MEDIUM): Sheep.die() drops 1-2 BROWN
+   MUSHROOMS like Pig (Sheep.java:53-61); ours drops 1-2 white wool
+   (SurvivalTest.c:2554). Notes claim wool — contradiction; fix notes.
+3. [P] **Indev animal health 10** (MEDIUM): EntityLiving default 10, only
+   EntityMob raises to 20. Ours: 20 for all (SurvivalTest.c:4027).
+4. [P] **Indev explosion curve** (MEDIUM): World.createExplosion uses ray
+   destruction + entity damage to 2x radius, ((d^2+d)/2*8*2r+1) (~49 HP
+   point-blank r=3) + velocity knockback. Ours reuses c0.30 sphere+15 HP
+   falloff, no knockback (SurvivalTest.c:2813-2874).
+5. [P] **Initial-population spawn-point avoidance** (MEDIUM): both genuine
+   spawners, when avoid entity is null, still reject candidates within 16
+   blocks of xSpawn/ySpawn/zSpawn (MobSpawner.java:53-65 c0.30; Indev same).
+   Ours skips the check when avoidPos NULL (SurvivalTest.c:4095-4101,
+   4184, 4237-4245). Fix notes claim too.
+6. [P] Indev animal spawn Y: uniform nextInt(height) for animals; only
+   monsters use min-of-two bias. Ours biases both (SurvivalTest.c:4152-4154).
+7. [P] Indev sheep shear trigger: genuine only if attacker instanceof
+   EntityLiving — arrows never shear (EntitySheep.java:20). Ours shears on
+   any attacker incl. arrow fakeAttacker (SurvivalTest.c:2702, 4672-4681).
+8. [P] Indev aggro-on-hit: no same-species exemption in Indev
+   (EntityMob.java:38-42); ours applies c0.30 exclusion in both modes
+   (SurvivalTest.c:2737-2742).
+9. [P] Indev drowning: 2 HP every 20 ticks (air==-20 reset) + 8-bubble
+   burst (EntityLiving.java:85-100); ours c0.30 cadence (~2 HP/10 ticks),
+   no bubbles (SurvivalTest.c:3706-3711).
+10. [P] Mob bbox sizes come from engine models, differ from genuine
+    (c0.30 pig/sheep/spider 1.4 wide; ours ~0.875-0.94). Wide impact but
+    engine-model constraint — decide: override Size per mode?
+11. [P] Indev kill score: genuine awards none; ours adds c0.30 deathScore
+    in both modes (SurvivalTest.c:2531).
+12. [P] c0.30 explosion knockback: genuine hurt() passes the TNT/creeper as
+    attacker -> knockback; ours passes NULL (SurvivalTest.c:2865-2873).
+
+## Domain 3: Items/blocks/crafting (audit complete)
+
+MATCHES confirmed for: full item table (ids/stack/durability/heal), armor
+tables + absorption, melee damage, canHarvest rules, every crafting recipe
+shape, furnace smelts/burn times/cook order, drops tables (except below),
+Indev hardness overrides, hoe till, bow behaviour.
+
+1. [P] **Indev food maxStackSize 1** (MEDIUM): ItemFood sets maxStackSize=1
+   (apple/bread/porkchops); ours stacks them to 64 (IndevTest.c:543-556).
+2. [P] Sword dig speed 1.5x vs everything (ItemSword.java:15-17); ours 1
+   and MiningSpeed returns int (IndevTest.c:328-342, SurvivalTest.c:6081).
+3. [P] **Sword wear inverted** (MEDIUM): sword 1/hit 2/block; tools 2/hit
+   1/block (ItemSword.java:19-25, ItemTool.java:29-35). Ours flat 2/hit
+   1/block for all (SurvivalTest.c:4483, 6083). Notes:2239 wrong — fix.
+4. [P] **Hoe + flint&steel must not wear from digging/melee** (MEDIUM):
+   genuine no-op hitEntity/onBlockDestroyed; ours wears them like tools
+   (IndevTest.c:284-295 ToolMaxDamage drives DamageHeldTool).
+5. [P] Tool breakage off-by-one: genuine breaks when damage > maxDamage;
+   ours >= (SurvivalTest.c:6016). Armor already correct (>).
+6. [P] **Indev obsidian drop**: BlockStone(49) -> drops cobblestone; ours
+   drops obsidian in Indev (SurvivalTest.c:662-679; c0.30 path correct).
+7. [P] c0.30 hardness: dirt 10 (ours 12), sand 10 (ours 12), slab+double 40
+   (ours 20), brick 40 (ours 0!) per /tmp/mcraft_client Block.java setData.
+   Notes:2560 claims brick 0 from "getHardness switch" — no such switch in
+   this decompile. RE-VERIFY carefully (previous session used a different
+   decompile?), then fix values + notes.
+8. [P] **c0.30 double slab drops 1 slab** not 2 (SlabBlock.java:45-47 only
+   overrides getDrop; getDropCount default 1). Ours 2 = slab dupe
+   (SurvivalTest.c:603-605). Notes self-contradict (2533 vs 3631).
+9. [P] **Indev dig-time model** (MEDIUM): Block.blockStrength = strVsBlock/
+   hardness/30 per tick, /5 in water, /5 airborne; non-harvestable digs at
+   1/hardness/100 with NO tool bonus (slow dig, no drop). Ours: c0.30
+   hardness*20 ticks model, no penalties, non-harvestable digs full speed
+   (SurvivalTest.c:6078-6082). Obsidian w/o diamond pick: ours ~201 ticks
+   vs genuine 1000.
+10. [P] Tool effectiveness lists: genuine explicit block lists (pickaxe
+    excludes brick/obsidian/furnace!; axe excludes workbench; spade excludes
+    leaves/sponge); ours dig-sound proxy over-applies (IndevTest.c:334-341).
+11. [P] Mirrored recipe matching missing: genuine tries mirrored layouts
+    (CraftingRecipe.java:19-32); axe/hoe/bow/flint&steel can't be crafted
+    mirrored in ours (IndevTest.c:443-466).
+12. [P] Indev arrow physics: drag 0.99 (0.8 water), gravity flat 0.03,
+    gaussian spread 0.0075/axis (EntityArrow.java:43-60,177-189); ours uses
+    c0.30 constants in both modes (SurvivalTest.c:4498, 4581, 4723).
+13. [P] Lit furnace should drop LIT furnace (62) in Indev (no idDropped
+    override); ours canonicalises to idle. Low priority; notes claim wrong.
+14. [P] Mushroom eating is c0.30-only (SurvivalGameMode.useItem); ours
+    allows in Indev too (SurvivalTest.c:5872-5878).
+15. [P] Hardness-0 blocks don't wear tools in our insta-break path; genuine
+    onBlockDestroyed always fires.
+
+## Domain 4: Entities + environment — AUDIT NOT RUN (agent hit usage limit)
+Re-run next session: EntityItem physics/pickup/despawn + render copies,
+arrows (covered partially by 3.12), TNT entity + explosion drops, paintings,
+day/night celestialAngle + skylight steps, random tick coverage, grass/
+sapling/crops/farmland, fluid flow, fire spread spot-check, particle ticks.
