@@ -896,6 +896,26 @@ static void IndevBlocks_Define(void) {
 		for (hi = BLOCK_RED; hi <= BLOCK_WHITE; hi++) SurvivalTest_SetHardness((BlockID)hi, 16);
 	}
 
+	/* Indev classifies footsteps/breaks by Block.stepSound - footsteps use
+	    stepSoundDir2() = "step." + name (also placing + mining-progress),
+	    the break uses the overridable stepSoundDir(). in-20100223 differs
+	    from ClassiCube's modern block-sound table on four classic blocks;
+	    fixed here so only Indev mode is affected (c0.30 keeps the engine
+	    defaults - this function never runs there):
+	    - sand: soundSandFootstep - footstep "step.sand" (SAND), but the
+	      break override is "step.gravel" (GRAVEL), not sand.
+	    - glass: soundGlassFootstep = StepSoundGlass("stone") - footstep is
+	      "step.stone" (STONE), not metal; the break stays "random.glass".
+	    - gold/iron blocks: soundMetalFootstep = StepSound("stone", ,1.5) -
+	      Indev has no distinct metal footstep, they walk/break as STONE
+	      (only the pitch differs, which the engine's sample bakes in). */
+	Blocks.DigSounds[BLOCK_SAND]   = SOUND_GRAVEL; /* footstep stays SAND */
+	Blocks.StepSounds[BLOCK_GLASS] = SOUND_STONE;  /* footstep step.stone */
+	Blocks.DigSounds[BLOCK_GLASS]  = SOUND_GLASS;  /* break random.glass (set
+	    explicitly - the engine block default resolves to metal at runtime) */
+	Blocks.StepSounds[BLOCK_GOLD] = SOUND_STONE; Blocks.DigSounds[BLOCK_GOLD] = SOUND_STONE;
+	Blocks.StepSounds[BLOCK_IRON] = SOUND_STONE; Blocks.DigSounds[BLOCK_IRON] = SOUND_STONE;
+
 	/* Crop stages 0-7: tiles 107-114 drawn as the genuine "#" row pattern */
 	/*  (Builder_DrawCrops), walk-through, instant break, not placeable */
 	/*  (planted via seeds). */
