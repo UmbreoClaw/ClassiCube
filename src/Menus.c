@@ -2127,7 +2127,7 @@ static void SwitchBindsMain(void* s, void* w) {
 *#########################################################################################################################*/
 struct KeyBindsScreen;
 typedef void (*InitKeyBindings)(struct KeyBindsScreen* s);
-#define KEYBINDS_MAX_BTNS 12
+#define KEYBINDS_MAX_BTNS 14
 
 static struct KeyBindsScreen {
 	Screen_Body	
@@ -2356,11 +2356,11 @@ void ClassicHacksBindingsScreen_Show(void) {
 *-------------------------------------------------NormalBindingsScreen----------------------------------------------------*
 *#########################################################################################################################*/
 void NormalBindingsScreen_Show(void) {
-	static const cc_uint8 binds[]    = { BIND_FORWARD, BIND_BACK, BIND_JUMP, BIND_CHAT, BIND_SET_SPAWN, BIND_TABLIST, BIND_LEFT, BIND_RIGHT, BIND_INVENTORY, BIND_FOG, BIND_RESPAWN, BIND_SEND_CHAT };
-	static const char* const descs[] = { "Forward", "Back", "Jump", "Chat", "Set spawn", "Player list", "Left", "Right", "Inventory", "Toggle fog", "Respawn", "Send chat" };
+	static const cc_uint8 binds[]    = { BIND_FORWARD, BIND_BACK, BIND_JUMP, BIND_CHAT, BIND_SET_SPAWN, BIND_TABLIST, BIND_SURVIVAL_INVENTORY, BIND_LEFT, BIND_RIGHT, BIND_INVENTORY, BIND_FOG, BIND_RESPAWN, BIND_SEND_CHAT };
+	static const char* const descs[] = { "Forward", "Back", "Jump", "Chat", "Set spawn", "Player list", "Survival inventory", "Left", "Right", "Inventory", "Toggle fog", "Respawn", "Send chat" };
 	
 	KeyBindsScreen_Reset(NULL, Menu_SwitchBindsHacks, 250);
-	KeyBindsScreen_SetLayout(-140, 10, 6);
+	KeyBindsScreen_SetLayout(-140, 10, 7);
 	KeyBindsScreen_Show(Array_Elems(binds), binds, descs, "Normal controls");
 }
 

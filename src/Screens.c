@@ -1820,10 +1820,13 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 		ChatScreen_OpenInput(&String_Empty);
 	} else if (key == CCKEY_SLASH) {
 		ChatScreen_OpenInput(&slash);
-	} else if (InputBind_Claims(BIND_INVENTORY, key, device)) {
-		/* The Inventory bind (default I, remappable in Controls) opens the
-		    survival/Indev inventory - SurvivalInvScreen_Show routes to the
-		    creative block grid outside survival and no-ops in plain c0.30-s. */
+	} else if (SurvivalTest_Enabled ?
+			InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) :
+			InputBind_Claims(BIND_INVENTORY, key, device)) {
+		/* Survival/Indev opens its inventory on the dedicated Survival
+		    inventory bind (default I); Classic/creative keeps the engine's
+		    block-list bind (default B). SurvivalInvScreen_Show routes to the
+		    creative grid outside survival and no-ops in plain c0.30-s. */
 		SurvivalInvScreen_Show();
 	} else {
 		return false;
@@ -3622,8 +3625,8 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 
 static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	/* The Inventory bind (or Escape) closes the screen it opened. */
-	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
+	/* The Survival inventory bind (or Escape) closes the screen it opened. */
+	if (InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
 		SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */

@@ -411,14 +411,15 @@ const BindMapping PadBind_Defaults[BIND_COUNT] = {
 	{ 0, 0 }, { 0, 0 }, { 0, 0 },           /* BIND_HOTBAR_1, BIND_HOTBAR_2, BIND_HOTBAR_3 */
 	{ 0, 0 }, { 0, 0 }, { 0, 0 },           /* BIND_HOTBAR_4, BIND_HOTBAR_5, BIND_HOTBAR_6 */
 	{ 0, 0 }, { 0, 0 }, { 0, 0 },           /* BIND_HOTBAR_7, BIND_HOTBAR_8, BIND_HOTBAR_9 */
-	{ CCPAD_ZL, 0 }, { CCPAD_ZR, 0 }        /* BIND_HOTBAR_LEFT, BIND_HOTBAR_RIGHT */
+	{ CCPAD_ZL, 0 }, { CCPAD_ZR, 0 },       /* BIND_HOTBAR_LEFT, BIND_HOTBAR_RIGHT */
+	{ 0, 0 }                                /* BIND_SURVIVAL_INVENTORY */
 };
 
 const BindMapping KeyBind_Defaults[BIND_COUNT] = {
 	{ 'W', 0 }, { 'S', 0 }, { 'A', 0 }, { 'D', 0 }, /* BIND_FORWARD - BIND_RIGHT */
 	{ CCKEY_SPACE, 0 },  { 'R', 0 },                /* BIND_JUMP, BIND_RESPAWN */
 	{ CCKEY_ENTER, 0 },  { 'T', 0 },                /* BIND_SET_SPAWN, BIND_CHAT */
-	{ 'I', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
+	{ 'B', 0 },          { 'F', 0 },                /* BIND_INVENTORY, BIND_FOG */
 	{ CCKEY_ENTER, 0 },  { CCKEY_TAB, 0 },          /* BIND_SEND_CHAT, BIND_TABLIST */
 	{ CCKEY_LSHIFT, 0 }, { 'X', 0}, { 'Z', 0 },     /* BIND_SPEED, BIND_NOCLIP, BIND_FLY */ 
 	{ 'Q', 0 },          { 'E', 0 },                /* BIND_FLY_UP, BIND_FLY_DOWN */
@@ -435,7 +436,8 @@ const BindMapping KeyBind_Defaults[BIND_COUNT] = {
 	{ '1', 0 }, { '2', 0 }, { '3', 0 },             /* BIND_HOTBAR_1, BIND_HOTBAR_2, BIND_HOTBAR_3 */
 	{ '4', 0 }, { '5', 0 }, { '6', 0 },             /* BIND_HOTBAR_4, BIND_HOTBAR_5, BIND_HOTBAR_6 */
 	{ '7', 0 }, { '8', 0 }, { '9', 0 },             /* BIND_HOTBAR_7, BIND_HOTBAR_8, BIND_HOTBAR_9 */
-	{ 0, 0 }, { 0, 0 }                              /* BIND_HOTBAR_LEFT, BIND_HOTBAR_RIGHT */
+	{ 0, 0 }, { 0, 0 },                             /* BIND_HOTBAR_LEFT, BIND_HOTBAR_RIGHT */
+	{ 'I', 0 }                                     /* BIND_SURVIVAL_INVENTORY */
 };
 
 static const char* const bindNames[BIND_COUNT] = {
@@ -452,7 +454,8 @@ static const char* const bindNames[BIND_COUNT] = {
 	"Hotbar1", "Hotbar2", "Hotbar3",
 	"Hotbar4", "Hotbar5", "Horbar6",
 	"Hotbar7", "Hotbar8", "Hotbar9",
-	"HotbarLeft", "HotbarRight"
+	"HotbarLeft", "HotbarRight",
+	"SurvivalInventory"
 };
 
 
