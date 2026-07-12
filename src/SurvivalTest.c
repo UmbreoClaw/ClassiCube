@@ -4384,10 +4384,21 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 				IndevTest_TrampleStep(e->Position.x, e->Position.y, e->Position.z);
 			}
 			if (under != BLOCK_AIR && sp) {
-				sdx = e->Position.x - sp->Base.Position.x;
-				sdz = e->Position.z - sp->Base.Position.z;
-				if (sdx * sdx + sdz * sdz < 1024.0f)
-					Audio_PlayStepSound(Blocks.StepSounds[under]);
+				/* Heard with a distance-attenuated volume, like the genuine
+				    playSound path: Indev playSoundAtEntity's audible range is
+				    16 blocks (16*vol for loud sounds; footsteps are quiet so
+				    16), c0.30 Level.playSound's is 32 (distanceToSqr<1024),
+				    and both fall the volume off linearly to 0 at that range
+				    (BaseSoundPos: 1 - dist/32). Was a flat 32-block horizontal
+				    cutoff at full volume - too far AND too loud in Indev. */
+				float range = IndevTest_Enabled ? 16.0f : 32.0f;
+				float ddy   = e->Position.y - sp->Base.Position.y;
+				float dist;
+				sdx  = e->Position.x - sp->Base.Position.x;
+				sdz  = e->Position.z - sp->Base.Position.z;
+				dist = Math_SqrtF(sdx * sdx + ddy * ddy + sdz * sdz);
+				if (dist < range)
+					Audio_PlayStepSoundAt(Blocks.StepSounds[under], 1.0f - dist / range);
 			}
 		}
 	}

@@ -50,6 +50,8 @@ void Audio_SetMusic(int volume);
 void Audio_SetSounds(int volume);
 void Audio_PlayDigSound(cc_uint8 type);
 void Audio_PlayStepSound(cc_uint8 type);
+/* Plays a step sound scaled by a 0..1 volume multiplier (mob footstep distance falloff). */
+void Audio_PlayStepSoundAt(cc_uint8 type, float volScale);
 #define AUDIO_MAX_BUFFERS 4
 
 cc_bool AudioBackend_Init(void);

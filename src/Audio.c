@@ -53,6 +53,7 @@ static void Sounds_Start(void) {
 
 void Audio_PlayDigSound(cc_uint8 type)  { }
 void Audio_PlayStepSound(cc_uint8 type) { }
+void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) { }
 void Audio_PlayMobSound(int type, float volume, float pitch, float dist) { }
 
 void Sounds_LoadDefault(void) { }
@@ -221,12 +222,12 @@ CC_NOINLINE static void Sounds_Fail(cc_result res) {
 	Audio_SetSounds(0);
 }
 
-static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
+static void Sounds_PlayScaled(cc_uint8 type, struct Soundboard* board, float volScale) {
 	const struct Sound* snd;
 	struct AudioData data;
 	cc_result res;
 
-	if (type == SOUND_NONE || !Audio_SoundsVolume) return;
+	if (type == SOUND_NONE || !Audio_SoundsVolume || volScale <= 0.0f) return;
 	snd = Soundboard_PickRandom(board, type);
 	if (!snd) return;
 
@@ -234,7 +235,7 @@ static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
 	data.channels   = snd->channels;
 	data.sampleRate = snd->sampleRate;
 	data.rate       = 100;
-	data.volume     = Audio_SoundsVolume;
+	data.volume     = (int)(Audio_SoundsVolume * volScale);
 
 	/* https://minecraft.wiki/w/Block_of_Gold#Sounds */
 	/* https://minecraft.wiki/w/Grass#Sounds */
@@ -256,6 +257,18 @@ static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
 
 	res = AudioPool_Play(&data);
 	if (res) Sounds_Fail(res);
+}
+
+static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
+	Sounds_PlayScaled(type, board, 1.0f);
+}
+
+/* Survival: a mob's footstep is heard with a distance-attenuated volume
+    (Indev playSoundAtEntity / c0.30 Level.playSound - both fall the volume
+    off linearly to silence at their audible range, 16 / 32 blocks; the
+    caller passes the 1 - dist/range multiplier). */
+void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) {
+	Sounds_PlayScaled(type, &stepBoard, volScale);
 }
 
 static void Audio_PlayBlockSound(void* obj, IVec3 coords, BlockID old, BlockID now) {
