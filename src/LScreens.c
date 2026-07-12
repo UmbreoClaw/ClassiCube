@@ -184,17 +184,18 @@ static void SwitchToUpdates(void* w)       { UpdatesScreen_SetActive(); }
 *#########################################################################################################################*/
 static struct ChooseModeScreen {
 	LScreen_Layout
-	struct LLine seps[2];
+	struct LLine seps[3];
 	struct LButton btnEnhanced, btnClassicHax, btnClassic, btnSurvival, btnIndev, btnBack;
 	struct LLabel  lblHelp, lblEnhanced[2], lblClassicHax[2], lblClassic[2], lblSurvival[2];
 	cc_bool firstTime;
 } ChooseModeScreen CC_BIG_VAR;
 
-#define CHOOSEMODE_SCREEN_MAX_WIDGETS 16
+#define CHOOSEMODE_SCREEN_MAX_WIDGETS 18
 static struct LWidget* chooseMode_widgets[CHOOSEMODE_SCREEN_MAX_WIDGETS];
 
 LAYOUTS mode_seps0[] = { { ANCHOR_CENTRE, -5 }, { ANCHOR_CENTRE, -85 } };
 LAYOUTS mode_seps1[] = { { ANCHOR_CENTRE, -5 }, { ANCHOR_CENTRE, -15 } };
+LAYOUTS mode_seps2[] = { { ANCHOR_CENTRE, -5 }, { ANCHOR_CENTRE,  45 } };
 
 LAYOUTS mode_btnEnhanced[]    = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE, -120      } };
 LAYOUTS mode_lblEnhanced0[]   = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE, -120 - 12 } };
@@ -272,6 +273,7 @@ static void ChooseModeScreen_Activated(struct LScreen* s_) {
 	struct ChooseModeScreen* s = (struct ChooseModeScreen*)s_;
 	LLine_Add(s,   &s->seps[0], 490, mode_seps0);
 	LLine_Add(s,   &s->seps[1], 490, mode_seps1);
+	LLine_Add(s,   &s->seps[2], 490, mode_seps2);
 
 	LButton_Add(s, &s->btnEnhanced, 145, 35, "Enhanced",                        
 				UseModeEnhanced,   mode_btnEnhanced);
