@@ -1820,11 +1820,10 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 		ChatScreen_OpenInput(&String_Empty);
 	} else if (key == CCKEY_SLASH) {
 		ChatScreen_OpenInput(&slash);
-	} else if (InputBind_Claims(BIND_INVENTORY, key, device) ||
-			(SurvivalTest_Enabled && key == 'E')) {
-		/* Survival/Indev also opens the inventory with E (modern Minecraft's
-		    inventory key); E is BIND_FLY_DOWN by default, which is inert in
-		    survival since flying is disabled, so there's no conflict. */
+	} else if (InputBind_Claims(BIND_INVENTORY, key, device)) {
+		/* The Inventory bind (default I, remappable in Controls) opens the
+		    survival/Indev inventory - SurvivalInvScreen_Show routes to the
+		    creative block grid outside survival and no-ops in plain c0.30-s. */
 		SurvivalInvScreen_Show();
 	} else {
 		return false;
@@ -3623,9 +3622,8 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 
 static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
 	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
-	/* E closes too, mirroring the survival E-to-open binding. */
-	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE ||
-		(SurvivalTest_Enabled && key == 'E')) {
+	/* The Inventory bind (or Escape) closes the screen it opened. */
+	if (InputBind_Claims(BIND_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
 		SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
