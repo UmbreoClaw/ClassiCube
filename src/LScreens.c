@@ -206,10 +206,13 @@ LAYOUTS mode_btnClassic[]     = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE, 
 LAYOUTS mode_lblClassic0[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,   20 - 12 } };
 LAYOUTS mode_lblClassic1[]    = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,   20 + 12 } };
 
-LAYOUTS mode_btnSurvival[]  = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE,  90      } };
-LAYOUTS mode_btnIndev[]     = { { ANCHOR_CENTRE_MIN,  -95 }, { ANCHOR_CENTRE,  90      } };
-LAYOUTS mode_lblSurvival0[] = { { ANCHOR_CENTRE_MIN,   65 }, { ANCHOR_CENTRE,  90 - 12 } };
-LAYOUTS mode_lblSurvival1[] = { { ANCHOR_CENTRE_MIN,   65 }, { ANCHOR_CENTRE,  90 + 12 } };
+/* Survival + Indev stack vertically in one double-height row, with the
+    shared description centred between them at the same x as the other
+    rows' labels. */
+LAYOUTS mode_btnSurvival[]  = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE,  70      } };
+LAYOUTS mode_btnIndev[]     = { { ANCHOR_CENTRE_MIN, -250 }, { ANCHOR_CENTRE, 110      } };
+LAYOUTS mode_lblSurvival0[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 - 12 } };
+LAYOUTS mode_lblSurvival1[] = { { ANCHOR_CENTRE_MIN,  -85 }, { ANCHOR_CENTRE,  90 + 12 } };
 
 LAYOUTS mode_lblHelp[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 160 } };
 LAYOUTS mode_btnBack[] = { { ANCHOR_CENTRE, 0 }, { ANCHOR_CENTRE, 170 } };
