@@ -1,6 +1,54 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Indev mob AI: c0.30 chase logic leaked into the fallback (latest)
+## SESSION LOG - Deep spawning/world-fidelity audit (latest)
+
+User asked for a deeper sweep of spawning + world deviations, verified before
+acting. Read the full genuine spawn stack (MobSpawner both modes, the
+getCanSpawnHere chain, World.findSpawn, the day/night light path) against ours.
+
+**Deviation found + FIXED - Indev spawn ground must be a NORMAL (opaque) cube.**
+The two modes gate the "ground below" on DIFFERENT predicates:
+- c0.30 MobSpawner uses `isSolidTile` (any solid) -> our `Mob_BlockIsSolid`
+  (COLLIDE_SOLID) is correct, unchanged.
+- Indev MobSpawner.performSpawning gates on `isBlockNormalCube(x,y-1,z)` =
+  `Block.isOpaqueCube()`. Leaves/glass/slabs are solid-collidable but NOT
+  opaque cubes, so genuine Indev never spawns on tree canopies / glass. We
+  were using COLLIDE_SOLID there too, so mobs could perch on leaves.
+Added `Mob_BlockIsNormalCube` (Blocks.FullOpaque == DRAW_OPAQUE full cube =
+isOpaqueCube, clamps OOB like getBlockId) and used it for the Indev ground
+check only. Cell/head stay COLLIDE_SOLID pre-filters (net unchanged - the real
+box clearance is SpawnMobAt's isFree). gdb-verified: NormalCube gives
+dirt=1/stone=1, leaves=0/glass=0; Solid gave leaves=1/glass=1 (the old bug).
+
+**Everything else verified FAITHFUL (no change):**
+- Initial population: Indev 1000 performSpawning passes at gen (LevelGenerator);
+  c0.30 vol/800 at prepareLevel. Ours matches; Indev correctly skips a
+  prepareLevel bulk-pop.
+- Per-tick cadence: Indev runs every tick (4 monster + 4 animal attempts);
+  c0.30 gate `rand(100) < area && count < area*20`, spawn `area` passes. Match.
+- Caps: Indev monsterCap = vol*20/64^3 /2 (Normal), animalCap = w*l/4000,
+  counted separately (Mob_IndevCountKinds). c0.30 area*20. Match.
+- Type rolls: Indev monster nextInt(5) with index 4 = no-spawn, animal
+  nextInt(2); c0.30 nextInt(6). Jitter nextInt(6)-nextInt(6) horizontal, 0
+  vertical. Y depth-bias (min of two floats) for monsters only. Match.
+- Distance gates: Indev >= 32 (1024 sq), c0.30 >= 16 (256 sq). Match.
+- Light rules: monster `light <= rand(8)`, animal `light > 8`; c0.30
+  `!isLit || rand(5)==0`. Match. getBlockPathWeight>=0 (EntityCreature) is
+  NOT ported but is redundant with these (dark => weight>0, bright animal =>
+  weight>0) - verified no behavioural difference, so intentionally skipped.
+- Box/liquid clearance: genuine getCanSpawnHere's checkIfAABBIsClear +
+  getCollidingBoundingBoxes + !getIsAnyLiquid == our SpawnMobAt isFree
+  (Entity_TouchesAny over solid+liquid). Match.
+- Player findSpawn: genuine World.findSpawn (central-half pick, first
+  uncovered+1, > waterLevel & >= 4, 7x4x8 clear volume, opaque footprint) is
+  ported faithfully in IndevGen_FindSpawn.
+- Day/night: genuine DOES darken skylight over time (World.skylightSubtracted,
+  eased by Light.updateDaylightCycle toward getSkyBrightness) - our
+  indev_lastSkyLight one-step easing models this. getBlockLightValue reads the
+  stored (eased) nibble and CLAMPS OOB - matching our IndevTest_LightLevel.
+  So night spawns are light-driven (not a separate time factor), faithfully.
+
+## SESSION LOG - Indev mob AI: c0.30 chase logic leaked into the fallback
 
 User: Indev zombies "fighting its own AI to attack players" and "semi wander
 off even a few blocks away".

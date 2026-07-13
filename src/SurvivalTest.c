@@ -4494,6 +4494,20 @@ static cc_bool Mob_BlockIsSolid(int x, int y, int z) {
 	return Blocks.Collide[World_GetBlock(x, y, z)] == COLLIDE_SOLID;
 }
 
+/* World.isBlockNormalCube = Block.isOpaqueCube() - the INDEV spawner's ground
+    test (MobSpawner.performSpawning gates on isBlockNormalCube(x, y-1, z)).
+    Unlike c0.30's isSolidTile (any solid tile, which our Mob_SpawnerRun keeps),
+    Indev requires a FULL OPAQUE cube beneath the spawn: leaves, glass and slabs
+    are solid-collidable but NOT opaque cubes, so genuine monsters/animals never
+    perch on tree canopies or glass. Blocks.FullOpaque is exactly DRAW_OPAQUE
+    full cubes, matching isOpaqueCube. Clamps out-of-bounds like getBlockId. */
+static cc_bool Mob_BlockIsNormalCube(int x, int y, int z) {
+	if (x < 0) x = 0; else if (x >= World.Width)  x = World.Width  - 1;
+	if (y < 0) y = 0; else if (y >= World.Height) y = World.Height - 1;
+	if (z < 0) z = 0; else if (z >= World.Length) z = World.Length - 1;
+	return Blocks.FullOpaque[World_GetBlock(x, y, z)];
+}
+
 /* Level.isFree's per-block test: any solid OR liquid block occupying the */
 /*  candidate mob's bounding box vetoes the spawn. */
 static cc_bool Mob_SpawnBlockedBy(BlockID b) {
@@ -4736,7 +4750,11 @@ static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
 
 				if (cx < 0 || cz < 1 || cy < 0 || cy >= World.Height - 2 ||
 					cx >= World.Width || cz >= World.Length) continue;
-				if (!Mob_BlockIsSolid(cx, cy - 1, cz)) continue;
+				/* genuine gate: isBlockNormalCube(cy-1) - a full OPAQUE cube, so
+				    no perching on leaves/glass (the cell/head "not solid" tests
+				    stay a stricter pre-filter; the real box clearance is enforced
+				    by SpawnMobAt's isFree, so their net result is unchanged). */
+				if (!Mob_BlockIsNormalCube(cx, cy - 1, cz)) continue;
 				if (Mob_BlockIsSolid(cx, cy, cz))      continue;
 				if (Mob_BlockIsSolid(cx, cy + 1, cz))  continue;
 				if (Blocks.Collide[World_GetBlock(cx, cy, cz)] == COLLIDE_LIQUID) continue;
