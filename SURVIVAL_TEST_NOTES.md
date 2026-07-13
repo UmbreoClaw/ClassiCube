@@ -32,15 +32,30 @@ away instead of fleeing. (The floating world constantly recycles mob slots -
 mobs walk off the islands and drop to the world's y=0 collision boundary -
 which made longer observations noisy.)
 
-### Spawn-on-floating-floor question
-Mobs canNOT spawn in mid-air. Both spawn passes (`Mob_SpawnerRun` initial
-population and `Mob_IndevSpawnPass` per-tick) require `Mob_BlockIsSolid(cx,
-cy-1, cz)` with clear air at cy/cy+1 - a genuine `getCanSpawnHere`. The mobs
-seen piled at y~0 spawned validly ON the islands, then walked off the edges
-and fell to the world's lower boundary (this floating world has NO bottom
-floor - y=0/1/2 are all air). The old AI bug (forced random marching) made
-them conga-line off the cliffs; the fix makes them wander gently like genuine
-Indev, so far fewer walk off. No spawner change - it is already faithful.
+### Spawn-on-floating-floor bug (Mob_BlockIsSolid out-of-bounds)
+Follow-up: the user still saw tons of mobs on the void floor. Root cause was
+a real deviation. `Mob_BlockIsSolid` (the spawner's ground/clearance test)
+returned `true` for out-of-bounds cells. Genuine `World.getBlockId` instead
+CLAMPS out-of-bounds coords to the edge block (`y<0 -> y=0`, etc.), and the
+spawn gate is `!isBlockNormalCube(x,y,z) && isBlockNormalCube(x,y-1,z) &&
+getCanSpawnHere` (MobSpawner.performSpawning line 125). So at the bottom the
+"ground below" test at y-1 = -1 genuinely reads the y=0 block - which in a
+floating world is AIR, so monsters do NOT spawn in the void.
+
+Our `return true` faked solid bedrock at y=-1, so the pitch-black void column
+passed both the ground check AND the monster light check, carpeting the y=0
+floor with endless spawns. Fixed `Mob_BlockIsSolid` to clamp coordinates like
+getBlockId instead of returning true. (Only used by the two spawner passes -
+no AI/collision impact. Normal worlds are unaffected: their y=0 is bedrock,
+still solid.)
+
+Rig-verified: on a floating world, `Mob_BlockIsSolid(x,-1,z)` now returns
+false (reads the y=0 air); after clearing all mobs and running the per-tick
+spawner 45s, the void floor stayed at 0 mobs while islands filled to 11.
+
+Note: mobs cannot spawn mid-air either - both passes still require solid
+ground below. The few that reach the bottom now are only ones that walked off
+an island edge (much reduced by the AI fix above).
 
 ## SESSION LOG - Large (double) chest: InventoryLargeChest 54-slot GUI
 

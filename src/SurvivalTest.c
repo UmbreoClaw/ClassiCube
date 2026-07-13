@@ -4480,7 +4480,17 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 /* Ground-validity check shared by both the outer spawn-point roll and the */
 /*  inner cluster jitter (MobSpawner.spawn's isSolidTile calls). */
 static cc_bool Mob_BlockIsSolid(int x, int y, int z) {
-	if (!World_Contains(x, y, z)) return true;
+	/* Genuine World.getBlockId CLAMPS out-of-bounds coords to the edge block
+	    (it does NOT treat the void as solid). The spawner's "ground below"
+	    test therefore reads getBlockId(x, y-1, z) with y-1 = -1 CLAMPED to
+	    y = 0 - so a spawn only sticks at the very bottom when the y=0 row is
+	    itself a solid cube. In a floating world y=0 is air, which is exactly
+	    why monsters do NOT carpet the void floor in genuine Indev. Returning
+	    `true` for below-world (the old behaviour) faked solid ground at y=-1
+	    and let the dark void spawn endless monsters onto the bottom. */
+	if (x < 0) x = 0; else if (x >= World.Width)  x = World.Width  - 1;
+	if (y < 0) y = 0; else if (y >= World.Height) y = World.Height - 1;
+	if (z < 0) z = 0; else if (z >= World.Length) z = World.Length - 1;
 	return Blocks.Collide[World_GetBlock(x, y, z)] == COLLIDE_SOLID;
 }
 
