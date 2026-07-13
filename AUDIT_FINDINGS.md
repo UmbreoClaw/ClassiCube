@@ -159,28 +159,19 @@ tables + absorption, melee damage, canHarvest rules, every crafting recipe
 shape, furnace smelts/burn times/cook order, drops tables (except below),
 Indev hardness overrides, hoe till, bow behaviour.
 
-1. [P] **Indev food maxStackSize 1** (MEDIUM): ItemFood sets maxStackSize=1
-   (apple/bread/porkchops); ours stacks them to 64 (IndevTest.c:543-556).
+1. [V] Indev food maxStackSize 1: FIXED - ItemFood foods are single-stack
+   (IndevTest.c IndevItems_Seed, verified apple/bread/porkchops).
 2. [V] Sword dig speed 1.5x vs everything: FIXED in round 3 (dig-time) -
    IndevTest_StrVsBlock returns float, swords a flat 1.5f.
-3. [P] **Sword wear inverted** (MEDIUM): sword 1/hit 2/block; tools 2/hit
-   1/block (ItemSword.java:19-25, ItemTool.java:29-35). Ours flat 2/hit
-   1/block for all (SurvivalTest.c:4483, 6083). Notes:2239 wrong — fix.
-4. [P] **Hoe + flint&steel must not wear from digging/melee** (MEDIUM):
-   genuine no-op hitEntity/onBlockDestroyed; ours wears them like tools
-   (IndevTest.c:284-295 ToolMaxDamage drives DamageHeldTool).
-5. [P] Tool breakage off-by-one: genuine breaks when damage > maxDamage;
-   ours >= (SurvivalTest.c:6016). Armor already correct (>).
-6. [P] **Indev obsidian drop**: BlockStone(49) -> drops cobblestone; ours
-   drops obsidian in Indev (SurvivalTest.c:662-679; c0.30 path correct).
-7. [P] c0.30 hardness: dirt 10 (ours 12), sand 10 (ours 12), slab+double 40
-   (ours 20), brick 40 (ours 0!) per /tmp/mcraft_client Block.java setData.
-   Notes:2560 claims brick 0 from "getHardness switch" — no such switch in
-   this decompile. RE-VERIFY carefully (previous session used a different
-   decompile?), then fix values + notes.
-8. [P] **c0.30 double slab drops 1 slab** not 2 (SlabBlock.java:45-47 only
-   overrides getDrop; getDropCount default 1). Ours 2 = slab dupe
-   (SurvivalTest.c:603-605). Notes self-contradict (2533 vs 3631).
+3. [V] Sword wear: FIXED - IndevTest_ToolUseWear returns sword 1/hit 2/block,
+   tools 2/hit 1/block (genuine ItemSword/ItemTool split).
+4. [V] Hoe/flint&steel wear: FIXED - ToolUseWear returns 0 for hoe; flint&
+   steel only wears on ignite (IndevFire, genuine ItemFlintAndSteel.onItemUse).
+5. [V] Tool breakage: FIXED - DamageHeldTool uses strict > maxDamage.
+6. [V] Indev obsidian drop: FIXED - SpawnIndevDrops drops BLOCK_COBBLE.
+7. [V] c0.30 hardness: FIXED + re-verified vs Block.java setData - dirt 10,
+   sand 10, slab/double 40, brick 40 (2.0F), grass 12, gravel 12. All match.
+8. [V] c0.30 double slab drops 1: FIXED - GetBlockDrop count=1 for DOUBLE_SLAB.
 9. [V] **Indev dig-time model** (MEDIUM): FIXED in round 3 (dig-time) -
    Indev_BlockStrength ports Block.blockStrength exactly (float accumulator
    st_breakDamage, break at >= 1.0, /5 head-in-water, /5 airborne,
@@ -190,9 +181,8 @@ Indev hardness overrides, hoe till, bow behaviour.
     proxy replaced by IndevTest_StrVsBlock with the genuine ItemPickaxe/
     ItemAxe/ItemSpade id arrays (+ sword flat 1.5, chest/furnace variant
     fold). Workbench/brick/obsidian/furnace correctly revert to 1.0.
-11. [P] Mirrored recipe matching missing: genuine tries mirrored layouts
-    (CraftingRecipe.java:19-32); axe/hoe/bow/flint&steel can't be crafted
-    mirrored in ours (IndevTest.c:443-466).
+11. [V] Mirrored recipe matching: FIXED - IndevTest_MatchRecipe tries every
+    offset unmirrored AND horizontally mirrored (mirror flag in the scan).
 12. [V] Indev arrow physics: FIXED in round 3 (arrows) - full EntityArrow
     port: setArrowHeading gaussian spread (0.0075/axis, player 1.0 /
     skeleton 12.0), move-then-drag order, drag 0.99 air / 0.8 water, flat
@@ -204,8 +194,8 @@ Indev hardness overrides, hoe till, bow behaviour.
     IndevTest_DropFormBlock keeps lit 62 in the drop paths (mining +
     explosion); CanonicalBlock untouched for recipes/naming; placed lit
     furnaces rotate like idle ones and genuinely stay lit until used.
-14. [P] Mushroom eating is c0.30-only (SurvivalGameMode.useItem); ours
-    allows in Indev too (SurvivalTest.c:5872-5878).
+14. [V] Mushroom eating c0.30-only: FIXED - TryEat returns false for Indev
+    before the mushroom branch (Indev shrooms are soup ingredients).
 15. [V] Insta-break tool wear: FIXED in round 3 (entity polish) -
     SurvivalTest_WearHeldToolForBlockBreak in InputHandler_DeleteBlock
     (wear before removal, like sendBlockRemoved's onBlockDestroyed).

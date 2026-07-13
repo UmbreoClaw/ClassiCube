@@ -291,6 +291,10 @@ void SurvivalTest_ApplyHurtTilt(struct Matrix* view, float t);
 enum SurvivalDebugMobType {
 	SURVIVAL_DEBUG_MOB_ZOMBIE, SURVIVAL_DEBUG_MOB_SKELETON, SURVIVAL_DEBUG_MOB_PIG,
 	SURVIVAL_DEBUG_MOB_CREEPER, SURVIVAL_DEBUG_MOB_SPIDER, SURVIVAL_DEBUG_MOB_SHEEP,
+	/* in-20100201's passive "Human" (generic EntityLiving) - debug-only, it is */
+	/*  never part of the natural spawn rotation. Must stay last so its value */
+	/*  lines up with the internal MOB_TYPE_HUMAN. */
+	SURVIVAL_DEBUG_MOB_HUMAN,
 	SURVIVAL_DEBUG_MOB_COUNT
 };
 

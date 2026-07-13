@@ -2368,6 +2368,14 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 
 enum MobType {
 	MOB_TYPE_ZOMBIE, MOB_TYPE_SKELETON, MOB_TYPE_PIG, MOB_TYPE_CREEPER, MOB_TYPE_SPIDER, MOB_TYPE_SHEEP,
+	/* Everything above is a genuine natural spawn - MobSpawner.spawn rolls */
+	/*  nextInt(6) over exactly these six types, so this marks that range. */
+	MOB_SPAWN_COUNT,
+	/* The generic humanoid EntityLiving (char.png skin, passive wander AI) that */
+	/*  in-20100201 spawns as the "Human" mob. We only ever create it via the */
+	/*  /client spawn debug command - it is deliberately OUTSIDE MOB_SPAWN_COUNT */
+	/*  so the natural spawner never rolls it. */
+	MOB_TYPE_HUMAN = MOB_SPAWN_COUNT,
 	MOB_TYPE_COUNT
 };
 /* The 3 broad AI behaviours found in the decompiled source - which of these */
@@ -2400,6 +2408,7 @@ static const struct MobTypeInfo mobTypeInfo[MOB_TYPE_COUNT] = {
 	/* CREEPER  */ { "creeper",  MOB_AI_ATTACK,     0.70f, 45.0f, 6, true,  200, 1.62f, 0.6f,1.8f,  0.6f,1.8f },
 	/* SPIDER   */ { "spider",   MOB_AI_JUMPATTACK, 0.56f,  0.0f, 6, false, 105, 0.72f, 1.4f,0.9f,  1.4f,0.9f },
 	/* SHEEP    */ { "sheep",    MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,  10, 1.72f, 1.4f,1.72f, 0.9f,1.3f },
+	/* HUMAN    */ { "humanoid", MOB_AI_PASSIVE,    0.70f,  0.0f, 0, false,   0, 1.62f, 0.6f,1.8f,  0.6f,1.8f },
 };
 
 struct Mob;
@@ -4602,7 +4611,7 @@ static void Mob_SpawnerRun(int count, Vec3* avoidPos) {
 		/*  would draw a third RNG float and destroy the bias. */
 		float r1 = Random_Float(&st_mobRng), r2 = Random_Float(&st_mobRng);
 
-		type = (cc_uint8)Random_Next(&st_mobRng, MOB_TYPE_COUNT);
+		type = (cc_uint8)Random_Next(&st_mobRng, MOB_SPAWN_COUNT);
 		x    = Random_Next(&st_mobRng, World.Width);
 		y    = (int)((r1 < r2 ? r1 : r2) * World.Height);
 		z    = Random_Next(&st_mobRng, World.Length);
@@ -7631,7 +7640,7 @@ void SurvivalTest_DebugSetArrows(int count) {
 
 /* Must match the SurvivalDebugMobType enum order (SurvivalTest.h). */
 static const char* const debugMobNames[SURVIVAL_DEBUG_MOB_COUNT] = {
-	"zombie", "skeleton", "pig", "creeper", "spider", "sheep"
+	"zombie", "skeleton", "pig", "creeper", "spider", "sheep", "human"
 };
 
 static void SpawnCommand_Execute(const cc_string* args, int argsCount) {
@@ -7676,7 +7685,7 @@ static struct ChatCommand SpawnCommand = {
 	{
 		"&a/client spawn [entity] [count] [noai] [armor]",
 		"&eSpawns entities in front of you. Entities: zombie, skeleton,",
-		"&e  spider, creeper, pig, sheep, tnt, drops, arrow.",
+		"&e  spider, creeper, pig, sheep, human, tnt, drops, arrow.",
 		"&enoai &f- mob stands still. &earmor &f- zombie/skeleton wears plate.",
 	}
 };

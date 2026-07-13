@@ -1,6 +1,35 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Paperdoll lean + spawn fallback + feedback triage (latest)
+## SESSION LOG - in-20100201 "Human" mob (debug-only) (latest)
+
+User: "find the source of in-20100201-0025 and port the human mob but only
+as debug spawns."
+
+- **Source traced**: cloned `pythonengineer/minecraft-python` branch
+  `0.31.20100201-2`. There is NO distinct Human class - `MobSpawner.spawnMob`
+  just does `mob = EntityLiving(world); mob.setEntityAI(AILiving())`. So the
+  "Human" is the generic base `EntityLiving`: `HEALTH = 20`, skin
+  `char.png`, passive wander AI (AILiving), default size 0.6x1.8.
+- **Port (SurvivalTest.c / .h)**: the mob-type enum used `MOB_TYPE_COUNT`
+  for BOTH the natural-spawner `nextInt(6)` range AND the info-table size.
+  Split them: `MOB_SPAWN_COUNT` (=6) bounds the spawner roll; `MOB_TYPE_HUMAN`
+  (=6) sits above it so `Mob_SpawnerRun` can never roll it. `MOB_TYPE_COUNT`
+  is now 7 (table size only).
+- Human `mobTypeInfo` row: model `"humanoid"` (its defaultTex IS `char.png`,
+  so an un-skinned mob renders as Steve), `MOB_AI_PASSIVE`, damage 0,
+  deathScore 0, size 0.6x1.8 both modes, heightOff 1.62. Health resolves to
+  20 (only Indev pig/sheep drop to 10). Not zombie/skeleton, so it never
+  gets daylight-burned or armored; not pig/sheep, so its hurt sound is the
+  generic `random.hurt` and it has no ambient voice - all correct for a bare
+  EntityLiving.
+- **Debug-only wiring**: added `SURVIVAL_DEBUG_MOB_HUMAN` (last, value lines
+  up with MOB_TYPE_HUMAN), `"human"` in `debugMobNames[]`, and to the
+  `/client spawn` help line. Reachable ONLY via `/client spawn human [count]`.
+- **Rig-verified**: `/client spawn human 3` on a loaded world - full-size
+  Steve-skinned humanoid renders and stands passively, no crash. Natural
+  spawner still rolls only the six real types.
+
+## SESSION LOG - Paperdoll lean + spawn fallback + feedback triage
 
 Playtest feedback batch (Indev-vs-CC side-by-sides). Fixed this pass:
 - **Paperdoll lean too much**: the vertical mouse tilt was applied as a
