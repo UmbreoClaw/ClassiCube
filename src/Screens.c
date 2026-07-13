@@ -2551,8 +2551,8 @@ void InventoryScreen_Hide(void) {
 #define SURVINV_PAD_BASE      8
 
 /* Displayed block-picture slots: storage + hotbar row + craft grid + open */
-/*  container (chest 27/furnace 3) + result + cursor. */
-#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_SLOTS + SURVIVAL_ARMOR_SLOTS + 2)
+/*  container (up to 54 for a large chest) + result + cursor. */
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_MAX + SURVIVAL_ARMOR_SLOTS + 2)
 #define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
 /* Two digits at most per slot, four vertices per digit. */
 #define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
@@ -2597,7 +2597,7 @@ static struct SurvivalInvScreen {
 	struct Texture   titleTex;
 	/* Genuine GuiContainer foreground labels (0x404040 dark gray text): */
 	/*  "Chest"/"Furnace"/"Crafting" panel titles + "Inventory" section label */
-	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory;
+	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory, lblLargeChest;
 	float fontTexF;  /* panel scale the label/count textures were built for */
 	struct Entity    doll;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
@@ -2644,13 +2644,20 @@ static int SurvivalInv_CraftCells(void) {
 	return dim * dim;
 }
 
-/* Slots of the open container: chest 27, furnace 3 (input/fuel/output). */
+/* Slots of the open container: single chest 27, large (double) chest 54, */
+/*  furnace 3 (input/fuel/output). */
 static int SurvivalInv_ContainerCells(void) {
 	switch (IndevTest_OpenKind()) {
-	case INDEV_CONTAINER_CHEST:   return SURVIVAL_CONTAINER_SLOTS;
+	case INDEV_CONTAINER_CHEST:   return IndevTest_ContainerSlotCount();
 	case INDEV_CONTAINER_FURNACE: return 3;
 	default: return 0;
 	}
+}
+
+/* Rows of chest slots in the open chest GUI: 3 (single) or 6 (large). */
+static int SurvivalInv_ChestRows(void) {
+	int n = IndevTest_ContainerSlotCount();
+	return n > 0 ? n / 9 : 3;
 }
 
 /* Pixel origin of open-container cell i. Genuine layouts: GuiChest grid at */
@@ -3137,17 +3144,19 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		panel.y      = (short)s->panelY;
 		if (contKind == INDEV_CONTAINER_CHEST) {
 			/* GuiChest composes the panel from two strips of container.png: */
-			/*  rows strip (0,0)-(176, rows*18+17=71), then the player- */
-			/*  inventory strip (0,126)-(176,222) below it. */
-			int topH = (int)(71 * s->texF);
+			/*  the slots strip (0,0)-(176, rows*18+17) - single 71, large 125 - */
+			/*  then the player-inventory strip (0,126)-(176,222) below it. The */
+			/*  single chest samples the top 3 rows of the same 6-row texture. */
+			int rowsH = SurvivalInv_ChestRows() * 18 + 17;
+			int topH  = (int)(rowsH * s->texF);
 			panel.width  = (cc_uint16)s->panelW;
 			panel.height = (cc_uint16)topH;
 			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
-			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 71.0f / 256.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = rowsH / 256.0f;
 			Texture_Render(&panel);
 			panel.y      = (short)(s->panelY + topH);
 			/* the strip is 96 texels drawn 96 units tall (GuiChest paints
-			    71 + 96 = 167 of the 168-unit ySize; the last unit is bare) */
+			    rowsH + 96 of the 114+rows*18 ySize; the last unit is bare) */
 			panel.height = (cc_uint16)(int)(96 * s->texF);
 			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
 			Texture_Render(&panel);
@@ -3372,7 +3381,12 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		struct Texture* name = NULL;
 		int nx = 8, ny = 6, invY = 72;
 		if (contKind == INDEV_CONTAINER_CHEST) {
-			name = &s->lblChest; invY = 74;
+			/* InventoryLargeChest.getInvName is "Large chest"; the "Inventory"
+			    section label follows the panel down at ySize-96+2 = rows*18+20
+			    (single 74, large 128). */
+			int rows = SurvivalInv_ChestRows();
+			name = rows > 3 ? &s->lblLargeChest : &s->lblChest;
+			invY = rows * 18 + 20;
 		} else if (contKind == INDEV_CONTAINER_FURNACE) {
 			name = &s->lblFurnace; nx = 60;
 		} else if (workbench) {
@@ -3428,6 +3442,7 @@ static void SurvivalInvScreen_ContextLost(void* screen) {
 	TextAtlas_Free(&s->countAtlas);
 	Gfx_DeleteTexture(&s->titleTex.ID);
 	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblLargeChest.ID);
 	Gfx_DeleteTexture(&s->lblFurnace.ID);
 	Gfx_DeleteTexture(&s->lblCrafting.ID);
 	Gfx_DeleteTexture(&s->lblInventory.ID);
@@ -3445,6 +3460,7 @@ static void SurvivalInv_MakeLabelTextures(struct SurvivalInvScreen* s) {
 	/* GuiContainer foreground labels - colour 4210752 (0x404040) = &8, */
 	/*  drawn without shadow like drawString(..., 4210752) */
 	static const cc_string lblChe = String_FromConst("&8Chest");
+	static const cc_string lblLrg = String_FromConst("&8Large chest");
 	static const cc_string lblFur = String_FromConst("&8Furnace");
 	static const cc_string lblCra = String_FromConst("&8Crafting");
 	static const cc_string lblInv = String_FromConst("&8Inventory");
@@ -3465,6 +3481,7 @@ static void SurvivalInv_MakeLabelTextures(struct SurvivalInvScreen* s) {
 	TextAtlas_Free(&s->countAtlas);
 	Gfx_DeleteTexture(&s->titleTex.ID);
 	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblLargeChest.ID);
 	Gfx_DeleteTexture(&s->lblFurnace.ID);
 	Gfx_DeleteTexture(&s->lblCrafting.ID);
 	Gfx_DeleteTexture(&s->lblInventory.ID);
@@ -3483,6 +3500,8 @@ static void SurvivalInv_MakeLabelTextures(struct SurvivalInvScreen* s) {
 
 	DrawTextArgs_Make(&args, &lblChe, &s->font, false);
 	Drawer2D_MakeTextTexture(&s->lblChest, &args);
+	DrawTextArgs_Make(&args, &lblLrg, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblLargeChest, &args);
 	DrawTextArgs_Make(&args, &lblFur, &s->font, false);
 	Drawer2D_MakeTextTexture(&s->lblFurnace, &args);
 	DrawTextArgs_Make(&args, &lblCra, &s->font, false);
@@ -3517,20 +3536,24 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/* Genuine GuiInventory: a 176x166 texture panel, slots on its fixed */
 		/*  18px grid - craft 2x2 at (88,26), result (144,36), storage (8,84), */
 		/*  hotbar (8,142), doll window (26,8)-(74,78). texF scales it all. */
-		/* GuiChest is 176x168 (114 + 3 rows * 18) with the player rows one */
-		/*  pixel lower (85/143) - genuine to this version. GuiFurnace uses */
-		/*  the standard 176x166 layout. */
+		/* GuiChest is 176 x (114 + rows*18) - 168 for a single chest (3 rows), */
+		/*  222 for a large chest (6 rows). GuiChest offsets the player rows by */
+		/*  var3 = (rows-4)*18, so main storage sits at 103+var3 and the hotbar */
+		/*  at 161+var3 (single: 85/143; double: 139/197). GuiFurnace uses the */
+		/*  standard 176x166 layout. */
 		cc_bool chest = IndevTest_OpenKind() == INDEV_CONTAINER_CHEST;
+		int rows  = chest ? SurvivalInv_ChestRows() : 3;
+		int var3  = (rows - 4) * 18;
 		float f = s->slotSize / 18.0f;
 		s->texF   = f;
 		s->panelW = (int)(176 * f);
-		s->panelH = (int)((chest ? 168 : 166) * f);
+		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
 		s->gridX   = s->panelX + (int)(8   * f);
-		s->gridY   = s->panelY + (int)((chest ? 85  : 84)  * f);
-		s->hotY    = s->panelY + (int)((chest ? 143 : 142) * f);
+		s->gridY   = s->panelY + (int)((chest ? (103 + var3) : 84)  * f);
+		s->hotY    = s->panelY + (int)((chest ? (161 + var3) : 142) * f);
 		if (SurvivalTest_CraftDim() == 3) {
 			/* GuiCrafting (crafting.png): 3x3 grid at (30,17), result (124,35), */
 			/*  no paperdoll window. */

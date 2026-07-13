@@ -6264,7 +6264,7 @@ void SurvivalTest_SetCraftDim(int dim) {
 static struct SurvivalSlot* SurvivalTest_SlotPtr(int idx) {
 	if (idx >= SURVIVAL_ARMOR_BASE && idx < SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS)
 		return &st_armor[idx - SURVIVAL_ARMOR_BASE];
-	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_SLOTS)
+	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_MAX)
 		return IndevTest_ContainerSlot(idx - SURVIVAL_CONTAINER_BASE);
 	if (idx >= SURVIVAL_CRAFT_BASE && idx < SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
 		return &st_craft[idx - SURVIVAL_CRAFT_BASE];

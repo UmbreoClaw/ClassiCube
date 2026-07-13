@@ -1,6 +1,47 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - in-20100201 "Human" mob (debug-only) (latest)
+## SESSION LOG - Large (double) chest: InventoryLargeChest 54-slot GUI (latest)
+
+User: "work on the doublechest ... look at how such interactions work with
+other blocks around it as well, port the gui/textures and make sure it's
+faithful."
+
+Ground truth (in-20100223): `BlockChest.blockActivated` combines two
+adjacent `TileEntityChest`s into an `InventoryLargeChest` (27+27 = 54).
+`GuiChest` lays it out as `rows = size/9` (3 single / 6 large), ySize =
+114+rows*18, player rows offset by var3=(rows-4)*18; the background is the
+single 6-row `container.png` sampled as a top strip (0,0)-(176,rows*18+17)
+plus a fixed player-inventory strip (0,126)-(176,222). The single chest is
+just the top 3 rows of that same texture. Adjacency rules already ported in
+a prior pass (`canPlaceBlockAt` caps doubles; a normal cube above EITHER
+half keeps the lid shut).
+
+What was missing: the two chests were never actually combined - opening a
+paired chest showed a lone 27-slot view. Added:
+- **IndevTest.c**: `indev_openTE2` (the lower half). `IndevTest_OpenContainer`
+  now detects a neighbour chest in the genuine priority (-X/+X/-Z/+Z), lazily
+  creates its tile entity, and assigns upper/lower exactly as
+  `BlockChest.blockActivated` does (the -X/-Z neighbour is the UPPER half).
+  `IndevTest_ContainerSlot(i)` routes 0..26 -> upper TE, 27..53 -> lower TE
+  (InventoryLargeChest.getStackInSlot). New `IndevTest_ContainerSlotCount()`
+  (3 / 27 / 54). Breaking either open half, or a new map, drops the whole
+  view to the discard slot.
+- **Screens.c**: chest rows are now dynamic (`SurvivalInv_ChestRows` = count/9).
+  Layout uses the genuine `114+rows*18` ySize and `103/161 + var3` player
+  offsets; the background top strip is `rows*18+17` tall; a new "Large chest"
+  label (InventoryLargeChest.getInvName) replaces "Chest" and the "Inventory"
+  section label follows the panel down (`rows*18+20`).
+- **SurvivalTest.h**: added `SURVIVAL_CONTAINER_MAX` (54) and moved
+  `SURVIVAL_ARMOR_BASE` above it, so the widened container address span
+  (45..98) can't collide with the armor slots in the slot-dispatch order.
+
+Rig-verified (gdb-driven, Indev world): two Z-adjacent chests open one tall
+"Large chest" GUI - 6x9 slots + player inventory, ContainerSlotCount 54,
+slot 0 and slot 27 resolve to two different tile entities (indev_tes+16 vs
++208). A lone chest still opens the 3-row "Chest" (27). A chest under a plank
+ceiling on its far half faithfully refuses to open.
+
+## SESSION LOG - in-20100201 "Human" mob (debug-only)
 
 User: "find the source of in-20100201-0025 and port the human mob but only
 as debug spawns."

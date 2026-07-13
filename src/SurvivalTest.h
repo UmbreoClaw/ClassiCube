@@ -52,15 +52,21 @@ extern int SurvivalTest_Health;
 /*  active is SurvivalTest_CraftDim (2 or 3). */
 #define SURVIVAL_CRAFT_SLOTS  9
 #define SURVIVAL_CRAFT_BASE   SURVIVAL_INV_SLOTS
-/* Open-container (chest/furnace tile entity) slots, addressed as extended */
-/*  slots 45..71 (chest all 27; furnace uses 0=input 1=fuel 2=output). */
+/* Open-container (chest/furnace tile entity) slots. A single chest / furnace */
+/*  is one 27-/3-slot tile entity; SURVIVAL_CONTAINER_SLOTS is that per-entity */
+/*  size (also the saved-NBT array size). A large (double) chest combines TWO */
+/*  chest tile entities into one 54-slot InventoryLargeChest view, so the GUI */
+/*  addressing reserves SURVIVAL_CONTAINER_MAX extended slots (45..98). */
 #define SURVIVAL_CONTAINER_SLOTS 27
+#define SURVIVAL_CONTAINER_MAX   54
 #define SURVIVAL_CONTAINER_BASE  (SURVIVAL_CRAFT_BASE + SURVIVAL_CRAFT_SLOTS)
 /* Worn armor (InventoryPlayer.armorInventory), addressed as extended slots */
-/*  72..75 in genuine array order: [0] boots, [1] legs, [2] chest, [3] helmet */
+/*  99..102 in genuine array order: [0] boots, [1] legs, [2] chest, [3] helmet */
 /*  (piece type = 3 - array index). Saved to .mclevel as Slot 100+index. */
+/*  (Armor and an open container are never shown together, but the address */
+/*   spaces are kept disjoint so the slot-dispatch order stays unambiguous.) */
 #define SURVIVAL_ARMOR_SLOTS 4
-#define SURVIVAL_ARMOR_BASE  (SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_SLOTS)
+#define SURVIVAL_ARMOR_BASE  (SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_MAX)
 
 /* One ItemStack: block id 0-255 / item id 256+ (shiftedIndex), count, and */
 /*  accumulated damage (tool wear). Shared with the Indev tile entity store. */

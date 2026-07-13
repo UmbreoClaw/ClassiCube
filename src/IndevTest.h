@@ -127,9 +127,13 @@ int  IndevTest_OpenContainer(IVec3 pos);
 int  IndevTest_OpenKind(void);
 /* Closes the open container (contents stay in the tile entity). */
 void IndevTest_CloseContainer(void);
-/* Slot i of the OPEN container (0..26 chest, 0..2 furnace). Never NULL - */
-/*  returns a discard slot when nothing is open, so clicks can't corrupt. */
+/* Slot i of the OPEN container (0..26 single chest, 0..53 large chest, 0..2 */
+/*  furnace). Never NULL - returns a discard slot when nothing is open (or i */
+/*  is out of range), so clicks can't corrupt. */
 struct SurvivalSlot* IndevTest_ContainerSlot(int i);
+/* Number of slots in the open container: 0 (none), 3 (furnace), 27 (single */
+/*  chest) or 54 (large/double chest). */
+int IndevTest_ContainerSlotCount(void);
 /* Furnace GUI overlays: flame height 0..12 (burnTime*12/currentItemBurnTime) */
 /*  and arrow width 0..24 (cookTime*24/200) of the OPEN furnace. */
 int  IndevTest_FurnaceBurnScaled(void);

@@ -954,7 +954,10 @@ struct IndevTE {
 	int burnTime, cookTime, currentBurn; /* furnace: furnaceBurnTime/furnaceCookTime/currentItemBurnTime */
 };
 static struct IndevTE indev_tes[INDEV_TE_MAX];
-static int indev_openTE = -1;           /* pool index of the open container, -1 = none */
+static int indev_openTE  = -1;          /* pool index of the open container (the */
+                                        /*  UPPER half of a large chest), -1 = none */
+static int indev_openTE2 = -1;          /* the LOWER half's pool index for an open */
+                                        /*  large chest (InventoryLargeChest), else -1 */
 static struct SurvivalSlot indev_discardSlot; /* safe target when nothing is open */
 static RNGState indev_teRng;
 
@@ -1113,7 +1116,33 @@ int IndevTest_OpenContainer(IVec3 pos) {
 	if (i < 0) i = IndevTE_Create(kind, pos);
 	if (i < 0) return INDEV_CONTAINER_NONE;
 
-	indev_openTE = i;
+	indev_openTE  = i;
+	indev_openTE2 = -1;
+
+	/* BlockChest.blockActivated: a chest touching another chest opens as an
+	    InventoryLargeChest spanning both tile entities. canPlaceBlockAt caps
+	    doubles at one neighbour, so at most one of these fires. The upper/lower
+	    ordering is genuine: the -X / -Z neighbour becomes the UPPER half (its
+	    27 slots render on top), the clicked chest the lower; a +X / +Z
+	    neighbour is the LOWER half. */
+	if (kind == INDEV_CONTAINER_CHEST) {
+		IVec3 np = pos; int j = -1; cc_bool neighbourUpper = false;
+		if      (Indev_ChestAt(pos.x - 1, pos.y, pos.z)) { np.x = pos.x - 1; neighbourUpper = true;  }
+		else if (Indev_ChestAt(pos.x + 1, pos.y, pos.z)) { np.x = pos.x + 1; neighbourUpper = false; }
+		else if (Indev_ChestAt(pos.x, pos.y, pos.z - 1)) { np.z = pos.z - 1; neighbourUpper = true;  }
+		else if (Indev_ChestAt(pos.x, pos.y, pos.z + 1)) { np.z = pos.z + 1; neighbourUpper = false; }
+
+		if (np.x != pos.x || np.z != pos.z) {
+			j = IndevTE_Find(np);
+			if (j < 0) j = IndevTE_Create(INDEV_CONTAINER_CHEST, np);
+			/* IndevTE_Create can fail if the pool is full - fall back to a
+			    single-chest view rather than opening nothing. */
+			if (j >= 0) {
+				if (neighbourUpper) { indev_openTE = j; indev_openTE2 = i; }
+				else                { indev_openTE = i; indev_openTE2 = j; }
+			}
+		}
+	}
 	return kind;
 }
 
@@ -1122,11 +1151,26 @@ int IndevTest_OpenKind(void) {
 	return indev_tes[indev_openTE].kind;
 }
 
-void IndevTest_CloseContainer(void) { indev_openTE = -1; }
+void IndevTest_CloseContainer(void) { indev_openTE = -1; indev_openTE2 = -1; }
+
+/* Slot count of the open container: furnace 3, single chest 27, large (double) */
+/*  chest 54 (InventoryLargeChest.getSizeInventory = upper 27 + lower 27). */
+int IndevTest_ContainerSlotCount(void) {
+	if (indev_openTE < 0) return 0;
+	if (indev_tes[indev_openTE].kind == INDEV_CONTAINER_FURNACE) return 3;
+	return indev_openTE2 >= 0 ? SURVIVAL_CONTAINER_SLOTS * 2 : SURVIVAL_CONTAINER_SLOTS;
+}
 
 struct SurvivalSlot* IndevTest_ContainerSlot(int i) {
-	if (indev_openTE >= 0 && i >= 0 && i < SURVIVAL_CONTAINER_SLOTS)
-		return &indev_tes[indev_openTE].slots[i];
+	/* InventoryLargeChest routing: slots below the upper chest's size come from
+	    the upper tile entity, the rest from the lower one. A single chest /
+	    furnace has no lower half (indev_openTE2 < 0), so it only uses openTE. */
+	if (indev_openTE >= 0 && i >= 0) {
+		if (i < SURVIVAL_CONTAINER_SLOTS)
+			return &indev_tes[indev_openTE].slots[i];
+		if (indev_openTE2 >= 0 && i < SURVIVAL_CONTAINER_SLOTS * 2)
+			return &indev_tes[indev_openTE2].slots[i - SURVIVAL_CONTAINER_SLOTS];
+	}
 	/* Nothing open (or the container block was destroyed under an open */
 	/*  screen): hand back a zeroed discard slot so clicks can't corrupt. */
 	indev_discardSlot.id = 0; indev_discardSlot.count = 0; indev_discardSlot.damage = 0;
@@ -2040,7 +2084,9 @@ void IndevTest_NotifyBlockRemoved(IVec3 coords, BlockID oldBlock) {
 	i = IndevTE_Find(coords);
 	if (i < 0) return;
 	if (Indev_IsChestBlock(oldBlock)) IndevTE_Scatter(&indev_tes[i]);
-	if (indev_openTE == i) indev_openTE = -1; /* screen falls back to the discard slot */
+	/* If either half of the OPEN container is destroyed, drop the whole view
+	    to the discard slot (the surviving half keeps its own tile entity). */
+	if (indev_openTE == i || indev_openTE2 == i) { indev_openTE = -1; indev_openTE2 = -1; }
 	indev_tes[i].used = false;
 }
 
@@ -2437,7 +2483,7 @@ void IndevTest_RestoreTE(int kind, int x, int y, int z, int burn, int cook,
 static void OnNewMap(void) {
 	int i;
 	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
-	indev_openTE = -1;
+	indev_openTE = -1; indev_openTE2 = -1;
 	indev_surKnown = false; /* each map records its own surroundings */
 	IndevFire_Reset();
 }
