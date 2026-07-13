@@ -1609,13 +1609,28 @@ static cc_uint32 indev_randId;
     updateTick in Indev - it only becomes grass by spreading. */
 static void IndevTest_TickGrass(int index) {
 	int x, y, z;
+	BlockID above;
 	World_Unpack(index, x, y, z);
 
-	if (!Lighting.IsLit(x, y, z)) {
+	/* Decay: genuine gates on `getBlockLightValue(x,y+1,z) < 4 &&
+	    canBlockGrass(x,y+1,z)`. canBlockGrass is FALSE for air/glass/sprites
+	    (transparent + logic materials) and true for opaque blocks - exactly
+	    the blocks that also cut the skylight below them, so BlocksLight of the
+	    block DIRECTLY above is a faithful stand-in. The key point: grass only
+	    reverts when a light-blocker sits right on top of it. Grass merely
+	    SHADOWED from afar (e.g. under a floating island, with open air above)
+	    is NOT covered, so it keeps its grass - matching genuine. (The old
+	    !IsLit test reverted any un-sky-lit grass, stripping every island's
+	    underside back to dirt.) */
+	above = (y + 1 < World.Height) ? World_GetBlock(x, y + 1, z) : BLOCK_AIR;
+	if (Blocks.BlocksLight[above]) {
 		if (Random_Next(&indev_teRng, 4) == 0) Game_UpdateBlock(x, y, z, BLOCK_DIRT);
 		return;
 	}
 
+	/* Spread: a sky-lit grass block (approx. light >= 9) seeds a nearby sky-lit
+	    dirt block (approx. light >= 4, nothing blocking grass above it). */
+	if (!Lighting.IsLit(x, y, z)) return;
 	x += Random_Next(&indev_teRng, 3) - 1;
 	y += Random_Next(&indev_teRng, 5) - 3;
 	z += Random_Next(&indev_teRng, 3) - 1;

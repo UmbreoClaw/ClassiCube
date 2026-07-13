@@ -1,6 +1,39 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Deep spawning/world-fidelity audit (latest)
+## SESSION LOG - Indev grass decay: covered vs merely shadowed (latest)
+
+User (floating world screenshot): should grass beneath a floating island grow
+back or stay dirt? Answer from the source: grass with open AIR above it should
+STAY GRASS even in the island's shadow; dirt there stays dirt (won't spread
+into low light). Our port got the grass-death half wrong.
+
+Genuine BlockGrass.updateTick decay gate is
+`getBlockLightValue(x,y+1,z) < 4 && canBlockGrass(x,y+1,z)` - grass reverts to
+dirt ONLY when a grass-blocking (opaque) block sits DIRECTLY on top. canBlockGrass
+is false for air/glass/sprites (Material Transparent/Logic override it), true for
+opaque blocks. c0.30's GrassBlock is different (keys on `!isLit(x,y,z)`), so this
+is an Indev-specific rule.
+
+Our IndevTest_TickGrass used `!Lighting.IsLit(x,y,z)` for decay. IsLit is
+`y > lightHeight`, i.e. sky-exposure of the grass block itself - which is FALSE
+for anything shadowed by a distant block (a floating island), even with open air
+directly above. So we were stripping every island's underside back to dirt.
+
+Fix: decay now gates on `Blocks.BlocksLight[block directly above]` (a faithful
+stand-in for canBlockGrass - opaque light-blockers are exactly the grass-blocking
+materials, and they also make it dark below). Air/glass above -> no decay. The
+spread branch (sky-lit grass seeds nearby sky-lit dirt) is unchanged. Indev-only;
+c0.30's classic Physics_HandleGrass path is untouched.
+
+gdb-verified (80 ticks each): grass shadowed-with-air-above stays grass (2);
+grass with stone directly on top decays to dirt (3).
+
+NOTE (separate, not changed): c0.30's classic Physics_HandleGrass reverts
+unlit grass instantly and never spreads, whereas genuine c0.30 GrassBlock uses a
+1-in-4 decay roll + 4 spread attempts. A real but pre-existing c0.30-only
+deviation, out of scope for this floating-world (Indev) question.
+
+## SESSION LOG - Deep spawning/world-fidelity audit
 
 User asked for a deeper sweep of spawning + world deviations, verified before
 acting. Read the full genuine spawn stack (MobSpawner both modes, the
