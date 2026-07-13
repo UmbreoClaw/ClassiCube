@@ -1640,6 +1640,41 @@ static void IndevTest_TickGrass(int index) {
 	Game_UpdateBlock(x, y, z, BLOCK_GRASS);
 }
 
+/* genuine BlockLeaves.updateTick: a leaf whose block BELOW is non-solid and
+    that has no log (Block.wood == id 17 == our BLOCK_LOG) within x+-2, y-1..y,
+    z+-2 decays - it drops a sapling on the same 1-in-10 roll as mining a leaf,
+    then vanishes. Because the decay only fires when the block below is not
+    solid, a chopped canopy peels away from the bottom up over successive
+    random ticks. c0.30's LeavesBlock has NO updateTick, so leaf decay is
+    Indev-only (there leaves are permanent unless mined). */
+static void IndevTest_TickLeaves(int index) {
+	int x, y, z, dx, dy, dz;
+	BlockID below;
+	Vec3 pos;
+	World_Unpack(index, x, y, z);
+
+	below = (y > 0) ? World_GetBlock(x, y - 1, z) : BLOCK_AIR;
+	if (Blocks.Collide[below] == COLLIDE_SOLID) return; /* !isSolid(below) gate */
+
+	for (dx = x - 2; dx <= x + 2; dx++) {
+		for (dy = y - 1; dy <= y; dy++) {
+			for (dz = z - 2; dz <= z + 2; dz++) {
+				if (World_Contains(dx, dy, dz) &&
+					World_GetBlock(dx, dy, dz) == BLOCK_LOG) return; /* log nearby - keep */
+			}
+		}
+	}
+
+	/* no log: dropBlockAsItem (sapling, quantityDropped 1-in-10) then remove */
+	if (Random_Next(&indev_teRng, 10) == 0) {
+		pos.x = x + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+		pos.y = y + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+		pos.z = z + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+		SurvivalTest_SpawnDropWorld(pos, BLOCK_SAPLING, 1);
+	}
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+}
+
 void IndevTest_TickRandomBlocks(void) {
 	int shiftX = 1, shiftZ = 1;
 	int maskX, maskY, maskZ;
@@ -1675,6 +1710,7 @@ void IndevTest_TickRandomBlocks(void) {
 		if (block == BLOCK_SAND || block == BLOCK_GRAVEL || block == BLOCK_DIRT ||
 			block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA) continue;
 		if (block == BLOCK_GRASS) { IndevTest_TickGrass(index); continue; }
+		if (block == BLOCK_LEAVES) { IndevTest_TickLeaves(index); continue; }
 		if (IndevFire_IsFire(block)) { IndevFire_RandomTick(index); continue; }
 
 		tick  = Physics.OnRandomTick[block];

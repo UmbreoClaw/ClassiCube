@@ -1,6 +1,28 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Indev grass decay: covered vs merely shadowed (latest)
+## SESSION LOG - Indev leaf decay (latest)
+
+User: do leaves decay when a tree is broken, dropping saplings? Verified vs
+source: Indev YES, c0.30 NO.
+- c0.30 LeavesBlock has getDrop=sapling / getDropCount=1-in-10 but NO update()
+  method - leaves are permanent, only a mined leaf drops a sapling. (Ours
+  already dropped a sapling 1-in-10 on mining - correct, unchanged.)
+- Indev BlockLeaves.updateTick DOES decay: a leaf whose block directly below is
+  non-solid (Material.isSolid, so air/plants/liquids but not leaves/log/stone)
+  and that has no log (Block.wood == id 17 == BLOCK_LOG) within x+-2, y-1..y,
+  z+-2 drops a sapling (same 1-in-10 quantityDropped) and is removed. The
+  non-solid-below gate makes a chopped canopy peel from the bottom up over
+  random ticks.
+
+Our port had NO leaf random-tick at all (BLOCK_LEAVES had no OnRandomTick
+handler and wasn't dispatched in IndevTest_TickRandomBlocks), so Indev leaves
+never decayed. Added IndevTest_TickLeaves (faithful port) dispatched alongside
+IndevTest_TickGrass; leaves are Indev-only, c0.30's classic path is untouched.
+
+gdb-verified (30 ticks each): a leaf beside a log stays (18); an isolated leaf
+with air below decays to air (0).
+
+## SESSION LOG - Indev grass decay: covered vs merely shadowed
 
 User (floating world screenshot): should grass beneath a floating island grow
 back or stay dirt? Answer from the source: grass with open AIR above it should
