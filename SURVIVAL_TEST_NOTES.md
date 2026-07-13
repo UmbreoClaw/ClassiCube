@@ -1,6 +1,48 @@
 # Classic 0.30 Survival Test — Project Notes & Handoff
 
-## SESSION LOG - Large (double) chest: InventoryLargeChest 54-slot GUI (latest)
+## SESSION LOG - Indev mob AI: c0.30 chase logic leaked into the fallback (latest)
+
+User: Indev zombies "fighting its own AI to attack players" and "semi wander
+off even a few blocks away".
+
+Root cause: `Mob_BasicAIUpdate` doubles as BOTH c0.30's `BasicAI.update()`
+AND (in Indev) the pathless fallback that stands in for `EntityLiving.
+updatePlayerActionState`. It carried c0.30 `BasicAI.update`'s target branch:
+```
+if (attackTarget != null) { yya = runSpeed; jumping = rand<0.04; }
+```
+In c0.30 that's fine - `BasicAttackAI.doAttack()` runs immediately after and
+turns `yRot` to face the target, so the forced-forward and the facing agree.
+But Indev's `EntityLiving.updatePlayerActionState` (in-20100223) has NO target
+branch - it's pure random wander; the target/attack is fully handled up in
+`EntityCreature.updatePlayerActionState` (our `Mob_IndevCreatureAI`). So when
+an Indev monster fell into this fallback (its A* path exhausted or unreachable),
+it got `moveForward = moveSpeed` forced while its yaw was the RANDOM wander
+heading - i.e. it barrelled off full-speed in a random direction while still
+"targeting" the player. That is the wandering-off / fighting-its-own-AI.
+
+Fix (SurvivalTest.c): gate that block `if (m->hasTarget && !IndevTest_Enabled)`.
+Indev's fallback is now the faithful pure-wander `EntityLiving` (7% random
+move impulse, 1% jump, 4% yaw-velocity, pitch 0) with no forced forward;
+c0.30 is byte-for-byte unchanged.
+
+Rig note (gdb-driven, floating jf0 world): a stable single zombie acquired the
+player (hasTarget 1), walked in from 5-10 blocks and held engaged ~3 blocks
+away instead of fleeing. (The floating world constantly recycles mob slots -
+mobs walk off the islands and drop to the world's y=0 collision boundary -
+which made longer observations noisy.)
+
+### Spawn-on-floating-floor question
+Mobs canNOT spawn in mid-air. Both spawn passes (`Mob_SpawnerRun` initial
+population and `Mob_IndevSpawnPass` per-tick) require `Mob_BlockIsSolid(cx,
+cy-1, cz)` with clear air at cy/cy+1 - a genuine `getCanSpawnHere`. The mobs
+seen piled at y~0 spawned validly ON the islands, then walked off the edges
+and fell to the world's lower boundary (this floating world has NO bottom
+floor - y=0/1/2 are all air). The old AI bug (forced random marching) made
+them conga-line off the cliffs; the fix makes them wander gently like genuine
+Indev, so far fewer walk off. No spawner change - it is already faithful.
+
+## SESSION LOG - Large (double) chest: InventoryLargeChest 54-slot GUI
 
 User: "work on the doublechest ... look at how such interactions work with
 other blocks around it as well, port the gui/textures and make sure it's

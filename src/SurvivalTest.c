@@ -3856,7 +3856,16 @@ static void Mob_BasicAIUpdate(struct Mob* m, cc_bool inWater, cc_bool inLava) {
 	    made Indev mobs stare at the player's feet. */
 	e->Pitch = IndevTest_Enabled ? 0.0f : info->defaultLookAngle;
 
-	if (m->hasTarget) {
+	/* c0.30 BasicAI.update's target branch: a mob with a target walks forward
+	    (BasicAttackAI.doAttack, which runs right after, then turns yRot to face
+	    the target - so the two together make it stride toward its victim).
+	    Indev has NO equivalent here: this routine stands in for EntityLiving's
+	    updatePlayerActionState, the PATHLESS fallback of the A* creature AI,
+	    which is pure random wander (EntityCreature already handled the target +
+	    attack up in Mob_IndevCreatureAI). Forcing forward here with no matching
+	    yaw correction is what made Indev monsters barrel off in the wander
+	    direction instead of chasing - "fighting their own AI". */
+	if (m->hasTarget && !IndevTest_Enabled) {
 		m->moveForward = speed;
 		m->jumping = Random_Next(&st_mobRng, 100) < 4;
 	}
