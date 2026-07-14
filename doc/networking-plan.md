@@ -28,52 +28,88 @@ step‑by‑step cookbook for the fiddly bits. Update this file as decisions har
 
 ## Priority checklist (do in this order)
 
-**P0 — Foundations (must land first, in sequence):**
-- [ ] Read: client `src/Protocol.c` (CPE negotiation, `CPE_SendPluginMessage`/
-      `CPE_PluginMessage`), `src/Server.c` (SP/MP split); server
-      `MCGalaxy/Network/ClassicProtocol.cs` (`HandlePacket`, `0x35` handler),
-      `MCGalaxy/Generator/MapGen.cs`.
-- [ ] **Verify MCGalaxy's `0x35` PluginMessage payload width is 64 bytes** (a
-      source claimed 256 — settle this before designing any message).
-- [ ] Establish the **regression baseline**: fork client → *stock* server works
-      unchanged. Re‑run this after every networking change (§9).
-- [ ] **Task §8.1** — port the Indev generator into MCGalaxy + `Register("indev"…)`;
-      add a per‑level `SurvivalMode` property (`off|indevCreative|indevSurvival|c030s`).
-- [ ] Add the **`SurvivalTest` CPE extension** on both sides (§3, cookbook §17.1)
-      + `Server.SupportsSurvival`. Prove the gate: stock server ⇒ no change.
-- [ ] Establish **per‑session capability gating** (§20): add `hasSurvival` on the
-      server and the rule that *every* optional/`SURV_*`/def/texture send is gated
-      on the matching flag — never send a packet a client didn't negotiate.
+The master ordered plan. Each item names its detail section and the key
+pointer. `.mclevel` handling is fully covered — format §18, save lifecycle §28.
 
-**P1 — Indev *creative* multiplayer (first playable; simplest, §14):**
-- [ ] Add the **Indev Creative** SP mode (§14) and verify vs `PlayerControllerCreative`.
-- [ ] `SURV_HELLO` + `SURV_WORLDINFO` handshake; `src/SurvivalNet.c` flips the client
-      into Indev mode on a server‑provided world (cookbook §17.2–17.3).
-- [ ] **Block/item definition sync** (§15.3): server sends `BlockDefinitions`;
-      client + server share one table.
-- [ ] **`.mclevel` persistence** (§18): extend MCGalaxy's `.mclevel` I/O to
-      round‑trip our full survival schema (inventory/armor/mobs/tile‑entities/
-      surroundings/time/metadata) byte‑compatibly with `src/Formats.c`; run the
-      round‑trip parity test (§18.4).
-- [ ] **Textures** (§19): bake the Indev PNGs into the client `default.zip`;
-      build one Indev‑augmented pack; serve its URL on Indev maps only; keep
-      `BlockDefinitions` tile indices == `terrain.png` == `Block_Tex`.
-- [ ] Server runs the mob **spawner**, **day/night**, **random ticks**; relays block
-      changes. Client **gates its own sim off** in MP (§15.2, cookbook §17.4).
-- [ ] **Mob puppet** wiring (§15.1): `SURV_MOB_*` → `st_mobs[]`, render‑only.
-- [ ] Apply the **classic‑client policy** for creative maps (§16).
-- [ ] Milestone: two fork clients build together in a server‑generated Indev world,
-      see the same mobs/day‑night, and a stock client can still join (per §16).
+**P0 — Foundations (server + the gate; land in sequence):**
+- [ ] **Read the code.** Client `src/Protocol.c` (CPE negotiation,
+      `CPE_SendPluginMessage` `:891` / `CPE_PluginMessage` `:1551`), `src/Server.c`
+      (SP/MP split); server `MCGalaxy/Network/ClassicProtocol.cs` (`HandlePacket`,
+      the `0x35` handler), `MCGalaxy/Generator/MapGen.cs`. — §2, §4, §5
+- [ ] **Verify MCGalaxy's `0x35` payload width is 64 bytes** (one source said 256).
+      Settle before designing any message. — §2.3
+- [ ] **Regression baseline:** fork client → *stock* server unchanged. Re‑run after
+      **every** networking change. — §9
+- [ ] **Port the Indev generator into MCGalaxy** and register **one** `indev`
+      generator (type+theme via `MapGenArgs`, dims from the command); it shows up in
+      `/os map add` + `/newlvl`. Match the 3 RNG streams (seed / seed+1 burned /
+      seed+2) → **seed parity vs SP** (fixed‑seed dump/diff). — §8.1, §31,
+      `src/IndevGen.c`, `doc/indev-generation.md`
+- [ ] **`SurvivalTest` CPE extension** both sides + `Server.SupportsSurvival`
+      (client mirror) + `hasSurvival` (server) + the rule *never send an
+      unnegotiated packet*. Prove the gate: stock server ⇒ zero change. — §3, §17.1, §20
+- [ ] **Per‑level `SurvivalMode`** (`off|indevCreative|indevSurvival|c030s`) as the
+      single source of truth; attach the Indev block collection **per‑level, never
+      global** (ids 50–92 shadow CPE decoration only on survival maps). — §30
+- [ ] **Texture pack:** bake the Indev PNGs into the client `default.zip`; build one
+      Indev‑augmented pack; serve its URL on survival maps only; keep
+      `BlockDefinitions` tile indices == `terrain.png` == `Block_Tex`. — §19
+- [ ] **`.mclevel` I/O + save folder:** round‑trip the full schema byte‑compatibly
+      with `src/Formats.c` (`MCLevel_Save` + parse callbacks); the generator
+      persists into `survival/<map>/` (world + per‑player files) on save/unload/
+      disconnect/shutdown; temp‑file+atomic‑rename; loaded worlds restore mobs
+      (don't re‑run the initial spawn). — §18, §28
 
-**P2 — Indev *survival* multiplayer (the hard part; server authority):**
-- [ ] Health/damage server‑side (§7 Phase 2, §13).
-- [ ] Inventory / crafting / containers server‑side (§7 Phase 4, §13, §15.3).
-- [ ] **TNT/explosions** server‑side + `BulkBlockUpdate` (§15.4).
-- [ ] Combat intents, drops, item despawn, polish (§7 Phase 5).
-- [ ] Then extend the whole stack to **c0.30‑s**.
+**P1 — Indev *creative* multiplayer (first playable; simplest — §14):**
+- [ ] **Indev Creative** SP mode (verify vs `PlayerControllerCreative`: no HUD,
+      instant break, palette hotbar, mobs still spawn). — §14
+- [ ] **`src/SurvivalNet.c`** receive path + `SURV_HELLO`/`SURV_WORLDINFO` mode
+      handshake (flip Indev mode from the packet in MP, keep the options path in SP).
+      — §17.2–17.3, §25
+- [ ] **Gate the client's Indev sim OFF in MP** — `IndevTest_TickRandomBlocks`,
+      `Furnace_Tick`, `Indev_TickDayNight`, spawner, `IndevGen`, and force
+      `Physics.Enabled` off on survival maps. — §15.2, §17.4, §23.2
+- [ ] **Server runs the world sim** — day/night, random ticks, mob spawner — and
+      relays block changes; day/night to stock clients via **`EnvColors`**. — §21
+- [ ] **Mob puppet** — `SURV_MOB_*` → `st_mobs[]`, render‑only, bespoke 16‑bit ids
+      (not the Classic entity list). — §15.1, §17.5, §23.1
+- [ ] **Classic‑client policy** — creative maps allow build; survival maps
+      visitor/deny; never let a non‑survival client edit a survival world. — §16, §20.2
+- [ ] **Custom blocks on stock clients** — `DefineBlock`/`DefineBlockExt` (shape +
+      draw + textures + bounds), fallback ids for pure Classic. — §22
+- [ ] **Milestone:** two fork clients build together in a server‑generated Indev
+      world, see the same mobs + day/night, and a stock client can still join safely.
 
-**Always‑on rules:** never break Classic (§0); receive‑don't‑compute (§15.0);
-server wins reconciliation; re‑run the regression baseline every change.
+**P2 — Indev *survival* multiplayer (server authority — the hard part):**
+- [ ] **Health/damage** server‑side — reconstruct fall from the position stream,
+      armor absorption, 20‑tick invuln, knockback via `VelocityControl`; no Indev
+      regen. — §13, §23.4
+- [ ] **Inventory / crafting / containers** — server owns inventory+grid+container+
+      cursor; `SURV_SLOT_CLICK`/`RESULT_CLICK`/`CONT_CLOSE` in, echo
+      `SURV_INV_SLOT`/`CONT_SLOT`/`CURSOR`. TCP ordering ⇒ no Beta confirm dance;
+      echo‑only first, prediction later. — §27
+- [ ] **Item drops** — server spawns (RNG) + runs the **deterministic** physics;
+      clients simulate from the spawn state (no per‑tick stream); server‑authoritative
+      pickup + 6000t despawn. — §26
+- [ ] **TNT/explosions** server‑side, sent as `BulkBlockUpdate` + drops + damage;
+      client renders only. — §15.4
+- [ ] Block‑metadata sync, furnace progress, use‑item (`SURV_USE_ITEM`). — §15.2, §27.5
+
+**P3 — Extras & polish:**
+- [ ] **Server admin commands** — one `/Surv` parent (spawn/give/time/god/heal/kill),
+      **`defaultRank` Operator/Moderator+**, **auto‑loaded** (public `Command2`
+      subclass), each authoritative + streamed. — §29
+- [ ] **PvP** — optional, per‑level, **default off**; reuse the mob‑combat path with a
+      player target. — §24
+- [ ] **Other players' equipment** — `SURV_PLAYER_EQUIP` (armor/held), fork‑only. — §25.1
+- [ ] **Interest management** — stream mobs/drops per‑player relevance (Indev is
+      mob‑heavy). — §23.3
+- [ ] **Then extend the whole stack to c0.30‑s.**
+
+**Always‑on rules:** never break Classic (§0); **receive, don't compute** (§15.0);
+**server wins** reconciliation; **per‑session gating** — never send an unnegotiated
+packet (§20); **seed/table parity** with SP; **re‑run the regression baseline every
+change** (§9).
 
 ## 0. The one rule that governs everything
 
