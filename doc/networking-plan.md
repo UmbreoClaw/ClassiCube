@@ -293,12 +293,9 @@ layouts as you implement each phase.
 
 Reuse standard packets where they already fit — don't duplicate:
 - **Player movement**: keep the normal Classic position packets (§2.1) +
-  `ExtEntityPositions`. Mobs *could* also be sent as normal Classic entities via
-  `OPCODE_ADD_ENTITY`/`OPCODE_EXT_ADD_ENTITY2` + `ChangeModel`, with only the
-  survival‑specific bits (health/fuse/type) on our channel — **decide this early**;
-  it may save a lot of code vs a bespoke mob channel. (Trade‑off: bespoke channel
-  gives exact Indev interpolation/animation control; standard entities give free
-  nametag/skin/model plumbing but coarser control.)
+  `ExtEntityPositions`. **Mobs are bespoke, not standard entities** — see §15.1
+  for the decision and why (standard entities can't reproduce the Indev
+  animations). Mobs stream over `SURV_MOB_*` into the existing render puppet.
 - **Knockback**: `VelocityControl` CPE instead of a custom vector.
 - **Status text / hearts context**: `MessageTypes` for status‑bar lines if useful.
 - **Flight lockout**: `HackControl` to force no‑fly/no‑noclip on survival players.
@@ -522,14 +519,12 @@ server simulates and validates; the client only sends intents and renders.**
   a custom vector — the client already implements it.
 
 **Mob + armor state**
-- *Q: Bespoke mob channel vs standard Classic entities?* Recommend standard
-  entities for transport (`OPCODE_EXT_ADD_ENTITY2` + `ChangeModel` for the model,
-  normal pos/orient updates + `ExtEntityPositions`) and put *only* the
-  survival‑specific bits (mob type for AI‑independent client anim, health for the
-  hurt‑flash, creeper `fuseState`, `onFire`) on `SURV_MOB_STATE`. This reuses all
-  the existing nametag/interp/model plumbing; you lose nothing because the client
-  no longer runs AI. Keep `SURV_MOB_SPAWN` only if you need type/health atomically
-  with the spawn.
+- *Q: Bespoke mob channel vs standard Classic entities?* **Decided in §15.1:
+  bespoke.** Standard CPE entities do not reproduce the Indev animations
+  (creeper swell, sheep graze, hurt flash, fire overlay, size/`heightOff`,
+  body‑yaw easing), which all live in `SurvivalTest_RenderMobs`. Stream mobs into
+  the existing `st_mobs[]` puppet via `SURV_MOB_SPAWN`/`_MOVE`/`_STATE` and reuse
+  the faithful render path with AI/physics gated off. See §15.1.
 - *Q: Does the client need mob health/AI?* No AI (server‑only). It needs enough
   for rendering: type→model, `hurtTicks` flash, creeper swell, fire overlay,
   death animation. Feed those from `SURV_MOB_STATE`.
@@ -629,6 +624,145 @@ flowing over the wire before taking on the hard survival authority migration.
    freely (still validated for reach). This is the first end‑to‑end Indev MP demo.
 
 ---
+
+## 15. Desync avoidance & fidelity (read this before writing any sync code)
+
+Multiplayer's real difficulty is not the packets — it's keeping every client
+byte‑identical to the server without visible jank. The rules below are not
+optional; getting them wrong produces exactly the desyncs raised in review
+(models, decay, new blocks/items, TNT).
+
+### 15.0 The one governing principle
+
+> **Anything RNG‑driven, multi‑block, or multi‑entity is server‑authoritative
+> and is NEVER predicted on the client.** The client may optimistically predict
+> only its own *single, deterministic, local* action (placing/breaking one
+> block) and must accept the server's value on the next echo. Everything else —
+> decay, growth, mob AI, damage, drops, explosions, inventory — is *received*,
+> not *computed*, on the client.
+
+Reconciliation rule: **server wins, always.** When a `SURV_*` or `SET_BLOCK`
+echo disagrees with local prediction, snap to the server value (revert the
+optimistic block, restore the inventory count, reposition the mob). Classic
+already does this for blocks; extend the same discipline to survival state.
+
+### 15.1 Mob models & animation — use bespoke entities, not standard CPE entities
+
+**This revises the tentative "standard entities" suggestion in §6/§13.** For a
+faithfulness‑first project, **stream mobs into the existing `st_mobs[]` puppet
+and render with the existing `SurvivalTest_RenderMobs`.** Standard CPE entities
+(`EXT_ADD_ENTITY2` + `ChangeModel`) give you the base model and interpolation
+but **do not** reproduce the Indev‑specific look, which lives entirely in our
+custom render/animation code:
+
+- creeper swell scale from `fuseState`/`fuseTicks`; sheep head‑dip `graze`;
+  zombie/skeleton arm sway from `ticksAlive`; the red `hurtTicks` hit‑flash; the
+  burning `fire` overlay; sheared `hasFur`/`sheep_nofur` model swap; the exact
+  per‑type + per‑mode `Mob_ApplySize` collision/scale; `heightOff` eye anchor;
+  the body‑vs‑head yaw easing (`Mob_UpdateBodyYaw`); the prev/next interpolation
+  snapshot.
+
+None of that rides on a standard entity. So: in MP the client keeps its mob pool
+as a **network‑driven puppet** — `Mob_*` AI/spawn/damage are gated off, but the
+render + interpolation + animation code runs unchanged, fed by `SURV_MOB_*`.
+
+- **`SURV_MOB_SPAWN`** carries `type` (⇒ model + size via `mobTypeInfo`/`Mob_ApplySize`),
+  spawn pos/orient, initial health, `hasHelmet/hasArmor`, `hasFur`.
+- **`SURV_MOB_MOVE`** carries pos + yaw/pitch (client interpolates prev→next as
+  today; do **not** run local physics on puppets).
+- **`SURV_MOB_STATE`** carries the animation drivers: `health`→sets `hurtTicks`
+  on decrease, `fuseState`, `onFire`, `grazing`, death. The client derives the
+  cosmetic timers locally from state edges (e.g. health drop ⇒ `hurtTicks = 10`).
+
+Cost: a bespoke channel + you re‑send position for mobs. Benefit: pixel‑for‑pixel
+the same Indev mobs, zero new model code. Worth it here.
+
+### 15.2 Decay / growth / random ticks — server‑only, or you WILL desync
+
+Grass spread + decay, leaf decay, farmland moisture, crop growth, sapling growth,
+fire spread/burnout, furnace smelting, item despawn, and day/night are all
+**RNG‑ and tick‑timing‑driven**. Two independent RNG streams (client vs server)
+diverge on the very first roll, and tick counts drift. Therefore:
+
+- In MP, **gate off** on `!Server.IsSinglePlayer`: `IndevTest_TickRandomBlocks`
+  (grass/leaf/farmland/crop/fire), `Furnace_Tick`, `Indev_TickDayNight`
+  (`worldTime`/`indev_lastSkyLight`), item‑drop despawn, sapling growth.
+- The **server** runs all of it and pushes results: block id changes as normal
+  `OPCODE_SET_BLOCK`, nibble/metadata as `SURV_BLOCKMETA`, time as `SURV_TIME`,
+  item appear/disappear as `SURV_DROP_SPAWN`/`SURV_DROP_REMOVE`.
+- Lighting stays a **local deterministic** computation (heightmap from the same
+  world ⇒ same result), so the client may keep computing light for rendering —
+  but it must **not** drive any state change from it (decay is server‑told, not
+  light‑inferred). Keep `Lighting`/`IndevTest_LightLevel` for visuals only.
+- Do not let the client "help" by decaying a leaf it thinks is orphaned — that's
+  the classic double‑decay desync. Received `SET_BLOCK` is the only truth.
+
+### 15.3 New block & item handling — one shared definition table
+
+Desync source: a block id that means different things on each side. Prevent it
+with a **single source of truth** for the Indev definitions, ported verbatim to
+the server:
+
+- **Blocks** (`IndevBlocks_Define` in `src/IndevTest.c`): torch 50, fire 51,
+  chest 54, furnaces, crops 85–92, diamond ore 56, etc. — ids, draw type,
+  collide, textures, hardness, sounds. The server MUST use the same table. On
+  connect the server sends `CustomBlockSupportLevel` + `BlockDefinitions`/
+  `DefineBlock` for every >Classic id so *any* CPE client (not just this fork)
+  renders them, with sane **fallback ids** for clients that lack them. Our fork
+  already bakes these in — but keep the two in lockstep; bump the `SurvivalTest`
+  ext version if the table changes.
+- **Items** (`indev_items[]`, ids `256 + shiftedIndex`, `ITEM_KIND_*`,
+  durabilities in `src/IndevTest.c`): the Classic protocol has **no item
+  concept** at all. Items exist only inside our sub‑protocol (inventory, drops,
+  held). So the item table is *ours* end‑to‑end and must match byte‑for‑byte on
+  both sides. Drops of items render via `SURV_DROP_SPAWN` (id ≥ 256); the held
+  item uses our own path, **not** the CPE `HeldBlock` packet (that only carries
+  block ids 0–255/custom, never items).
+- **Placement/consumption:** the client may optimistically *show* a placed block
+  (Classic behaviour), but must **not** optimistically decrement the inventory or
+  wear the tool — those are server‑owned and arrive via `SURV_INV_SLOT`. If the
+  server rejects the place (no item, out of reach), it reverts the block *and*
+  the slot. Never trust a client "I used up item X" message.
+
+### 15.4 TNT & explosions — fully server‑side, never predicted
+
+Explosions are the worst desync case: one event mutates *many* blocks, spawns
+RNG drops, and damages entities. Indev and c0.30 also differ (fuse gating —
+note `fuseTicks >= 80` at `SurvivalTest.c:1758`, the `canExplode` hard‑block set
+at `:1373`, liquid destruction, drop chance, radius, damage falloff). So:
+
+- **The client does not run explosion physics in MP.** Gate off
+  `SurvivalTest_TntPhysics`, `SurvivalTest_Explode`, `Mob_CreeperExplode`, and the
+  block‑removal/drop chain (`ExplodeDropsForBlock`, `IndevTest_NotifyBlockRemoved`).
+- The **server** owns the primed‑TNT entity + fuse, computes the blast, and sends:
+  destroyed blocks as a **`BulkBlockUpdate`** (CPE) or a batch of `SET_BLOCK`;
+  resulting drops as `SURV_DROP_SPAWN`; damage as `SURV_HEALTH` (+ knockback via
+  `VelocityControl`); and the visual/audio as a small `SURV` effect trigger (or
+  `CustomParticles` + a sound id).
+- The client renders the primed‑TNT (a streamed mob‑style entity, or a
+  told‑to‑flash block) and plays the boom on cue — it computes nothing. Creeper
+  detonation takes the exact same path.
+- Because the block set changes in bulk, prefer `BulkBlockUpdate` so the client
+  applies them atomically in one frame (no flicker) and can't interleave a stale
+  optimistic edit.
+
+### 15.5 Quick authority checklist
+
+| Subsystem | Client may predict? | Authority | Wire |
+|---|---|---|---|
+| Own block place/break | Yes (optimistic, reconcile) | Server | `SET_BLOCK_CLIENT` → `SET_BLOCK` |
+| Inventory count / tool wear | **No** | Server | `SURV_INV_SLOT` |
+| Health / damage / knockback | **No** | Server | `SURV_HEALTH` + `VelocityControl` |
+| Mob spawn / AI / move / death | **No** (render puppet only) | Server | `SURV_MOB_*` |
+| Mob animation timers (flash/swell/fire) | Derive from state edges | Server state | `SURV_MOB_STATE` |
+| Grass/leaf/farmland/crop/fire/sapling | **No** | Server | `SET_BLOCK` + `SURV_BLOCKMETA` |
+| Furnace smelt / day‑night / despawn | **No** | Server | `SURV_*` / `SET_BLOCK` |
+| Item drops / pickups | **No** | Server | `SURV_DROP_*` |
+| TNT / creeper explosion | **No** | Server | `BulkBlockUpdate` + `SURV_DROP`/`HEALTH` |
+| Lighting (visual only) | Yes (deterministic) | local render | — |
+| Block/item definitions | — | shared table | `BlockDefinitions` + our item table |
+
+If in doubt: **receive, don't compute.**
 
 ## References
 
