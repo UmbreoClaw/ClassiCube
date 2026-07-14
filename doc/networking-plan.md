@@ -52,6 +52,9 @@ step‑by‑step cookbook for the fiddly bits. Update this file as decisions har
       round‑trip our full survival schema (inventory/armor/mobs/tile‑entities/
       surroundings/time/metadata) byte‑compatibly with `src/Formats.c`; run the
       round‑trip parity test (§18.4).
+- [ ] **Textures** (§19): bake the Indev PNGs into the client `default.zip`;
+      build one Indev‑augmented pack; serve its URL on Indev maps only; keep
+      `BlockDefinitions` tile indices == `terrain.png` == `Block_Tex`.
 - [ ] Server runs the mob **spawner**, **day/night**, **random ticks**; relays block
       changes. Client **gates its own sim off** in MP (§15.2, cookbook §17.4).
 - [ ] **Mob puppet** wiring (§15.1): `SURV_MOB_*` → `st_mobs[]`, render‑only.
@@ -1064,6 +1067,89 @@ from `doc/indev-generation.md`. Watch the known gotchas: the **signed**
 `Surrounding*Height` (floating = negative), the always‑grass `SurroundingGroundType`
 quirk, armor **Slot 100+** numbering, the `Data` nibble packing (meta high / light
 low), and the genuine↔engine block remaps (crate/furnace/torch/chest).
+
+## 19. Texture handling & serving
+
+Indev survival adds textures the stock ClassiCube `default.zip` doesn't have.
+They must reach every client that renders an Indev map — including vanilla
+visitors (§16). Get this wrong and blocks/items/GUIs render as garbage or vanish.
+
+### 19.1 What's new and how the client loads it
+
+- **`terrain.png` block tiles** — the Indev blocks (torch 50, fire 51, chest 54,
+  furnaces, workbench, crops 85–92, diamond ore 56, …) use **reserved atlas tiles
+  (index 96+)**. Our client composes these into its terrain at first launch via
+  `Resources.c`'s **`BetaPatcher`**, extracting from Mojang's b1.7.3 jar (see the
+  reservation table in `SURVIVAL_TEST_NOTES.md`). Block↔tile mapping is
+  `IndevBlocks_Define` / `Block_Tex`.
+- **Standalone PNGs**, loaded via the standard `TextureEntry` route from the
+  active pack (`src/IndevTest.c:2407+`): `items.png` (item‑icon atlas),
+  `kz.png` (painting art), `inventory.png`/`crafting.png`/`furnace.png`/
+  `container.png` (survival GUIs), `sun.png`/`moon.png` (celestial). Rendering
+  bails gracefully while any of these is 0/missing.
+- **Mob skins** — mostly stock ClassiCube model textures already in `default.zip`
+  (`zombie.png`, `creeper.png`, `char.png` for the humanoid/Human mob, etc.); only
+  add ones that genuinely differ.
+
+Current state (client): these are **not yet baked into `default.zip`** — the
+standalone PNGs rely on a pack supplying them; the terrain tiles rely on the
+BetaPatcher having run. **Client prerequisite task:** finish auto‑provisioning the
+Indev PNGs into `default.zip` via the existing `Resources.c` jar patchers so SP —
+and a fork client with no server pack — always has them. Do this early; it's the
+robust baseline everything else builds on.
+
+### 19.2 How texture serving works (and the trap)
+
+ClassiCube servers don't generate textures — they point the client at a
+**texture‑pack URL** via the CPE **`EnvMapAppearance`** ext
+(`OPCODE_ENV_SET_MAP_URL` → `CPE_SetMapEnvUrl` → `TexturePack_Extract(url)`,
+`src/Protocol.c:1338`). Downloading a server pack **replaces the client's active
+pack wholesale.** So:
+
+> **Trap: serving a plain `default.zip` to an Indev map strips the fork client's
+> Indev textures** (item/GUI/painting PNGs and the patched `terrain.png` tiles),
+> rendering the new content broken. An Indev map must serve an **Indev‑augmented
+> pack**, or send **no** pack URL and rely on the client's baked‑in pack (§19.1).
+
+MCGalaxy does not parse the pixels — it just **hosts/serves a zip** (its own web
+dir or a CDN) and **sends the per‑level URL**. It *does* need to know the new
+files + tile indices so the pack it serves is correct and its `BlockDefinitions`
+(§17.7) reference the same `terrain.png` tiles the pack contains.
+
+### 19.3 The plan
+
+1. **Assemble one "Indev texture pack"** = `default.zip` + the additions from
+   §19.1: a `terrain.png` with the Indev tiles at the reserved indices, plus
+   `items.png`, `kz.png`, the four GUI PNGs, `sun.png`, `moon.png`, and any
+   Indev‑specific mob skins. This same pack is the client's baked default AND the
+   server‑served pack — build it once from one source of truth.
+2. **Serve it per‑map:** Indev/c0.30‑s maps set the level texture URL (MCGalaxy's
+   per‑level texture property → `EnvMapAppearance`) to the Indev pack; Classic maps
+   keep the normal default (or none). Bonus: this is exactly what lets **vanilla
+   visitors (§16)** see the new blocks/GUIs.
+3. **Keep tile indices in lockstep:** the `TextureID`s in the server's
+   `BlockDefinitions`, the tiles in the served `terrain.png`, and the client's
+   `Block_Tex`/reservation table must all agree — one source of truth (the notes'
+   reservation table). A mismatch renders blocks with the wrong texture.
+4. **Confirm in‑zip paths:** the `TextureEntry` names are bare (`"container.png"`)
+   but the genuine layout uses subfolders (`gui/…`, `art/kz.png`, `terrain/…`).
+   Verify how ClassiCube resolves each `TextureEntry` name inside a pack and lay
+   the files out in the served pack accordingly (don't assume — check
+   `TexturePack.c`).
+5. **Version the pack** with the `SurvivalTest` ext / a pack‑version so a client
+   with a stale cached pack re‑downloads when the textures change.
+
+### 19.4 Checklist
+
+- [ ] Client: bake the Indev PNGs into `default.zip` (finish the `Resources.c`
+      auto‑provisioning) so SP + no‑server‑pack MP always renders correctly.
+- [ ] Build the single Indev‑augmented pack (terrain tiles + PNGs); host it.
+- [ ] MCGalaxy: set the Indev pack URL on Indev/c0.30 maps only; leave Classic
+      maps on the default.
+- [ ] Verify `BlockDefinitions` `TextureID`s == served `terrain.png` tiles ==
+      client `Block_Tex` (one reservation table).
+- [ ] Confirm the in‑zip paths for every `TextureEntry`; test that a fresh client
+      (no local Indev textures) joining an Indev map renders items/GUIs/blocks.
 
 ## References
 
