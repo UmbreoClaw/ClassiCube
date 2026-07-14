@@ -1705,6 +1705,7 @@ SURV_INV_SLOT   0x21  [1]slot  [2..3]id(u16)  [4]count  [5..6]dmg(i16)
 SURV_CONT_OPEN  0x22  [1]kind(1 chest/2 furnace/3 large)  [2]rows
 SURV_CONT_SLOT  0x23  [1]slot  [2..3]id  [4]count  [5..6]dmg
 SURV_FURN_PROG  0x24  [1]burn(0..12)  [2]cook(0..24)
+SURV_CURSOR     0x25  [1..2]id(u16)  [3]count  [4..5]dmg  (server-owned held stack)
 SURV_DROP_SPAWN 0x30  [1..2]dropId(u16)  [3..4]itemId(u16, ≥256 = item)  [5]count
                       [6..11]pos  [12..17]vel(i16 = coord/sec × 512)  [18]rot0(u8)
 SURV_DROP_PICKUP 0x31 [1..2]dropId  [3]pickerEntityId(u8 Classic entity id)
@@ -1719,9 +1720,10 @@ SURV_BLOCKMETA  0x40  [1..6]xyz(i16 block coords)  [7]meta
 SURV_ATTACK       0x80  [1]targetKind(0 mob/1 player)  [2..3]targetId
                         (mob = 16‑bit SURV id; player = 8‑bit Classic entity id)
 SURV_USE_ITEM     0x81  [1]heldSlot  [2..7]targetBlock xyz  [8]face
-SURV_INV_CLICK    0x82  [1]slot  [2]button(0 L/1 R/2 shiftL/...)
-SURV_CONT_CLICK   0x83  [1]slot  [2]button
-SURV_CRAFT        0x84  [1]op(0 place/1 takeResult)  [2]cell  [3..4]id
+SURV_SLOT_CLICK   0x82  [1..2]slotIdx(u16, extended: 0..35 main, 36..44 craft,
+                        45..98 container, 100..103 armor)  [3]button(0 L/1 R)
+SURV_RESULT_CLICK 0x83  (take the craft result onto the cursor)
+SURV_CONT_CLOSE   0x84  (window closed → server returns cursor + craft grid)
 SURV_HELD_SLOT    0x85  [1]hotbarIndex
 SURV_DROP_ITEM    0x86  [1]slot  [2]wholeStack(0/1)
 SURV_RESPAWN      0x87  (menu action)
@@ -1804,6 +1806,114 @@ the **server** runs each of these and emits `SURV_DROP_SPAWN`.
 - [ ] Pickup is server‑detected → `SURV_INV_SLOT` + `SURV_DROP_PICKUP`; the picker
       plays the fly‑in, everyone removes. No client self‑award.
 - [ ] Batch multi‑drop scatters; relevance‑filter per player.
+
+## 27. Inventory / crafting / container transactions & interaction clicks
+
+This is the fiddliest survival subsystem (Beta's window transactions were
+notoriously bug‑prone). The good news: our click logic is already one clean,
+server‑portable function, and the Classic transport is **TCP** (ordered +
+reliable), which removes most of Beta's difficulty.
+
+### 27.1 The whole click model is one function
+
+`SurvivalTest_SlotClick(idx, rightClick)` (`src/SurvivalTest.c:6326`) is the entire
+inventory interaction, driven by a single held stack `st_cursor` (`:6317`). `idx`
+is the unified extended‑slot index (main / craft / container / armor) resolved by
+`SurvivalTest_SlotPtr` (`:6264`). The four cases:
+
+1. **cursor empty** → pick up all (or `ceil(count/2)` on right‑click);
+2. **cursor id == slot id** → merge (all, or 1 on right‑click), respecting `ST_MaxStack`;
+3. **slot empty + right‑click** → drop exactly one;
+4. **else** → swap slot ↔ cursor.
+
+Plus `SurvivalTest_ResultClick` (`:6375`, take craft result onto cursor + consume
+one of each grid ingredient), `SurvivalTest_CursorReturn` (`:6392`, put the cursor
+stack back on window close — never lose it), armor‑slot validation
+(`IndevTest_ArmorPiece`, only accepts the matching piece), and the crafting matcher
+`IndevTest_MatchRecipe` / `SurvivalTest_CraftResult`. **The server runs these exact
+functions on its authoritative state** — the port is nearly 1:1.
+
+### 27.2 Authority & the transaction protocol
+
+- **Server owns the inventory, the craft grid, the open container, AND the cursor**
+  (per player). The client sends *intents*; it never mutates authoritative state.
+- **Messages (from §25):** `SURV_SLOT_CLICK { slotIdx, button }`,
+  `SURV_RESULT_CLICK`, `SURV_CONT_CLOSE`. The server applies the click via its
+  `SurvivalTest_SlotClick`/`ResultClick` and **echoes** the changed slots
+  (`SURV_INV_SLOT` / `SURV_CONT_SLOT`) **and the cursor** (`SURV_CURSOR`). The
+  cursor is the shared mutable state that makes clicks stateful — because it's
+  server‑owned and echoed, a client can't lie about it or dupe with it.
+- **TCP saves us from Beta's confirm dance.** Clicks arrive **in order and never
+  drop**, so the server is a simple deterministic sequencer — no transaction ids,
+  no window‑confirm/resync packets (Beta needed those because of its own quirks).
+  Apply click, echo state, done.
+- **Optimistic prediction (polish, not required):** for instant UI, the client may
+  run its local `SurvivalTest_SlotClick` immediately, then **reconcile** when the
+  `SURV_INV_SLOT`/`SURV_CURSOR` echo arrives (server wins — §15.0). In the common
+  case prediction == echo, so nothing visibly changes; on divergence (e.g. a shared
+  chest slot changed under you) it snaps. A correct **first cut can skip prediction**
+  (echo‑only: one round‑trip of latency per click) and add it later.
+
+### 27.3 Crafting specifics
+
+- The 2×2 / 3×3 grid cells are just slots (`st_craft`, `SURVIVAL_CRAFT_BASE`); clicks
+  into them go through the same `SURV_SLOT_CLICK` path.
+- The **result** is computed server‑side from the grid (`IndevTest_MatchRecipe`,
+  incl. mirrored layouts) every time the grid changes. It's a *virtual* slot — the
+  client can preview it locally (it has the grid) or the server can push a
+  `SURV_CONT_SLOT`‑style preview. Taking it is `SURV_RESULT_CLICK` → the server runs
+  `ResultClick` **atomically** (consume one of each ingredient + produce the result
+  onto the cursor) so there's no dupe window.
+- Shift‑click "craft‑all"/quick‑move isn't in the current SP code; if added, it's a
+  new server‑side op — don't let the client compute the moves.
+
+### 27.4 Containers & concurrency
+
+- **Open** (right‑click a chest, `hasSurvival`‑gated — §20.2): server sets the open
+  tile entity (`IndevTest_OpenContainer`, incl. the double‑chest `indev_openTE2`
+  routing) and sends `SURV_CONT_OPEN` + the slots. **Close**: `SURV_CONT_CLOSE` →
+  server `CursorReturn` + returns/clears the craft grid so nothing is lost.
+- **Concurrency (two players, one chest):** the container state is single and
+  server‑owned; every mutating click re‑echoes the changed `SURV_CONT_SLOT` to **all
+  current viewers**. If the chest is broken while open, scatter + `SURV_CONT_CLOSE`
+  the viewers (§23.8). Furnace burn/cook progress streams via `SURV_FURN_PROG`.
+
+### 27.5 Interaction clicks (attack / use / place‑break)
+
+"Entity/block clicking" splits by what's clicked — all server‑validated:
+
+- **Attack** a mob or player → `SURV_ATTACK { targetKind, targetId }` (§24).
+- **Use / right‑click** a block (open chest/furnace, use hoe/flint&steel/bucket,
+  eat) → `SURV_USE_ITEM { heldSlot, targetBlock, face }`; the server runs the
+  genuine use logic (`IndevTest_UseHeldItem`, container open, etc.) and echoes the
+  results (block change, inventory, container open).
+- **Place / break** a block → the **standard Classic `SET_BLOCK_CLIENT`**; the
+  server validates (reach, tool, survival rules), consumes/wears server‑side, drops
+  server‑side, and confirms with the authoritative `SET_BLOCK` (reverting on
+  reject). Don't invent a survival packet for plain block edits.
+- The CPE **`PlayerClick`** packet (`CPE_SendPlayerClick`, carries button + target
+  entity id + raytrace) is an available transport if you'd rather derive
+  attack/use from it than add explicit intents — but explicit `SURV_*` intents are
+  clearer and cover our bespoke mobs (which aren't Classic entities). Pick one.
+
+### 27.6 Anti‑dupe invariants (do not violate)
+
+- Never apply the client's *claimed* cursor/slot contents — the server uses its own.
+- Result‑take and place‑consume are **atomic** server operations.
+- Every mutation echoes authoritative state; the client always accepts it.
+- Window close always accounts for the cursor + craft grid (return, don't drop into
+  the void or duplicate).
+
+### 27.7 Checklist
+
+- [ ] Port `SlotClick`/`ResultClick`/`CursorReturn`/`MatchRecipe` server‑side, run
+      on authoritative state; cursor is server‑owned.
+- [ ] `SURV_SLOT_CLICK`/`SURV_RESULT_CLICK`/`SURV_CONT_CLOSE` in; echo
+      `SURV_INV_SLOT`/`SURV_CONT_SLOT`/`SURV_CURSOR`. Echo‑only first, prediction later.
+- [ ] Craft result computed + taken atomically server‑side.
+- [ ] Container concurrency: re‑echo to all viewers; break‑while‑open handled.
+- [ ] `SURV_USE_ITEM` for right‑click use/open; `SET_BLOCK_CLIENT` for place/break;
+      `SURV_ATTACK` for combat. All validated; nothing client‑authoritative.
 
 ## References
 
