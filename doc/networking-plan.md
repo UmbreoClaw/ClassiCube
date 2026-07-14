@@ -69,9 +69,11 @@ pointer. `.mclevel` handling is fully covered — format §18, save lifecycle §
 **P1 — Indev *creative* multiplayer (first playable; simplest — §14):**
 - [x] **Indev Creative** SP mode — `SurvivalTest_CreativeActive()` gates no‑HUD,
       instant no‑drop building with infinite blocks, flight, mobs still spawn;
-      block‑picker GUI replaces the palette (Option A). *(landed, SP)* — §14
-- [ ] **Indev Creative** MP — make it **server‑dictated**: `SURV_HELLO` sets the
-      resolver's effective state; validate actions server‑side. — §14, §16, §20.3
+      **genuine 9‑slot palette hotbar + the Indev `GuiInventory`** (the earlier
+      Beta‑1.8 picker was reverted). *(landed, SP)* — §14
+- [ ] **Indev Creative** MP — **server‑dictated**: `SURV_HELLO` `bit1=creative`
+      sets the resolver's effective state (client ignores its local option), fly
+      allowed via `HackControl`; validate every action server‑side. — §14, §20.3, §25
 - [x] **`src/SurvivalNet.c` foundation** — extension negotiated
       (`Server.SupportsSurvival`), receive dispatch gated + `SURV_HELLO`/
       `SURV_WORLDINFO` parse/log, `SurvivalNet_Send` wrapper. *(landed)*
@@ -380,7 +382,7 @@ layouts as you implement each phase.
 
 | id | name | payload |
 |---|---|---|
-| 0x01 | `SURV_HELLO` | mode(1: 0 off/1 c0.30‑s/2 indev), enhanced flag, protocol ver |
+| 0x01 | `SURV_HELLO` | mode(1: 0 off/1 c0.30‑s/2 indev), **flags(1)**, protocol ver |
 | 0x02 | `SURV_WORLDINFO` | groundLevel, waterLevel, fluid id, theme, floating flag, edge/sides ids (the `.mclevel` metadata set) |
 | 0x03 | `SURV_HEALTH` | health(1), + later air/score |
 | 0x04 | `SURV_TIME` | worldTime(2) or eased sky‑light level |
@@ -410,6 +412,16 @@ layouts as you implement each phase.
 | 0x86 | `SURV_DROP_ITEM` | slot / whole‑stack flag |
 | 0x87 | `SURV_RESPAWN` / menu action | — |
 
+**`SURV_HELLO` flags byte (bit field):** `bit0 = enhanced` (the non‑genuine
+survival extras — paperdoll etc.), **`bit1 = creative`** (this session/map is
+Indev creative — client hides the HUD, runs the palette‑hotbar + infinite‑place +
+no‑damage UX, allows flight; **must override the client's local `OPT_INDEV_CREATIVE`**),
+`bit2 = pvp`, `bit3 = deathDrops`, rest reserved (send 0). The client sets its
+`SurvivalTest_Creative`‑equivalent runtime state **from this flag** in MP and stops
+consulting the local option (see §14). The flag is render/UX only — **authority
+stays server‑side** (§20.3): the server runs the creative sim and validates intents
+regardless of what the client claims.
+
 Reuse standard packets where they already fit — don't duplicate:
 - **Player movement**: keep the normal Classic position packets (§2.1) +
   `ExtEntityPositions`. **Mobs are bespoke, not standard entities** — see §15.1
@@ -417,7 +429,11 @@ Reuse standard packets where they already fit — don't duplicate:
   animations). Mobs stream over `SURV_MOB_*` into the existing render puppet.
 - **Knockback**: `VelocityControl` CPE instead of a custom vector.
 - **Status text / hearts context**: `MessageTypes` for status‑bar lines if useful.
-- **Flight lockout**: `HackControl` to force no‑fly/no‑noclip on survival players.
+- **Flight lockout**: `HackControl` to force no‑fly/no‑noclip on *survival* players.
+  **Creative sessions are the exception** — send `HackControl` with fly/speed
+  *allowed* (genuine creative flies + reach 5), matching the `SURV_HELLO` creative
+  flag. Resolve HackControl from the same per‑session creative decision so the two
+  never disagree.
 - **Held block**: `HeldBlock` CPE (`OPCODE_HOLD_THIS`).
 
 ---
@@ -703,23 +719,49 @@ server simulates and validates; the client only sends intents and renders.**
 
 ## 14. Pseudo‑creative Indev mode (research + future task)
 
-> **STATUS (SP landed).** The singleplayer creative mode now exists:
-> `OPT_INDEV_CREATIVE` + `SurvivalTest_Creative` + the **`SurvivalTest_CreativeActive()`**
-> resolver (= `Creative && IndevTest_Enabled`), an in‑game Misc‑options toggle
-> (Indev‑only), and the behaviors below wired through that predicate (no damage,
-> instant no‑drop building with infinite blocks, no survival HUD, flight + reach 5).
-> **Two deliberate deviations from genuine**, both convenience‑over‑authenticity:
-> (a) genuine Indev's last build actually shipped creative *disabled* (private,
-> never‑constructed `PlayerControllerCreative`), so the whole mode is our revival;
-> (b) instead of the genuine 9‑slot **palette hotbar**, we use a **Beta‑1.8‑style
-> scrolling block‑picker** (reuses the stock `InventoryScreen`/`TableWidget` grid +
-> scrollbar; a cell click deposits a full stack and keeps the picker open). Mobs
-> still spawn (genuine). **MP note for this session:** creative must be
-> **server‑dictated** — the resolver is already shaped so `SURV_HELLO` sets the
-> effective state in MP and the local toggle is SP‑only; the server validates
-> every action regardless (§16, §20.3), so a client flipping its local flag gains
-> nothing. Implemented item‑side is blocks‑only (Option A); an items picker is
-> deferred (Option B).
+> **STATUS (SP landed — read this, it supersedes the older prose below).** The
+> singleplayer creative mode exists and is **faithful** (an earlier Beta‑1.8
+> scrolling picker was built then **reverted** — do not resurrect it):
+>
+> - **Toggle & resolver:** `OPT_INDEV_CREATIVE` (client option) → `SurvivalTest_Creative`
+>   global → **`SurvivalTest_CreativeActive()` = `Creative && IndevTest_Enabled`**.
+>   *Every* creative behaviour routes through that one predicate — nothing reads the
+>   raw flag. In‑game **Misc‑options → "Indev creative"** toggle, auto‑hidden unless
+>   the gamemode is Indev.
+> - **Behaviours (all gated on `CreativeActive()`):** no damage in/out
+>   (`survivalWorld=false` equiv), instant no‑drop breaking, **no block consumed on
+>   place (infinite)**, no survival HUD, flight + speed + reach 5. **Mobs still
+>   spawn** (genuine).
+> - **Inventory = the genuine model** (Beta picker reverted): opening the inventory
+>   shows the **Indev `GuiInventory` panel** (the same textured `SurvivalInvScreen`
+>   survival uses), and blocks come from the genuine **9‑slot palette hotbar**
+>   (`Session.registeredBlocksList` = stone, cobblestone, brick, dirt, planks, log,
+>   leaves, torch, slab), filled on creative map‑load. This IS
+>   `PlayerControllerCreative` — the only non‑genuine bit is that Indev shipped it
+>   *disabled*, so reviving it at all is our call.
+>
+> **MP contract for THIS session (how to gate/allow it):**
+> - Creative is **server‑dictated per map** (and optionally per player), carried in
+>   `SURV_HELLO`'s **flags** byte — see the wire layout in §25 (`bit1 = creative`).
+>   In MP the client **must ignore its local `OPT_INDEV_CREATIVE`** and obey the
+>   flag; the resolver is already shaped so `SurvivalNet` sets the effective state
+>   from `SURV_HELLO` and no downstream check changes.
+> - **The flag is UX/render only — never trust it for authority.** A hacked client
+>   that force‑sets creative gains nothing: the server keeps applying survival
+>   rules (damage, dig‑time, drops, no free "give") to any non‑creative session and
+>   validates every intent (§20.3). Client‑side the flag only decides what it draws
+>   (HUD on/off) and predicts.
+> - **Server‑side switches (MCGalaxy):** gate creative on `level.SurvivalMode == indev`
+>   **AND** a per‑level `level.Creative` bool (a `/os map creative on|off` style
+>   toggle), optionally overridden per player by a `hasCreative` session flag set by
+>   an operator command (`/gamemode`‑style). Send `SURV_HELLO` with `bit1` set only
+>   to sessions that resolve to creative; run the creative sim server‑side for those
+>   (no damage, mob spawner still on, block places don't debit an inventory).
+> - **Block set:** creative uses the **same Indev block set** as survival — including
+>   the genuine blocks now at their real ids (`52/53` water/lava source, `55` gears,
+>   `57` diamond block) and with `59/60/63/64/65` hidden as non‑genuine. That set is
+>   a per‑level property (§30); creative doesn't change it, it just lets you place
+>   from it freely.
 
 **This is genuine Indev behaviour, not an invention.** Indev shipped two
 controllers (`net/minecraft/client/controller/`):
@@ -746,21 +788,23 @@ instant‑break via plain `OPCODE_SET_BLOCK`. It's the ideal Phase‑0/1 proving
 ground: get the Indev *world* (server‑generated), *blocks*, *mobs*, and *day/night*
 flowing over the wire before taking on the hard survival authority migration.
 
-**Tasks it implies (do the SP research/impl first, then network it):**
-1. Add a 4th mode to the gamemode enum — **Indev Creative** — distinct from the
-   current `OFF` (plain ClassiCube creative) and `INDEV` (Indev survival). It sets
-   `IndevTest_Enabled = true` (Indev world/blocks/gen/day‑night/mob‑spawning) but
-   leaves the survival simulation off: no `SurvivalTest_Health`/damage, instant
-   break, infinite blocks, no crafting/inventory scarcity, HUD hides hearts.
-   Gate off a `SurvivalTest_CreativeIndev()` predicate; make sure `c0.30-s` and
-   `INDEV survival` are unaffected. Mirror genuine `PlayerControllerCreative`
-   (mobs still spawn; `survivalWorld=false`).
-2. Verify vs the decompiled `PlayerControllerCreative` (instant break, palette
-   hotbar contents/order, HUD‑off, mob spawner still ticking).
-3. Network it: `SURV_HELLO` mode = indev‑creative; server generates the Indev
-   world, spawns mobs, ticks day/night + random blocks, and relays block changes —
-   but sends no health/inventory/container messages and lets the client place/break
-   freely (still validated for reach). This is the first end‑to‑end Indev MP demo.
+**Tasks (SP client work is ✅ DONE — see the STATUS box; these are the MP tasks):**
+1. ~~SP creative mode~~ ✅ **done** — implemented as the `SurvivalTest_Creative` flag
+   + `SurvivalTest_CreativeActive()` predicate (NOT a 4th enum mode — it's a
+   modifier on the `INDEV` gamemode, so `c0.30-s` and Indev survival are untouched).
+   Behaviours, palette hotbar, and the genuine `GuiInventory` are all in; verified
+   vs `PlayerControllerCreative`.
+2. **Server: decide+carry the mode.** Resolve per session: `INDEV` gamemode +
+   per‑level `Creative` toggle (+ optional per‑player operator override) → set
+   `SURV_HELLO` `bit1`. Send `HackControl` fly‑allowed to those sessions (§25).
+3. **Client: obey the flag in MP.** In `SurvivalNet`, `SURV_HELLO` `bit1` sets the
+   creative runtime state (the resolver already routes everything through it);
+   ignore the local `OPT_INDEV_CREATIVE` while networked.
+4. **Server: run the creative sim + validate.** Generate the Indev world, spawn
+   mobs, tick day/night + random blocks, relay block changes; **no** health/
+   inventory/container messages for creative sessions; let them place/break freely
+   but still validate reach + the per‑level block set. Never trust the client's
+   claimed mode (§20.3). This is the first end‑to‑end Indev MP demo.
 
 ---
 
@@ -842,14 +886,28 @@ Desync source: a block id that means different things on each side. Prevent it
 with a **single source of truth** for the Indev definitions, ported verbatim to
 the server:
 
-- **Blocks** (`IndevBlocks_Define` in `src/IndevTest.c`): torch 50, fire 51,
-  chest 54, furnaces, crops 85–92, diamond ore 56, etc. — ids, draw type,
-  collide, textures, hardness, sounds. The server MUST use the same table. On
-  connect the server sends `CustomBlockSupportLevel` + `BlockDefinitions`/
-  `DefineBlock` for every >Classic id so *any* CPE client (not just this fork)
-  renders them, with sane **fallback ids** for clients that lack them. Our fork
-  already bakes these in — but keep the two in lockstep; bump the `SurvivalTest`
-  ext version if the table changes.
+- **Blocks** (`IndevBlocks_Define` in `src/IndevTest.c`) — the authoritative
+  Indev id map the server MUST match:
+  - **Genuine ids (1:1 with in‑20100223):** torch 50, fire 51, **water source 52,
+    lava source 53**, chest 54, **gears 55**, diamond ore 56, **diamond block 57**,
+    workbench 58, furnace 61 / lit 62. (52/53/55/57 were recently implemented — do
+    not treat them as CPE defaults.)
+  - **Relocated (ClassiCube has no runtime block metadata, so multi‑state blocks
+    can't share one id):** farmland 83/84, crops 85–92, chest/furnace facing
+    variants 71–82, wall‑torch 94–97. The `.mclevel` save/load remaps these ↔ the
+    genuine `59`/`60`+nibble, so the *save format* stays genuine (`IndevTest_BlockToIndev`/
+    `_FromIndev`). The server must apply the same remap at the `.mclevel` boundary.
+  - **Hidden (non‑genuine — kept off the Indev set):** 59, 60, 63, 64, 65
+    (`CanPlace=false` + removed from the inventory map). The server must NOT let a
+    survival client place these on an Indev map either.
+  - Each has a draw type, collide, textures, hardness, sound. On connect the server
+    sends `CustomBlockSupportLevel` + `BlockDefinitions`/`DefineBlock` for every
+    >Classic id so *any* CPE client renders them, with sane **fallback ids** for
+    clients that lack them. **Textures:** most come from the fetched Beta jar
+    (`beta_tiles[]` in `src/Resources.c`); the **gears tile is embedded** there
+    (Mojang hosts no Indev jar) — the server's texture pack must carry the same
+    atlas. Keep client+server in lockstep; bump the `SurvivalTest` ext version if
+    the table changes.
 - **Items** (`indev_items[]`, ids `256 + shiftedIndex`, `ITEM_KIND_*`,
   durabilities in `src/IndevTest.c`): the Classic protocol has **no item
   concept** at all. Items exist only inside our sub‑protocol (inventory, drops,
@@ -997,14 +1055,17 @@ matches. Only send `SURV_*` to sessions with `hasSurvival`.
 ### 17.3 The mode handshake (`SURV_HELLO`)
 
 1. Server, right after it finishes sending the level to a survival‑capable client
-   (after `LEVEL_END`), sends `SURV_HELLO {mode, enhanced, protoVer}` then
+   (after `LEVEL_END`), sends `SURV_HELLO {mode, flags, protoVer}` — `flags`
+   `bit0=enhanced`, **`bit1=creative`**, `bit2=pvp`, `bit3=deathDrops` (§25) — then
    `SURV_WORLDINFO {ground/water level, fluid, theme, floating, colours…}`.
 2. Client `SURV_HELLO` handler flips runtime mode: instead of reading
-   `SurvivalTest_Gamemode()` from options (the SP path at `SurvivalTest.c:7474`,
+   `SurvivalTest_Gamemode()` from options (the SP path at `SurvivalTest.c`,
    `IndevTest.c:2401`), set the mode from the packet. Add a
-   `SurvivalTest_SetNetworkMode(mode)` that sets `SurvivalTest_Enabled` /
-   `IndevTest_Enabled` (and a new creative flag, §14). **Leave the SP option path
-   exactly as is** — only override in MP.
+   `SurvivalTest_SetNetworkMode(mode, flags)` that sets `SurvivalTest_Enabled` /
+   `IndevTest_Enabled` **and `SurvivalTest_Creative` from `bit1`** (the existing
+   `SurvivalTest_CreativeActive()` resolver then does the rest — see §14). **Leave
+   the SP option path exactly as is** — only override in MP, and in MP make the
+   resolver read the network flag instead of `OPT_INDEV_CREATIVE`.
 3. `SURV_WORLDINFO` handler calls `IndevTest_SetSurroundings(...)` + `Env_*` so the
    Indev world params the Classic stream can't carry are applied before spawn.
 
