@@ -1915,6 +1915,102 @@ functions on its authoritative state** — the port is nearly 1:1.
 - [ ] `SURV_USE_ITEM` for right‑click use/open; `SET_BLOCK_CLIENT` for place/break;
       `SURV_ATTACK` for combat. All validated; nothing client‑authoritative.
 
+## 28. Server persistence lifecycle — when / where / how to save it all
+
+§18 covers the `.mclevel` *format*; this covers the server's *save lifecycle* —
+so nothing is lost when a map unloads or the server shuts down. MCGalaxy's native
+`.lvl` stores only blocks, so the survival state needs its own persistence.
+
+### 28.1 Everything that must survive a restart
+
+- **Shared world state:** the block array + `Data` metadata nibbles (chest facing,
+  farmland moisture, crop stage, furnace lit, fire age), `worldTime` (time of day),
+  surroundings/env (ground/water level, theme, floating, colours), tile‑entity
+  contents (**chest + furnace** items + furnace burn/cook), and the **live mob**
+  list (type/pos/health).
+- **Per‑player state:** each player's inventory (36) + armor (4) + **health** +
+  score + position/rotation. In MP many players share one map, so this is
+  per‑(map, player), unlike the single `LocalPlayer` in an SP `.mclevel`.
+
+### 28.2 Format: reuse `.mclevel` (+ per‑player files)
+
+Don't invent a new format — the `.mclevel` NBT already carries all the *shared*
+state (§18.1: `Map`+`Data`, `Environment`/`TimeOfDay`/surroundings, `TileEntities`,
+mob `Entities`) and is client‑compatible. Split it:
+
+- **`world.mclevel`** — the shared world snapshot (blocks, metadata, time,
+  surroundings, tile entities, mobs). No `LocalPlayer`, or an optional last‑seen one
+  purely so the file still opens in the SP client.
+- **`players/<name>.nbt`** — one small NBT per player: their `Inventory`(+Slot 100+
+  armor), `Health`, `Score`, `Pos`/`Rotation` — the same item/entity schema as
+  §18.1, just scoped to a player. (Alternative: fold players into `world.mclevel`'s
+  `Entities` if you prefer a single file; per‑player files are cleaner for MP and
+  for saving on disconnect.)
+
+Runtime stays MCGalaxy `Level` (blocks) + the SurvivalTest module's in‑memory state
+(inventories, mobs, tile entities, time); save = serialise that to the files above;
+load = read them back into the module.
+
+### 28.3 The auto‑generated folder
+
+Create it lazily on first save of a survival map — a per‑map folder so everything
+for a world lives together:
+
+```
+survival/
+  <mapname>/
+    world.mclevel          # shared world + tile entities + mobs + time
+    players/
+      <player1>.nbt        # inventory/armor/health/score/pos
+      <player2>.nbt
+```
+
+(`survival/` sits alongside MCGalaxy's existing `levels/` + `levels/level
+properties/` sidecar convention — MCGalaxy already keeps per‑level sidecar data, so
+this follows the grain. Pick the exact root to match the fork's layout.)
+
+### 28.4 When to save (hook MCGalaxy's lifecycle)
+
+- **Autosave interval** — piggyback MCGalaxy's periodic level autosave; write the
+  survival files whenever the level saves.
+- **`/save` / manual save** — same path.
+- **Level unload** (last player leaves, `/unload`) — save then free the module state.
+- **Player disconnect / leave** — save *that player's* `players/<name>.nbt`
+  immediately, so a crash or DC never loses their progress even if others stay.
+- **Server shutdown** — flush every loaded survival level + all online players.
+- **On join** — load the player's file (or start a fresh kit if none); load the
+  world state if the map isn't already resident.
+
+Hook these on MCGalaxy's level save / `OnLevelUnload` / player‑disconnect / shutdown
+events (the SurvivalTest server module subscribes — §5.2, §8.2).
+
+### 28.5 Gotchas
+
+- **Crash safety:** write to `*.tmp` then atomic‑rename over the real file, so a
+  crash mid‑write can't corrupt a save. Save per‑player on disconnect (cheap).
+- **Gen vs load (mobs):** a freshly *generated* Indev world runs the 1000‑pass
+  initial spawn (§8.1); a *loaded* world must **restore its saved mobs** and NOT
+  re‑run the initial population, or every reload doubles the mob count. Same rule
+  the SP `.mclevel` load already follows.
+- **Per‑player scope decision:** per‑(map, player) (each world its own save, most
+  Indev‑faithful) vs per‑player‑global (inventory follows you between maps). Pick
+  one up front; it changes where `players/` lives. Recommend per‑(map, player).
+- **Consistency:** save the shared world and its tile entities/mobs together (one
+  snapshot) so a chest's contents can't desync from the block that holds it.
+- **Don't double‑persist:** the `.mclevel` is the survival save; don't also try to
+  cram survival data into the `.lvl` — keep `.lvl` as the plain block cache MCGalaxy
+  expects, and let `world.mclevel` be the source of truth for survival state (or
+  regenerate the `.lvl` block cache from it on load).
+
+### 28.6 Checklist
+
+- [ ] SurvivalTest module serialises shared state to `survival/<map>/world.mclevel`
+      and each player to `survival/<map>/players/<name>.nbt`.
+- [ ] Save hooks: autosave, `/save`, unload, player disconnect, shutdown.
+- [ ] Load hooks: on map load restore world+tiles+mobs; on join restore the player.
+- [ ] Loaded worlds restore saved mobs; only *generated* worlds run the initial spawn.
+- [ ] Temp‑file + atomic rename; per‑player save on disconnect.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
