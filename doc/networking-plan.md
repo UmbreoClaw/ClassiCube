@@ -16,6 +16,55 @@
 
 ---
 
+## How to use this document
+
+Read it top to bottom once, then work the **priority checklist** below in order.
+§0–§3 are law (don't break Classic, use the gate + PluginMessages). §4–§5 are the
+client/server maps. §6 is the wire format. §7 is the roadmap. §8 is your first two
+concrete tasks. §12 is the per‑subsystem code map. §13 answers the "who owns what"
+questions. §14 is the Indev‑creative target. **§15 is the desync bible — internalise
+it before writing sync code.** §16 is the classic‑client policy. §17 is the
+step‑by‑step cookbook for the fiddly bits. Update this file as decisions harden.
+
+## Priority checklist (do in this order)
+
+**P0 — Foundations (must land first, in sequence):**
+- [ ] Read: client `src/Protocol.c` (CPE negotiation, `CPE_SendPluginMessage`/
+      `CPE_PluginMessage`), `src/Server.c` (SP/MP split); server
+      `MCGalaxy/Network/ClassicProtocol.cs` (`HandlePacket`, `0x35` handler),
+      `MCGalaxy/Generator/MapGen.cs`.
+- [ ] **Verify MCGalaxy's `0x35` PluginMessage payload width is 64 bytes** (a
+      source claimed 256 — settle this before designing any message).
+- [ ] Establish the **regression baseline**: fork client → *stock* server works
+      unchanged. Re‑run this after every networking change (§9).
+- [ ] **Task §8.1** — port the Indev generator into MCGalaxy + `Register("indev"…)`;
+      add a per‑level `SurvivalMode` property (`off|indevCreative|indevSurvival|c030s`).
+- [ ] Add the **`SurvivalTest` CPE extension** on both sides (§3, cookbook §17.1)
+      + `Server.SupportsSurvival`. Prove the gate: stock server ⇒ no change.
+
+**P1 — Indev *creative* multiplayer (first playable; simplest, §14):**
+- [ ] Add the **Indev Creative** SP mode (§14) and verify vs `PlayerControllerCreative`.
+- [ ] `SURV_HELLO` + `SURV_WORLDINFO` handshake; `src/SurvivalNet.c` flips the client
+      into Indev mode on a server‑provided world (cookbook §17.2–17.3).
+- [ ] **Block/item definition sync** (§15.3): server sends `BlockDefinitions`;
+      client + server share one table.
+- [ ] Server runs the mob **spawner**, **day/night**, **random ticks**; relays block
+      changes. Client **gates its own sim off** in MP (§15.2, cookbook §17.4).
+- [ ] **Mob puppet** wiring (§15.1): `SURV_MOB_*` → `st_mobs[]`, render‑only.
+- [ ] Apply the **classic‑client policy** for creative maps (§16).
+- [ ] Milestone: two fork clients build together in a server‑generated Indev world,
+      see the same mobs/day‑night, and a stock client can still join (per §16).
+
+**P2 — Indev *survival* multiplayer (the hard part; server authority):**
+- [ ] Health/damage server‑side (§7 Phase 2, §13).
+- [ ] Inventory / crafting / containers server‑side (§7 Phase 4, §13, §15.3).
+- [ ] **TNT/explosions** server‑side + `BulkBlockUpdate` (§15.4).
+- [ ] Combat intents, drops, item despawn, polish (§7 Phase 5).
+- [ ] Then extend the whole stack to **c0.30‑s**.
+
+**Always‑on rules:** never break Classic (§0); receive‑don't‑compute (§15.0);
+server wins reconciliation; re‑run the regression baseline every change.
+
 ## 0. The one rule that governs everything
 
 **Never break vanilla Classic.** A normal Classic/CPE server (or a normal Classic
@@ -763,6 +812,163 @@ at `:1373`, liquid destruction, drop chance, radius, damage falloff). So:
 | Block/item definitions | — | shared table | `BlockDefinitions` + our item table |
 
 If in doubt: **receive, don't compute.**
+
+## 16. Classic‑client compatibility policy
+
+A stock Classic/ClassiCube client (one that does **not** negotiate our
+`SurvivalTest` CPE ext) cannot run any survival logic: it won't see our bespoke
+mobs (§15.1) or item drops, has no health/inventory, and — critically — if it
+could place/break freely in a survival map it would **corrupt the authoritative
+world** (bypassing tools, consumption, physics, decay). So compatibility is
+decided **per map mode**, and it hinges on one hard invariant:
+
+> **Invariant: a client that has not negotiated `SurvivalTest` must never be able
+> to place or break blocks in an Indev/c0.30 *survival* map.** Enforce this
+> server‑side by rejecting its `SET_BLOCK_CLIENT` and reverting the block —
+> independent of rank.
+
+Detection is clean: "survival‑capable" ⇔ the client negotiated the `SurvivalTest`
+extension during the CPE handshake (server's `hasSurvival` flag for that session).
+
+Add two per‑level properties on the server:
+`SurvivalMode ∈ {off, indevCreative, indevSurvival, c030s}` and
+`ClassicClientPolicy ∈ {allow, visitor, deny}`.
+
+Policy by mode (recommended defaults):
+
+- **Classic map (`SurvivalMode=off`)** — unchanged. Everyone builds normally. Our
+  client behaves as stock Classic here (the gate is off). Full compatibility.
+- **Indev *creative* map (`indevCreative`)** — building is free (no survival sim),
+  so a Classic/CPE client **can join and build normally**. Custom blocks reach it
+  via `BlockDefinitions` (with fallback ids); our mobs/drops are simply invisible
+  to it (acceptable — they're cosmetic in creative). Default `ClassicClientPolicy=allow`.
+- **Indev/c0.30 *survival* map (`indevSurvival`/`c030s`)** — a non‑survival client
+  can't participate correctly. Choose per‑map:
+  - **`visitor` (recommended default):** let them join but as **read‑only
+    spectators** — the server forces them to a no‑build state on this level
+    (MCGalaxy per‑level build access / visitor rank), rejecting every block change.
+    They can walk and see the static world (+custom blocks); they don't see mobs or
+    drops. Most inclusive, zero risk to world integrity.
+  - **`deny`:** the server refuses the join with a clear message
+    ("This map needs the Indev survival client"). Use for maps that would be
+    confusing to spectate (heavy mob activity a spectator can't see).
+  - **`allow` is NOT permitted for survival maps** — it would violate the invariant.
+
+Implementation notes (server):
+- On join to a survival map, branch on the session's `hasSurvival`. If false and
+  policy is `visitor`, set the player's per‑level build permission to none (so the
+  existing block‑change rejection path reverts their edits) and skip sending any
+  `SURV_*` messages to them. If `deny`, disconnect with the message.
+- Survival‑capable clients on the same map get the full `SURV_*` stream.
+- Keep a chat/notice on join so users know why they're a visitor.
+- The client side needs no special code for this — a visitor simply never gets
+  `SURV_HELLO`, so its gate stays off and it behaves as stock Classic; its block
+  edits are already reverted by the normal authoritative `SET_BLOCK` path.
+
+Rationale: full survival parity for a non‑protocol client is **not achievable**
+(it can't run or receive the sim), so we don't pretend to — we keep them safe
+(visitor) or out (deny), and reserve real interop for creative maps where free
+building is already the rule.
+
+## 17. Implementation cookbook (specific how‑tos for the fiddly parts)
+
+Concrete step lists for the things that are easy to get subtly wrong. These are
+instructions, not finished code — write the code to match the surrounding style.
+
+### 17.1 Add the `SurvivalTest` CPE extension (the master gate)
+
+**Client (`src/Protocol.c`):**
+1. Near the other `CpeExt` decls (~line 90), add
+   `static struct CpeExt survival_Ext = { "SurvivalTest", 1 };`.
+2. Add `&survival_Ext` to `cpe_clientExtensions[]` (~line 103).
+3. In `src/Server.h`, add `cc_bool SupportsSurvival;` to the `Server` struct next
+   to the other `Supports*` flags.
+4. Set it where the other flags are set after negotiation (mirror
+   `SupportsNotifyAction`): `Server.SupportsSurvival = IsSupported(survival_Ext);`.
+5. That's the whole gate. Everything survival‑networked checks
+   `Server.SupportsSurvival` (and `!Server.IsSinglePlayer`).
+
+**Server (`ClassicProtocol.cs`):** advertise `SurvivalTest`/1 in `SendCpeExtensions`;
+in `AddExtension` set a per‑session `hasSurvival` when the client's `ExtEntry`
+matches. Only send `SURV_*` to sessions with `hasSurvival`.
+
+### 17.2 Wire the receive path — `src/SurvivalNet.c` (new file)
+
+1. New `src/SurvivalNet.c` + `.h`; register it as a game component (Init/Reset/Free)
+   the same way `SurvivalTest_Component` is registered in `src/Game.c`.
+2. In Init, subscribe: `Event_RegisterPluginMessage(&NetEvents.PluginMessageReceived,
+   NULL, SurvivalNet_OnPluginMessage);` (match the `Event_Register*` signature used
+   elsewhere).
+3. `SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data)`:
+   `if (channel != SURV_CHANNEL) return;` then `switch (data[0]) { case SURV_HELLO: … }`.
+   The 63 bytes after the id are your payload; **never read past 64**.
+4. Guard the whole file's behaviour on `!Server.IsSinglePlayer && Server.SupportsSurvival`.
+
+### 17.3 The mode handshake (`SURV_HELLO`)
+
+1. Server, right after it finishes sending the level to a survival‑capable client
+   (after `LEVEL_END`), sends `SURV_HELLO {mode, enhanced, protoVer}` then
+   `SURV_WORLDINFO {ground/water level, fluid, theme, floating, colours…}`.
+2. Client `SURV_HELLO` handler flips runtime mode: instead of reading
+   `SurvivalTest_Gamemode()` from options (the SP path at `SurvivalTest.c:7474`,
+   `IndevTest.c:2401`), set the mode from the packet. Add a
+   `SurvivalTest_SetNetworkMode(mode)` that sets `SurvivalTest_Enabled` /
+   `IndevTest_Enabled` (and a new creative flag, §14). **Leave the SP option path
+   exactly as is** — only override in MP.
+3. `SURV_WORLDINFO` handler calls `IndevTest_SetSurroundings(...)` + `Env_*` so the
+   Indev world params the Classic stream can't carry are applied before spawn.
+
+### 17.4 Gate the SP simulation off in MP (the big one)
+
+For every authoritative subsystem, wrap the entry with the three‑way branch:
+
+```
+if (Server.IsSinglePlayer)              { …run the local sim exactly as today… }
+else if (Server.SupportsSurvival)       { …driven by SURV_* messages; sim OFF… }
+else                                    { …stock Classic; survival entirely off… }
+```
+
+Concretely, gate these so they do nothing in the MP‑survival branch (list from §12):
+`SurvivalTest_Tick`'s authoritative parts, `SurvivalTest_Damage/_Hurt/_HurtFrom/_Heal`,
+`Mob_SpawnerRun`/`Mob_IndevSpawnerRun`/`SurvivalTest_IndevInitialSpawn`, the AI in
+`Mob_IndevCreatureUpdate`/`TickOneMob` (keep the *render/interp* half), container
+`Furnace_Tick`, `Indev_TickDayNight`, `IndevTest_TickRandomBlocks`, `SurvivalTest_Explode`/
+`SurvivalTest_TntPhysics`/`Mob_CreeperExplode`, inventory consumption
+(`SurvivalTest_AddItem`/`DamageHeldTool`/`ConsumeSelected`) and `IndevGen` (never run
+client‑side in MP). Keep rendering, sound, GUI, and interpolation running.
+
+### 17.5 Mob puppet (turn `st_mobs[]` into a network‑driven view)
+
+1. `SurvivalNet_MobSpawn(id,type,pos,yaw,pitch,health,flags)`: find/allocate a
+   `st_mobs[]` slot keyed by the server's mob id, `SurvivalTest_SpawnMobAt`‑style
+   setup for model/size, mark `active`, seed prev/next to the spawn pos.
+2. `SurvivalNet_MobMove(id,pos,yaw,pitch)`: write into that slot's `next` snapshot;
+   the existing interpolation renders it. Do **not** run `Mob_Travel`/AI on puppets.
+3. `SurvivalNet_MobState(id,health,fuseState,onFire,grazing,dead)`: set the
+   cosmetic timers from edges (e.g. on health decrease set `hurtTicks=10`), drive
+   creeper swell/fire overlay/graze; on `dead` start the death animation then free.
+4. Map server mob id ↔ slot in a small table so `_MOVE`/`_STATE`/despawn find it.
+
+### 17.6 Send client intents
+
+1. Typed wrappers over `CPE_SendPluginMessage(SURV_CHANNEL, buf)` in `SurvivalNet.c`:
+   `SurvivalNet_SendAttack`, `_SendUseItem`, `_SendInvClick`, `_SendContainerClick`,
+   `_SendCraft`, `_SendHeldSlot`, `_SendDropItem`.
+2. Call them from the existing input handlers **only** in the MP‑survival branch;
+   in SP the handlers keep mutating local state as today.
+3. Never mutate authoritative local state on send — wait for the server echo
+   (§15.0 server‑wins). Optimistic single‑block place/break is the only exception.
+
+### 17.7 Block/item definition parity
+
+1. Treat `IndevBlocks_Define` (`src/IndevTest.c`) + `indev_items[]` as the **spec**.
+   The MCGalaxy port must produce byte‑identical ids/draw/collide/textures/hardness/
+   sounds and the same item ids/kinds/durabilities.
+2. Server sends `CustomBlockSupportLevel` then `DefineBlock`/`BlockDefinitions` for
+   every >Classic block id, with a Classic **fallback id** per block so non‑fork
+   CPE clients degrade gracefully.
+3. Bump `survival_Ext` version whenever the shared table changes, and branch on the
+   negotiated version so old/new clients don't silently mismatch.
 
 ## References
 
