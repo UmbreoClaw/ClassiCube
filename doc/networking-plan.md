@@ -1368,6 +1368,78 @@ Route per capability (§20):
 - [ ] Throttle `EnvColors`/`SURV_TIME` sends; clients interpolate. No client‑driven
       time.
 
+## 22. Custom blocks on stock clients — growth updates & shapes/sizes
+
+Two separate things, with different answers.
+
+### 22.1 Block *updates* (seeds growing, farmland wetting, furnace lighting) — yes, everyone reads them
+
+Growth/state changes are just **block‑id changes**, and those ride the **base
+Classic `OPCODE_SET_BLOCK`** every client understands. Crop growth is a
+server‑authoritative random tick (§15.2): the server advances the stage and sends
+`SET_BLOCK` with the next crop id (our scheme uses **distinct ids per state** —
+crops `85–92`, farmland dry/wet `83/84`, furnace lit/idle, chest facing `71–74`),
+so **a stock client sees the block change to the grown stage** with no special
+protocol. The metadata nibble never needs to cross the wire to stock clients —
+the id itself carries the appearance. So: yes, stock ClassiCube reads seed growth,
+farmland wetting, furnace lighting, etc.
+
+### 22.2 Block *appearance/size* — mostly yes, via BlockDefinitions; a few degrade
+
+Whether a stock client renders the *right shape* depends on `BlockDefinitions`
+(and `BlockDefinitionsExt` for arbitrary boxes), which stock ClassiCube supports.
+The server defines each Indev block's draw type, textures, collide, sound **and
+shape** to the client:
+
+- **Full cubes** (`IndevBlock_Define` sets MinBB 0,0,0 / MaxBB 1,1,1, `DRAW_OPAQUE`)
+  — **farmland**, chest, furnace, diamond ore, bookshelf, etc. Render **perfectly**
+  on any `BlockDefinitions` client (they're just textured cubes). Note our farmland
+  is a full cube (as in genuine Indev — the 15/16 reduction is a later‑MC thing),
+  so it has no special size to miss.
+- **Custom boxes** — e.g. the **torch** (`MinBB` 7/16..9/16, `MaxBB` y 0..10/16, a
+  thin tall box) and any slab‑like heights. Expressible with **`DefineBlockExt`**
+  (full min/max bounds) or the basic `DefineBlock` **Shape** byte (height →
+  `MaxBB.y`). A `BlockDefinitionsExt` client renders the exact box; a
+  basic‑`BlockDefinitions`‑only client gets the height but not odd x/z insets.
+- **Sprite/cross blocks** — saplings, flowers, mushrooms: `DefineBlock` draw =
+  sprite → stock clients render the X‑cross. Faithful (genuine Indev draws these as
+  crosses too).
+- **Custom‑render blocks** — the **crop "#" ground pattern** (`IndevTest_IsCropBlock`
+  → our chunk builder draws the genuine BlockCrops row pattern, not a standard
+  draw) and the **angled wall‑torch** placement are done by *our* renderer, which a
+  stock client can't reproduce. They **degrade to the nearest CPE draw**: crops →
+  an upright X‑cross sprite (still recognisable and still updating through the
+  growth stages), wall torches → the standing torch box. Visible and correct in
+  position/state, just not pixel‑identical.
+- **No `BlockDefinitions` support** (ancient/pure‑Classic): the block falls back to
+  a Classic **stand‑in id** (§20.1) — a plain cube — but block updates still apply.
+
+So the short version: **stock clients render the different seed/farmland/etc.
+blocks correctly** as long as they support `BlockDefinitions` (nearly all modern
+ClassiCube builds do), because our special blocks are full cubes or standard
+sprites; only the couple of blocks that need our bespoke renderer (crop "#" rows,
+angled wall torches) degrade to the closest standard shape — never breaking, just
+looking simpler.
+
+### 22.3 Implication for the block‑definition parity
+
+Extend the shared block table (§15.3 / §17.7 / §19.3) so the server's
+`DefineBlock`/`DefineBlockExt` carry **draw type, per‑face textures, collide,
+sound, light, and MinBB/MaxBB (shape)** — not just texture indices — matching the
+client's `Blocks.*` table exactly. Send `DefineBlockExt` for the custom‑box blocks
+(torch), basic `DefineBlock` for the cubes/sprites, and give crops/wall‑torch a
+sprite/standing fallback shape for stock clients. Fork clients ignore these and use
+their baked‑in bespoke renderer for full fidelity.
+
+### 22.4 Checklist
+
+- [ ] Server defines every Indev block via `DefineBlock`/`DefineBlockExt` with the
+      full shape/draw/texture/collide/sound set (not just textures).
+- [ ] Custom‑box blocks (torch) use `DefineBlockExt`; crops/wall‑torch get a
+      sprite/standing fallback shape for stock clients.
+- [ ] Verify on a stock client: crops visibly advance through stages, farmland/
+      furnace/chest render as the right blocks, and updates apply live.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
