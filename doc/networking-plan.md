@@ -1581,6 +1581,96 @@ crash or desync a client — bounds‑check, then drop.
 - [ ] Every inbound `SURV_*` length‑validated + version‑branched; unknown ids dropped.
 - [ ] Ruleset from `SURV_HELLO`, not the local option, in MP.
 
+## 24. Player‑to‑player interactions & PvP
+
+**Framing first (important for the faithfulness mandate):** neither Indev nor
+c0.30 Survival Test ever had multiplayer, so *any* player‑to‑player interaction is
+**non‑genuine** — a designed feature layered on the (already non‑genuine) MP
+system, with Beta as the loose inspiration. Therefore PvP is a **per‑level,
+opt‑in server toggle, OFF by default**, so faithful survival maps stay pure
+single‑player‑style co‑existence and only maps that explicitly enable it get
+combat. Never make PvP a client‑side assumption.
+
+### 24.1 It's the mob‑combat pipeline with a player target
+
+PvP reuses everything from mob combat (§13, §8.2) — the only new part is that the
+*target* is another player, and players are **Classic 8‑bit entities**, not our
+16‑bit `SURV` mobs (§23.1). So the attack intent must say *which id space*:
+
+- **`SURV_ATTACK { targetKind, targetId }`** — `targetKind` = mob (16‑bit `SURV`
+  id) or player (8‑bit Classic entity id). This unifies "hit a mob" and "hit a
+  player" through one server‑validated path.
+- Alternatively, the standard **`PlayerClick`** packet already carries the clicked
+  **entity id** (`CPE_SendPlayerClick(button, pressed, targetId, raytracer)`,
+  `src/Protocol.c:861`) and can serve as the player‑target signal; but `SURV_ATTACK`
+  is cleaner because it also covers mobs. Pick one and be consistent.
+
+### 24.2 Server‑authoritative damage (never trust the client)
+
+On a valid attack intent, the **server** does all of it (client only asked):
+
+1. **Gate:** PvP enabled on this level, both parties are survival combatants
+   (not visitors — §16, §24.4), attacker off cooldown, target in reach + line of
+   sight, target not in a safe/spawn zone.
+2. **Damage:** the attacker's held‑item melee value (`IndevTest_MeleeDamage(heldId)`,
+   `src/IndevTest.c:385`) → the target's damage routine with **armor absorption**
+   and the **20‑tick invulnerability window** (reuse the `SurvivalTest_Damage`
+   math, §13). Wear the attacker's weapon (`IndevTest_ToolUseWear(..., true)`).
+3. **Apply + feedback:** push the target's new health (`SURV_HEALTH`), server‑apply
+   **knockback** away from the attacker via `VelocityControl` (`velControl_Ext`,
+   `src/Protocol.c:1506`), and broadcast a hurt state so nearby clients show the
+   flash/sound.
+
+The victim's own client shows the **hurt camera tilt** (`st_hurtTicks` /
+`SurvivalTest_GetHurtTilt`, `src/SurvivalTest.c`) when it receives the health drop —
+no special packet needed, just drive it off the `SURV_HEALTH` decrease.
+
+### 24.3 Death & loot — a design decision, not a port
+
+Genuine Indev/c0.30 have **no death‑drops** (death = Game Over / respawn‑by‑reload).
+Since PvP is non‑genuine anyway, dropping the victim's inventory on death is a
+*choice*:
+- **Faithful default:** no drops — victim sees the existing `GameOverScreen`,
+  server respawns them (reload/teleport to spawn). Simplest, matches SP.
+- **PvP‑map option:** drop inventory/armor as `SURV_DROP_*` at the death spot
+  (Beta‑style loot). Make it a per‑level flag alongside the PvP toggle.
+Either way the **server** decides and drives it; the client just renders.
+
+### 24.4 Cross‑client behaviour & pitfalls
+
+- **Only survival combatants fight.** On a survival map, non‑`SurvivalTest`
+  clients are **visitors** (§16) — the server treats them as **non‑combatants**:
+  not targetable (ignore attacks against them) and unable to attack. They have no
+  server‑side health to damage.
+- **Tier‑dependent visuals.** The victim gets health/knockback/tilt; nearby **fork**
+  clients can show the red hurt‑flash on the attacked player entity (our render
+  hook, same idea as mobs — standard ClassiCube doesn't flash players) + the hit
+  sound; **stock** clients just see the victim get knocked (a normal position
+  update). Graceful, not broken.
+- **Knockback vs client‑authoritative movement (§23.4).** Movement is
+  client‑driven, so knockback is a server `VelocityControl` the victim's client
+  applies; the server then reconciles the reported position. Don't compute PvP
+  fall/knockback damage from a client claim — reconstruct from the position stream.
+- **Combat log / anti‑abuse.** Standard MCGalaxy concerns apply — spawn protection,
+  safe zones, per‑area PvP flags, and rate/cooldown limits are all **server‑side**;
+  a client can't bypass them by spamming `SURV_ATTACK` (validate cooldown + reach
+  every hit, §20.3).
+- **Friendly context.** Non‑combat player interactions (seeing each other's held
+  block via `HeldBlock`, models via `ChangeModel`, nametags via ExtPlayerList) are
+  the normal Classic/CPE entity plumbing (§23.11) and work regardless of PvP.
+
+### 24.5 Checklist
+
+- [ ] PvP is a per‑level toggle, **default off**; faithful maps unaffected.
+- [ ] `SURV_ATTACK` carries target kind (mob 16‑bit / player 8‑bit) → one validated
+      server path for both.
+- [ ] Server computes damage (`IndevTest_MeleeDamage` + armor + invuln), applies
+      health + `VelocityControl` knockback; victim tilt from the `SURV_HEALTH` drop.
+- [ ] Visitors are non‑combatants (untargetable, can't attack).
+- [ ] Death drops are a per‑level option; faithful default = no drops + Game Over.
+- [ ] Every hit re‑validated (PvP on, reach, LOS, cooldown, not safe‑zone); never
+      trust client‑reported damage.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
