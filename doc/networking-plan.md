@@ -2121,6 +2121,94 @@ So to get the new command loaded when compiled:
 - [ ] Every action is server‑authoritative and streams via `SURV_*`.
 - [ ] Behaviour gated to survival levels; item/mob tables shared with the client.
 
+## 30. Per‑level block sets — survival blocks scoped to survival maps
+
+**Yes, this is not only possible, it's already how the client works** — you're
+matching an existing mechanism, and MCGalaxy's per‑level `BlockDefinitions` line
+up with it perfectly. Classic maps stay pristine; survival maps get the Indev set.
+
+### 30.1 It's already per‑level on the client
+
+The Indev blocks live at genuine ids **50–92** (torch 50, fire 51, chest 54,
+workbench 58, crops 85–92, …), which **shadow ClassiCube's CPE decoration blocks
+(50–65) — but only in Indev mode.** Map loading runs `Game_Reset`, which **wipes
+all custom block definitions** (`src/IndevTest.c:2354`); `OnNewMapLoaded` then
+re‑applies `IndevBlocks_Define()` **only if the map is Indev** (`:2360`, `:765`).
+So a non‑Indev map load restores the default/CPE block table automatically. That
+*is* per‑level block awareness — every map switch re‑establishes the right set.
+
+### 30.2 The server mirrors it with per‑level BlockDefinitions
+
+MCGalaxy supports **per‑level** custom blocks (not just global). So:
+- **Survival levels:** attach the Indev block collection (ids 50–92, the shared
+  table from §15.3/§17.7/§22.3 — draw/textures/collide/sound/light/MinBB‑MaxBB).
+  On join, the server sends *this level's* `DefineBlock`/`DefineBlockExt`; the
+  client's `Game_Reset` + `IndevBlocks_Define` mirrors it.
+- **Classic levels:** no Indev defs — the default/CPE set. Untouched, exactly as
+  today.
+- **Switching maps** re‑sends the destination level's block defs; the client
+  re‑defines on map load. Both ends stay in lock‑step because both key off the
+  per‑level survival flag.
+
+**ID‑collision note:** because Indev 50–92 overlaps the CPE decoration blocks
+(50–65), the *per‑level* definition is what lets a survival level override those
+ids while a Classic level keeps them. This only works cleanly because both the
+client (Game_Reset per map) and MCGalaxy (per‑level defs) scope block definitions
+to the level — don't define the Indev blocks globally on the server, or you'd
+clobber CPE decoration on Classic maps.
+
+Think of it as one named **"Indev block collection"** defined once (the shared
+table) and *flagged onto* survival levels — not re‑authored per map.
+
+### 30.3 Generation: fold it into `/os map add` and `/newlvl` (recommended)
+
+Your instinct is right — **integrate it, don't keep a separate survival‑only
+flow.** Registering the `indev` generator (§8.1) makes it a **theme** in the shared
+generator registry, so it appears in **both** `/os map add` and `/newlvl` for free
+(they read the same registry). Then have that generator function do the full
+setup, not just terrain:
+
+1. generate the Indev terrain (the `IndevGen` port, §8.1);
+2. set the level's **`SurvivalMode = indev`** property (drives the sim, the
+   `SURV_HELLO`, the compatibility policy §16, and the block‑set choice);
+3. **attach the per‑level Indev block collection** (§30.2);
+4. set the **texture‑pack URL** to the Indev pack (§19);
+5. persist via the survival save path (§28).
+
+Result: `/os map add indev` or `/newlvl <name> <dims> indev` produces a
+ready‑to‑play survival world — one command, correct blocks, correct sim, correct
+textures. A separate bespoke command would just duplicate MCGalaxy's whole
+map‑management + generator plumbing for no benefit.
+
+(If you'd rather stage it: land the `indev` generator as a theme first with blocks
++ textures but the sim still gated behind the `SurvivalTest` handshake — i.e. the
+world generates and looks right even before the full survival server module exists.
+That's a clean intermediate milestone, not a reason to keep it separate.)
+
+### 30.4 Pitfalls
+
+- **Don't global‑define Indev blocks on the server** — per‑level only, or Classic
+  maps lose their CPE decoration blocks (§30.2).
+- **Client map‑switch already clears** Indev defs on a non‑Indev map (`Game_Reset`),
+  so a player going survival→classic is handled client‑side; just make sure the
+  server sends the *classic* level's (default) defs on arrival.
+- **Stock/Classic clients** on a survival map get the Indev defs via
+  `BlockDefinitions` (or fallback ids if unsupported, §20.1) — the per‑level set is
+  what they receive, same as fork clients.
+- **One flag drives all of it:** the per‑level `SurvivalMode` decides block set,
+  sim, texture URL, `SURV_HELLO`, and §16 policy — keep it the single source of
+  truth so a level can't be "survival for blocks but not for sim".
+
+### 30.5 Checklist
+
+- [ ] Define the Indev block collection once (shared table); attach **per‑level** to
+      survival maps only; never global.
+- [ ] Register the `indev` generator as a theme → appears in `/os map add` +
+      `/newlvl`; the generator sets `SurvivalMode`, block defs, texture URL, saves.
+- [ ] On join/switch, server sends the destination level's block defs; client
+      mirrors via its map‑load `Game_Reset` + re‑define.
+- [ ] Classic maps verified unchanged (default/CPE blocks, no Indev defs).
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
