@@ -1289,6 +1289,85 @@ Indev, ext absent), trust the ext and treat the client as non‑survival.
       decide each client's packet set on join.
 - [ ] Validate + bounds‑check every inbound `SURV_*` regardless of `hasSurvival`.
 
+## 21. Tick model & time‑of‑day (with the stock‑client fallback)
+
+### 21.1 Tick rates & reconciliation
+
+- **The server simulates at 20 TPS** — Indev's tick rate. Every faithful formula
+  (mob invuln 20t, attack cooldowns, fuse 30t, air 300t, furnace 200t, day cycle
+  24000t, random‑tick budget = volume/200) assumes 20 Hz, so the authoritative sim
+  MUST run at 20 Hz regardless of MCGalaxy's default physics interval. Do not tie it
+  to MCGalaxy's block‑physics tick if that differs — give the survival module its
+  own 20 Hz scheduler.
+- **Send rate ≤ tick rate.** The server need not transmit every tick. Positions/
+  state go out at an adaptive/throttled cadence (e.g. mob moves a few times/sec,
+  block/meta on change, health on change); the **client interpolates** between
+  updates exactly as it already does for entities (`prev`→`next` snapshots).
+- **The client never drives authoritative time or state** (§15.0). Its own tick is
+  render/interpolation only; it displays what the server last told it. This is what
+  keeps 30 fps and 144 fps clients identical — they interpolate the same
+  server‑authored keyframes.
+- Client‑side prediction stays limited to its own single block place/break (§15).
+
+### 21.2 How each client tier sees day/night
+
+Our Indev day/night (`Indev_TickDayNight`) is, on the client, **purely visual**:
+it advances `worldTime`, eases the sky‑light level, and pushes five Env colours —
+sky, cloud, fog, **sun (diffuse)** and **shadow (ambient)** — plus it renders the
+moving sun/moon quads and stars. Crucially, **all the gameplay effects of time
+(spawn darkness, grass/leaf light rules, mob sun‑burning) are server‑authoritative
+(§15.2)**, so a client rendering the cycle imperfectly changes *nothing* about the
+world. That's what makes the fallback safe.
+
+Route per capability (§20):
+
+- **Fork (`hasSurvival`):** send **`SURV_TIME`** (the `worldTime`/eased sky level).
+  The client runs its own Indev colour curve locally and renders the moving
+  sun/moon/stars — full fidelity, smooth between updates via local interpolation.
+- **Stock / CPE‑but‑not‑survival (`hasEnvColors`):** the server drives the cycle
+  with the **standard `EnvColors` CPE packet** (`OPCODE_ENV_SET_COLOR`), pushing
+  updated sky(0)/cloud(1)/fog(2)/shadow=ambient(3)/sun=diffuse(4) colours over the
+  day. ClassiCube applies `SunCol`/`ShadowCol` to lit/shadowed block faces, so the
+  **whole world visibly darkens at night and brightens at day** for a stock client
+  too — no custom code on their side. They just don't get the *moving* sun/moon or
+  stars (that's our render), which is graceful, not broken.
+- **No `EnvColors` support (ancient clients):** the map keeps its static day
+  colours — no cycle, still no breakage.
+
+> **This is exactly the fallback you asked for, and it can't break anything:**
+> `EnvColors` is a standard, expected CPE packet (servers use it for custom skies
+> every day); it's gated on `hasEnvColors` per §20; and because day/night is
+> visual‑only on the client while the server owns every light‑driven mechanic,
+> a stock client seeing a simpler sky has zero gameplay consequence.
+
+### 21.3 Implementation notes
+
+- **One source of truth:** the server increments `worldTime` at 20 TPS (port
+  `Indev_TickDayNight`'s worldTime + skylight easing). From that single value it
+  derives both `SURV_TIME` (for fork clients) and the `EnvColors` (for others) —
+  so every tier is showing the same moment of the same day.
+- **Cadence:** the Indev colour curve moves slowly (24000‑tick day). Send
+  `EnvColors` only when a component actually changes (a handful of updates per
+  minute), or a light fixed rate; ClassiCube applies them instantly, so small
+  frequent steps look smooth without flooding bandwidth. `SURV_TIME` can be even
+  sparser since the fork interpolates the curve locally.
+- **Don't double‑drive the fork:** send a client **either** `SURV_TIME` **or** the
+  `EnvColors` day stream, not both (routing on `hasSurvival`), so the fork's local
+  curve isn't fighting server colour packets.
+- The server may still use `EnvColors`/`EnvWeatherType` for non‑cycle effects
+  (custom map ambience, rain) on any capable client as usual.
+
+### 21.4 Checklist
+
+- [ ] Server survival sim runs at a dedicated **20 TPS**, independent of MCGalaxy's
+      physics interval.
+- [ ] Server owns `worldTime`; derive `SURV_TIME` (fork) and `EnvColors` (others)
+      from it. Route per `hasSurvival` (§20).
+- [ ] Stock/CPE clients get the day/night via `EnvColors` (sky/cloud/fog/ambient/
+      diffuse); verify a stock client's world darkens at night on an Indev map.
+- [ ] Throttle `EnvColors`/`SURV_TIME` sends; clients interpolate. No client‑driven
+      time.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
