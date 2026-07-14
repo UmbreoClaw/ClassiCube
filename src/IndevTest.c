@@ -853,16 +853,7 @@ static void IndevBlocks_Define(void) {
 	/*  hardness dirt-like (0.6s). Only obtainable by hoeing - not placeable. */
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND,     "Farmland", 116, 2, 2, 2, SOUND_GRAVEL, 12);
 	IndevBlock_Define(INDEV_BLOCK_FARMLAND_WET, "Farmland", 115, 2, 2, 2, SOUND_GRAVEL, 12);
-	/* BlockFarmland.setBlockBounds(0,0,0, 1, 15/16, 1): tilled soil renders 1px
-	    shorter than a full cube. (Genuine keeps a FULL collision box, but CC ties
-	    FullOpaque/culling to MaxBB, so a reduced render box requires the reduced
-	    box here too - a harmless 1/16 stand-height difference; matching the look
-	    is what matters. Re-finalise so FullOpaque=false and the render/cull data
-	    pick up the new height.) */
-	Blocks.MaxBB[INDEV_BLOCK_FARMLAND].y     = 15.0f/16.0f;
-	Blocks.MaxBB[INDEV_BLOCK_FARMLAND_WET].y = 15.0f/16.0f;
-	Block_DefineCustom(INDEV_BLOCK_FARMLAND,     false);
-	Block_DefineCustom(INDEV_BLOCK_FARMLAND_WET, false);
+	/* (farmland's 15/16 MaxBB is set by the loop just below, next to CanPlace) */
 	/* Diamond ore (genuine 56) - tile 119 is patched from the b1.7.3
 	    terrain's diamond ore. Hardness 3.0F like the other ores; the item/
 	    tool side of diamonds lands with the armor+tools roadmap stage. */
