@@ -41,6 +41,9 @@ step‑by‑step cookbook for the fiddly bits. Update this file as decisions har
       add a per‑level `SurvivalMode` property (`off|indevCreative|indevSurvival|c030s`).
 - [ ] Add the **`SurvivalTest` CPE extension** on both sides (§3, cookbook §17.1)
       + `Server.SupportsSurvival`. Prove the gate: stock server ⇒ no change.
+- [ ] Establish **per‑session capability gating** (§20): add `hasSurvival` on the
+      server and the rule that *every* optional/`SURV_*`/def/texture send is gated
+      on the matching flag — never send a packet a client didn't negotiate.
 
 **P1 — Indev *creative* multiplayer (first playable; simplest, §14):**
 - [ ] Add the **Indev Creative** SP mode (§14) and verify vs `PlayerControllerCreative`.
@@ -1150,6 +1153,108 @@ files + tile indices so the pack it serves is correct and its `BlockDefinitions`
       client `Block_Tex` (one reservation table).
 - [ ] Confirm the in‑zip paths for every `TextureEntry`; test that a fresh client
       (no local Indev textures) joining an Indev map renders items/GUIs/blocks.
+
+## 20. Per‑client capability gating & fallbacks (never send trash to the wrong client)
+
+Different clients on the same Indev map have different capabilities: a stock
+**Classic** client (no CPE at all), a **CPE‑but‑not‑survival** client (ClassiCube
+without our ext), and our **`SurvivalTest`** fork client. The server must send
+each one only what it negotiated. Sending an optional packet to a client that
+can't parse it is not harmless — it desyncs the byte stream and usually gets the
+client **kicked** ("unhandled opcode").
+
+### 20.0 The golden routing rule
+
+> **Never send a packet a session did not negotiate.** Every optional/CPE/`SURV_*`
+> send is gated on that session's capability flag. This is per‑*session*, not
+> per‑*server* — two clients on the same level get different packet sets.
+
+MCGalaxy already tracks per‑session capability flags in `ClassicProtocol.cs`
+(`AddExtension` sets `hasCustomBlocks`, `hasTwoWayPing`, `hasBlockDefinitions`,
+`hasExtEnvAppearance`, …, plus the client protocol version and
+`customBlockSupportLevel`). **Add `hasSurvival`** there and gate all `SURV_*`
+(and the survival texture URL, and custom Indev block defs) on it. Reuse the same
+discipline the base CPE code already follows — you're extending it, not inventing it.
+
+Required‑capability table (server must check before sending):
+
+| Packet / data | Gate on |
+|---|---|
+| `0x35` PluginMessage / any `SURV_*` | `hasSurvival` **and** `hasPluginMessages` |
+| `DefineBlock`/`BlockDefinitions` (Indev blocks) | `hasBlockDefinitions` |
+| Custom block ids > Classic set in the level stream | `customBlockSupportLevel` ≥ needed |
+| `EnvMapAppearance` texture URL | `hasExtEnvAppearance` (`mapAppearance_Ext`) |
+| `ChangeModel`, `EntityProperty`, `VelocityControl`, etc. | their own ext flag |
+| Base Classic (blocks, chat, entities, kick) | always OK |
+
+If a flag is false, either **omit** the feature or **fall back** (below) — never
+send the packet anyway.
+
+### 20.1 Client tiers & fallbacks
+
+- **Pure Classic (no CPE):** the handshake padding byte wasn't `0x42`, so no
+  `ExtInfo`/`ExtEntry` — every `has*` flag is false. Send **only** base Classic.
+  Custom Indev block ids in the level stream must be **remapped to a Classic
+  fallback id** (each Indev block declares a fallback; a chest streams as e.g.
+  wood, torch as e.g. a pillar) so the world still renders as *something* sane.
+  No survival, no textures beyond default. Apply the §16 policy (visitor/deny on
+  survival maps; build allowed on creative maps).
+- **CPE but not `SurvivalTest`** (stock ClassiCube, other CPE clients): give them
+  the world properly — `BlockDefinitions` for the Indev blocks (so they render
+  correctly), the Indev texture pack URL (§19), env/colours. But send **no
+  `SURV_*`** at all: they get no health, no mobs, no drops, no container GUIs.
+  §16 policy still applies (visitor/deny on survival maps).
+- **`SurvivalTest` fork client:** the full stream — `SURV_HELLO`, world info,
+  mobs, health, inventory, containers, time, drops.
+
+Fallback rule of thumb: **degrade the *view*, never the *world*.** A less‑capable
+client may see a stand‑in block or miss the mobs, but the authoritative world on
+the server is identical for everyone; the capable clients just see more of it.
+
+### 20.2 Interactable blocks are safe for non‑survival clients — if you gate the open
+
+A stock/CPE‑only client can't open a chest/furnace GUI (it doesn't speak our
+protocol). That's **fine and non‑breaking, as long as the server never *infers* a
+container interaction from a plain block action:**
+
+- Container/inventory state lives **only** on the server and is mutated **only**
+  by validated `SURV_CONTAINER_CLICK`/`SURV_INV_CLICK`/`SURV_USE_ITEM` intents,
+  which a non‑survival client never sends. So a stock client **cannot** open,
+  read, or corrupt a chest/furnace — to it, the block is just an opaque cube.
+- The server must **not** treat a stock client's `SET_BLOCK_CLIENT` on/near a
+  container as an "open" — opening is driven exclusively by the `SURV_*` intent,
+  gated on `hasSurvival`. Keep the two paths separate.
+- On a **survival** map, a non‑survival client is a visitor anyway (§16): its
+  block edits are rejected, so it can't even break the chest.
+- On a **creative** Indev map, a non‑survival client placing a block against a
+  chest is just a normal, server‑validated block placement — harmless; the chest
+  keeps being a plain block to it.
+
+So: **no, interacting‑item blocks won't break for stock clients** — provided the
+"open container" trigger is `hasSurvival`‑gated and never derived from a base
+block packet. That is the flag that differentiates it.
+
+### 20.3 Still validate capable clients
+
+`hasSurvival` means "can receive/send our messages", **not** "trusted". Every
+inbound `SURV_*` from a fork client is still validated server‑side (§8.2): bounds‑
+check the 64‑byte payload (never over‑read), verify the action is legal (reach,
+cooldown, slot/recipe legality, container open + in range), and reject → correct
+with an authoritative echo. A negotiated extension is a capability, not a
+permission.
+
+### 20.4 Checklist
+
+- [ ] Add `hasSurvival` per session in `AddExtension`; set it from the client's
+      `SurvivalTest` `ExtEntry`.
+- [ ] Gate every `SURV_*` send + Indev `BlockDefinitions` + Indev texture URL on
+      the matching flag(s); never send unnegotiated packets.
+- [ ] Give every Indev block a Classic **fallback id** for no‑CustomBlocks clients.
+- [ ] Ensure "open container" is triggered **only** by a `hasSurvival` intent,
+      never inferred from `SET_BLOCK_CLIENT`.
+- [ ] Combine per‑session caps with the per‑level `SurvivalMode` + §16 policy to
+      decide each client's packet set on join.
+- [ ] Validate + bounds‑check every inbound `SURV_*` regardless of `hasSurvival`.
 
 ## References
 
