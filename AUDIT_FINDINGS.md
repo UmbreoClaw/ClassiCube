@@ -320,3 +320,25 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     relocated farmland(83)/crops(85+) back as genuine 60/59. So nothing generates
     or deserializes a hidden block - the picker + manual place were the only
     exposures, and both are now closed.
+
+21. [~] Genuine blocks 52/53/55/57 implemented (was: hidden as CPE defaults).
+    Confirmed the deobfuscator's "crate" is just the CHEST(54) - so ClassiCube's
+    block-64 crate really is non-genuine. Implemented the four real ones at their
+    genuine ids (definitions gdb-verified):
+      52 waterSource / 53 lavaSource: BlockSource - render like the still fluid,
+         hardness 0, and each random tick refill the 4 horizontal air neighbours
+         with flowing fluid (Indev_TickSource on Physics.OnRandomTick).
+      55 gears/cog: flat 1px walk-through decorative (Collide none, Draw transp),
+         hardness 0.5, drops self.
+      57 diamond block: opaque cube, hardness 5.0, drops self.
+    None are craftable in in-20100223 (verified CraftingManager - no diamond/gear
+    recipes), so no recipes added. BlockTo/FromIndev now map all four 1:1; hidden
+    list trimmed to 59/60/63/64/65. Un-hidden in-inventory.
+    TEXTURES PENDING (user: "blocks now, textures follow"): diamond block and
+    gears use tile 119 as a temporary stand-in. Their genuine tiles are Indev-
+    only (teal diamond tex 40, gears tex 62) and NOT in the patcher's b1.7.3
+    source, so they must be embedded from Indev's terrain.png (kz_sea_png-style)
+    - a separate step. Sources reuse the live water/lava tiles (correct already).
+    CROPS/FARMLAND: stay at 85-92 / 83-84 (engine has no runtime block metadata,
+    so 8 crop stages can't share one id; no free 8-run at 59). Save format is
+    already genuine 59/60+metadata, so this is invisible outside the runtime ids.

@@ -630,7 +630,11 @@ cc_bool IndevTest_IsWorkbench(BlockID b) { return IndevTest_Enabled && b == INDE
 #define INDEV_BLOCK_FARMLAND_WET 84
 #define INDEV_BLOCK_CROPS_0      85 /* 85-92 */
 #define INDEV_BLOCK_CROPS_7      92
+#define INDEV_BLOCK_WATER_SOURCE 52 /* genuine waterSource (BlockSource) */
+#define INDEV_BLOCK_LAVA_SOURCE  53 /* genuine lavaSource  (BlockSource) */
+#define INDEV_BLOCK_GEARS        55 /* genuine cog/gears; tex 62 (Indev-only) */
 #define INDEV_BLOCK_DIAMOND_ORE  56 /* genuine id; tile 119 */
+#define INDEV_BLOCK_DIAMOND      57 /* genuine blockDiamond; tex 40 (Indev teal) */
 /* Wall torches: genuine torch (50) metadata 1-4 = hanging on the solid
     block at -X / +X / -Z / +Z respectively (BlockTorch.onBlockAdded order).
     Id = base + (meta - 1). The canonical INDEV_BLOCK_TORCH is metadata 5
@@ -859,6 +863,59 @@ static void IndevBlocks_Define(void) {
 	    terrain's diamond ore. Hardness 3.0F like the other ores; the item/
 	    tool side of diamonds lands with the armor+tools roadmap stage. */
 	IndevBlock_Define(INDEV_BLOCK_DIAMOND_ORE, "Diamond Ore", 119, 119, 119, 119, SOUND_STONE, 60);
+
+	/* Genuine blocks that used to leak through as ClassiCube CPE defaults.
+	    Definitions only for now (ids/hardness/drops/behaviour); the two Indev-
+	    only textures - the TEAL diamond block (tex 40) and gears (tex 62) - come
+	    in the textures-follow step, so both use tile 119 as a temporary stand-in.
+	    None are craftable in in-20100223 (creative/technical). */
+	/* Diamond block (57): opaque cube, hardness 5.0F (=100), drops itself.
+	    soundMetalFootstep -> STONE (Indev has no metal footstep). */
+	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 119, 119, 119, 119, SOUND_STONE, 100);
+	/* Gears/cog (55): flat, walk-through, non-solid decorative (Material.circuits),
+	    hardness 0.5F (=10), drops itself. A 1px plate. */
+	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 119, 119, 119, 119, SOUND_STONE, 10);
+	Blocks.Collide[INDEV_BLOCK_GEARS]         = COLLIDE_NONE;
+	Blocks.ExtendedCollide[INDEV_BLOCK_GEARS] = COLLIDE_NONE;
+	Blocks.Draw[INDEV_BLOCK_GEARS]            = DRAW_TRANSPARENT;
+	Blocks.BlocksLight[INDEV_BLOCK_GEARS]     = false;
+	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_GEARS], 0.0f, 0.0f,        0.0f);
+	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_GEARS], 1.0f, 1.0f/16.0f, 1.0f);
+	Block_DefineCustom(INDEV_BLOCK_GEARS, false);
+	/* Water/lava source (52/53): BlockSource - renders like the still fluid and
+	    refills its 4 horizontal air neighbours each random tick (Indev_TickSource,
+	    registered in Indev_RegisterFarmTicks). Copy the still fluid's appearance
+	    so no new tile is needed; hardness 0. */
+	{
+		int f;
+		BlockID src, fluid;
+		for (f = 0; f < 2; f++) {
+			int face;
+			src   = f == 0 ? INDEV_BLOCK_WATER_SOURCE : INDEV_BLOCK_LAVA_SOURCE;
+			fluid = f == 0 ? BLOCK_STILL_WATER         : BLOCK_STILL_LAVA;
+			{
+				cc_string nm = String_FromReadonly(f == 0 ? "Water Source" : "Lava Source");
+				Block_SetName(src, &nm);
+			}
+			for (face = 0; face < FACE_COUNT; face++)
+				Block_Tex(src, face) = Block_Tex(fluid, face);
+			Blocks.Draw[src]            = Blocks.Draw[fluid];
+			Blocks.Collide[src]         = Blocks.Collide[fluid];
+			Blocks.ExtendedCollide[src] = Blocks.ExtendedCollide[fluid];
+			Blocks.BlocksLight[src]     = Blocks.BlocksLight[fluid];
+			Blocks.Brightness[src]      = Blocks.Brightness[fluid];
+			Blocks.FogDensity[src]      = Blocks.FogDensity[fluid];
+			Blocks.FogCol[src]          = Blocks.FogCol[fluid];
+			Blocks.MinBB[src]           = Blocks.MinBB[fluid];
+			Blocks.MaxBB[src]           = Blocks.MaxBB[fluid];
+			Blocks.DigSounds[src]       = SOUND_NONE;
+			Blocks.StepSounds[src]      = SOUND_NONE;
+			Blocks.CanPlace[src]        = true;
+			Blocks.CanDelete[src]       = true;
+			Block_DefineCustom(src, false);
+			SurvivalTest_SetHardness(src, 0);
+		}
+	}
 	IndevFire_DefineBlock();
 
 	/* BlockFarmland.setBlockBounds(0, 0, 0, 1, 15/16, 1): genuine farmland
@@ -937,15 +994,14 @@ static void IndevBlocks_Define(void) {
 	}
 
 	/* Faithfulness: genuine Indev's block registry ends at 62 (furnace lit).
-	    ClassiCube's CPE defaults fill 52-65 with blocks Indev never had at those
-	    ids - sandstone(52), snow(53), the extra wools(55,57,59), ice(60), pillar
-	    (63), crate(64), stone brick(65) - and Indev's own crops(59)/farmland(60)
-	    live at our relocated ids 85+/83 instead. Hide every one of those from the
-	    Indev block set (not placeable, not in the inventory map) so only genuine
-	    Indev blocks exist. Indev-only: this function never runs in c0.30-s or
-	    plain creative, so their block sets are untouched. */
+	    52/53/55/57 now hold their genuine blocks (water/lava source, gears,
+	    diamond block - defined above). The remaining leftovers are turquoise
+	    wool(59) and ice(60) - whose genuine crops/farmland we host at 85+/83 -
+	    and pillar(63)/crate(64)/stone brick(65), which don't exist in Indev at
+	    all. Hide those from the Indev block set (not placeable, off the inventory
+	    map). Indev-only: never runs in c0.30-s or plain creative. */
 	{
-		static const cc_uint8 nonGenuine[] = { 52, 53, 55, 57, 59, 60, 63, 64, 65 };
+		static const cc_uint8 nonGenuine[] = { 59, 60, 63, 64, 65 };
 		int n;
 		for (n = 0; n < (int)Array_Elems(nonGenuine); n++) {
 			Blocks.CanPlace[nonGenuine[n]] = false;
@@ -1599,6 +1655,19 @@ static void Indev_TickCrops(int index, BlockID block) {
 	}
 }
 
+/* BlockSource.updateTick: an infinite spring - fill each of the 4 horizontal air
+    neighbours with the flowing fluid (which then flows via the engine's own
+    liquid physics). The source block itself just sits and refills. */
+static void Indev_TickSource(int index, BlockID block) {
+	int x, y, z;
+	BlockID fluid = block == INDEV_BLOCK_LAVA_SOURCE ? BLOCK_LAVA : BLOCK_WATER;
+	World_Unpack(index, x, y, z);
+	if (World_Contains(x - 1, y, z) && World_GetBlock(x - 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x - 1, y, z, fluid);
+	if (World_Contains(x + 1, y, z) && World_GetBlock(x + 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x + 1, y, z, fluid);
+	if (World_Contains(x, y, z - 1) && World_GetBlock(x, y, z - 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z - 1, fluid);
+	if (World_Contains(x, y, z + 1) && World_GetBlock(x, y, z + 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z + 1, fluid);
+}
+
 static void Indev_RegisterFarmTicks(void) {
 	int k;
 	Physics.OnRandomTick[INDEV_BLOCK_FARMLAND]     = Indev_TickFarmland;
@@ -1606,6 +1675,8 @@ static void Indev_RegisterFarmTicks(void) {
 	for (k = 0; k < 8; k++) {
 		Physics.OnRandomTick[INDEV_BLOCK_CROPS_0 + k] = Indev_TickCrops;
 	}
+	Physics.OnRandomTick[INDEV_BLOCK_WATER_SOURCE] = Indev_TickSource;
+	Physics.OnRandomTick[INDEV_BLOCK_LAVA_SOURCE]  = Indev_TickSource;
 }
 
 /* World.tick's random block update loop, at the genuine rate: updateLCG
@@ -2452,15 +2523,13 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 	    56 diamond ore, 58 workbench, 61/62 furnace save as-is. The leftover
 	    CPE decoration ids (unreachable in Indev mode, but old worlds might
 	    carry them) keep lossy-but-sensible fallbacks. */
-	case 50: case 51: case 54: case 56: case 58: case 61: case 62:
+	/* our blocks now sit AT the genuine ids: 52 waterSource, 53 lavaSource,
+	    55 gears, 57 diamond block all save 1:1 alongside the rest. */
+	case 50: case 51: case 52: case 53: case 54: case 55: case 56: case 57:
+	case 58: case 61: case 62:
 		return b;
-	case 52: return 9;  /* CPE sandstone slot is the genuine waterSource - map
-	    a stray one to still water rather than losing it */
-	case 53: return 11; /* likewise lavaSource / snow slot -> still lava */
-	case 55: return 33; /* light pink   -> clothRose */
-	case 57: return 3;  /* brown        -> dirt */
-	case 59: return 28; /* turquoise    -> clothCapri */
-	case 60: return 20; /* ice          -> glass */
+	case 59: return 28; /* turquoise wool (unused) -> clothCapri */
+	case 60: return 20; /* ice (unused)            -> glass */
 	case 63: return 1;  /* pillar       -> stone */
 	case 64: return 54; /* crate        -> chest */
 	case 65: return 1;  /* stone brick  -> stone */
@@ -2480,14 +2549,11 @@ BlockRaw IndevTest_BlockToIndev(BlockRaw b) {
 
 BlockRaw IndevTest_BlockFromIndev(BlockRaw b) {
 	switch (b) {
-	/* torch/fire/chest/diamond ore/workbench/furnaces load 1:1 - our
-	    definitions sit at the genuine ids */
-	case 50: case 51: case 54: case 56: case 58: case 61: case 62:
+	/* torch/fire/sources/chest/gears/diamond ore+block/workbench/furnaces load
+	    1:1 - our definitions all sit at the genuine ids */
+	case 50: case 51: case 52: case 53: case 54: case 55: case 56: case 57:
+	case 58: case 61: case 62:
 		return b;
-	case 52: return 8;  /* waterSource -> water */
-	case 53: return 10; /* lavaSource  -> lava */
-	case 55: return 0;  /* gear -> air */
-	case 57: return 42; /* diamond block -> iron block */
 	case 59: return INDEV_BLOCK_CROPS_0;  /* + stage from the Data nibble */
 	case 60: return INDEV_BLOCK_FARMLAND; /* wet variant from the Data nibble */
 	default: return b <= 49 ? b : 0;

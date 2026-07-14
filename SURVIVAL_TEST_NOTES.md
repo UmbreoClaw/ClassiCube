@@ -5132,6 +5132,33 @@ builders). The block-hiding lives in `IndevBlocks_Define` (Indev-only, applies
 to Indev survival too - correct, since those blocks aren't genuine in either).
 No creative code path is reachable from c0.30-s.
 
+## SESSION LOG — genuine blocks 52/53/55/57 (definitions; textures follow)
+
+Implemented the four genuine Indev blocks that were leaking through as ClassiCube
+CPE defaults, at their genuine ids (`IndevBlocks_Define`), gdb-verified:
+- **52 water / 53 lava source** (`BlockSource`): render like the still fluid,
+  hardness 0, and refill their 4 horizontal air neighbours with flowing fluid
+  each random tick (`Indev_TickSource` → `Physics.OnRandomTick`).
+- **55 gears/cog**: flat 1px walk-through decorative (Collide none, Draw transp),
+  hardness 0.5, drops self.
+- **57 diamond block**: opaque cube, hardness 5.0, drops self.
+
+No recipes (in-20100223's CraftingManager has none for these — creative/technical
+blocks). `BlockTo/FromIndev` map all four 1:1; the hidden list is trimmed to
+59/60/63/64/65. Also confirmed the deobfuscator's "crate" = the **chest (54)**, so
+ClassiCube's block-64 crate really is non-genuine (correctly still hidden).
+
+**Textures pending** (user: "blocks now, textures follow"): diamond block + gears
+use tile 119 as a temporary stand-in — their genuine tiles (teal diamond tex 40,
+gears tex 62) are Indev-only, not in the patcher's b1.7.3 source, so they need
+embedding from Indev's `terrain.png` (kz_sea_png-style). Sources reuse the live
+water/lava tiles (already correct). Full detail: AUDIT_FINDINGS.md #21.
+
+**Crops/farmland** stay at 85-92 / 83-84 — a hard engine limit (no runtime block
+metadata, so the 8 crop stages can't share one id and there's no free 8-run at
+genuine 59). The `.mclevel` save/load already encodes them as genuine 59/60 +
+metadata, so this is invisible outside the runtime ids.
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.
