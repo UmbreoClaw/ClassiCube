@@ -1419,11 +1419,12 @@ shape** to the client:
   a Classic **stand‑in id** (§20.1) — a plain cube — but block updates still apply.
 
 So the short version: **stock clients render the different seed/farmland/etc.
-blocks correctly** as long as they support `BlockDefinitions` (nearly all modern
-ClassiCube builds do), because our special blocks are full cubes or standard
-sprites; only the couple of blocks that need our bespoke renderer (crop "#" rows,
-angled wall torches) degrade to the closest standard shape — never breaking, just
-looking simpler.
+blocks correctly** as long as they support `BlockDefinitions`/`BlockDefinitionsExt`
+(nearly all modern ClassiCube builds do), because our special blocks are cubes,
+reduced boxes (farmland 15/16, torch, slabs), or standard sprites — all
+expressible; only the couple that need our bespoke renderer (crop "#" rows, angled
+wall torches) degrade to the closest standard shape — never breaking, just looking
+simpler.
 
 ### 22.3 Implication for the block‑definition parity
 
@@ -1465,6 +1466,120 @@ clients on join.
       sprite/standing fallback shape for stock clients.
 - [ ] Verify on a stock client: crops visibly advance through stages, farmland/
       furnace/chest render as the right blocks, and updates apply live.
+
+## 23. Cross‑client fidelity pitfalls & miscellaneous tidbits
+
+Things that bite when multiple clients (fork + stock, fast + laggy) share a
+survival map. Most are "expected divergence is OK; authoritative world is not".
+
+### 23.1 Entity ID spaces — keep survival ids private
+
+Classic entity ids are **8‑bit**: `ENTITIES_MAX_COUNT` = 255 net players + local,
+`ENTITIES_SELF_ID` = 255 (`src/Entity.h`). Other **players** use that system as
+normal (skins/models/nametags). Our **mobs, item drops, and paintings must NOT go
+into that list** — give them their **own 16‑bit id space** inside `SURV_*`.
+Spawning mobs as Classic entities would both exhaust the 256 slots and collide
+with players. (This is the concrete reason §15.1 chose bespoke mob transport.)
+
+### 23.2 Don't let client‑side block physics fight the server
+
+Our Indev random‑tick sim (grass/leaf/crop/fire/furnace/day‑night) is gated to SP
+(§15.2). But ClassiCube *also* has a separate, **option‑driven** classic block
+physics (`Physics.Enabled` = `OPT_BLOCK_PHYSICS`, default on — sand/gravel fall,
+water/lava flow), toggled only in options, **not** auto‑disabled in MP. On a
+networked survival map the server owns all of that, so ensure the client does not
+locally predict it (force `Physics.Enabled` off, or otherwise ignore it, while a
+`SurvivalTest` map is active) — otherwise a client predicts a sand fall the server
+never confirms and desyncs until the next `SET_BLOCK`.
+
+### 23.3 Interest management / bandwidth (Indev is mob‑heavy)
+
+Indev spawn caps are large (`≈ vol·20/64³/2` monsters + animals). Broadcasting
+every mob's position to every client each tick will saturate the link. **Stream
+only the mobs within a relevance radius of each player**, at the throttled cadence
+of §21.1, and drop/despawn them client‑side when they leave range. This is more
+than Classic's all‑players broadcast — plan for it before mob sync (Phase 3).
+
+### 23.4 Player movement is client‑authoritative; reconstruct, don't trust
+
+Classic movement is **client‑driven** — the fork client runs its Indev player
+physics locally and reports position; the server can't cheaply re‑run Indev
+physics for every player. So: **validate** with sanity checks (max speed, teleport
+distance, noclip) and **reconstruct fall distance from the position stream** to
+compute fall damage server‑side (§13) — never trust a client "I took N damage" or
+"I fell" message. A stock client uses Classic movement on an Indev map (slightly
+different feel) — harmless.
+
+### 23.5 Divergence between tiers is expected — and fine
+
+Two clients at different capability tiers legitimately see **different things** at
+the same spot: a `BlockDefinitions` client sees a chest, a pure‑Classic client
+sees a stand‑in cube (§20.1); a fork client sees mobs/paintings a stock client
+doesn't (§15.1/§22.4). That is by design — **degrade the view, never the world.**
+Don't chase pixel‑parity across tiers; guarantee the *authoritative server world*
+is identical for everyone and let each client render what it can.
+
+### 23.6 Lighting‑mode variance is visual‑only
+
+Clients differ in `Lighting_Mode` (classic vs fancy, `src/Lighting.h`) → different
+brightness/shadows. This is **purely visual and harmless** because the server owns
+every light‑driven mechanic (spawns, decay, mob burning — §15.2) and the client
+must never derive state from local light. Optionally force a mode for consistency
+with the `LightingMode` CPE ext; otherwise accept the variance.
+
+### 23.7 Sounds are client‑derived from events, not streamed
+
+The client plays mob/break/place sounds from received `SURV_*` state edges +
+its **own** position for distance falloff (our `Audio` soundboard, §12). The
+server sends events/state, not audio. Make sure the same event yields the same
+sound on every fork client (drive sound off the authoritative state change, not
+off local prediction).
+
+### 23.8 Container concurrency
+
+Two players, one chest: if A breaks or empties a chest B has open, the server must
+**scatter/close/re‑sync** B's window. Serialise container mutations server‑side so
+two clients' optimistic clicks can't both "win" (the server cursor per player, one
+authoritative container state — §13). Test this explicitly with two clients.
+
+### 23.9 Ruleset authority (the "enhanced" flag)
+
+The server's per‑level `SurvivalMode` + enhanced ruleset is authoritative and
+travels in `SURV_HELLO`; **ignore the client's local `survival-enhanced` option in
+MP** so everyone on a map plays the same rules. (SP keeps reading the option.)
+
+### 23.10 Version skew & malformed frames
+
+Never assume the peer's `SurvivalTest` version matches. **Validate every message's
+length before reading, branch on the negotiated ext version, and ignore unknown
+message ids** (forward/backward compat). A malformed 64‑byte frame must never
+crash or desync a client — bounds‑check, then drop.
+
+### 23.11 Misc tidbits
+
+- Client gate mirror: `Server.SupportsSurvival` = `IsSupported(survival_Ext)`;
+  all client survival code keys off `!Server.IsSinglePlayer && Server.SupportsSurvival`.
+- Other **players** render via the normal Classic entity/model path — held block
+  via `HeldBlock` (`OPCODE_HOLD_THIS`), model via `ChangeModel`; showing their
+  worn armor/held *item* is later polish (`CustomModels`).
+- **Reach:** the `ClickDistance`/`SetReach` CPE changes a client's interaction
+  distance — survival reach is validated **server‑side** regardless (§8.2/§20.3);
+  a client can't extend reach by negotiating a bigger click distance.
+- The **Human mob** uses `char.png` (default skin) — ensure the pack provides it
+  and a mob never adopts a connecting player's skin/entity.
+- Re‑run the **stock‑server regression baseline** (§9) after every networking
+  change — it's the cheapest guard against silently breaking Classic.
+
+### 23.12 Cross‑client fidelity checklist
+
+- [ ] Survival mob/drop/painting ids live in a private 16‑bit space, not the
+      Classic entity list.
+- [ ] Client‑side classic block physics forced off on `SurvivalTest` maps.
+- [ ] Mob streaming uses per‑player relevance + throttling.
+- [ ] Fall damage reconstructed server‑side from position; movement sanity‑checked.
+- [ ] Container mutations serialised; two‑client chest test passes.
+- [ ] Every inbound `SURV_*` length‑validated + version‑branched; unknown ids dropped.
+- [ ] Ruleset from `SURV_HELLO`, not the local option, in MP.
 
 ## References
 
