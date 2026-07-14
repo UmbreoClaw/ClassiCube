@@ -1243,10 +1243,43 @@ cooldown, slot/recipe legality, container open + in range), and reject → corre
 with an authoritative echo. A negotiated extension is a capability, not a
 permission.
 
-### 20.4 Checklist
+### 20.4 Client identification via AppName — complementary, not a replacement gate
+
+The client already sends a human‑readable **AppName** in the CPE `ExtInfo` handshake
+(`Server.AppName`, built in `src/Server.c:560` from `GAME_APP_NAME` = "ClassiCube
+1.3.8" in `src/Constants.h`, written by `CPE_SendExtInfo` `src/Protocol.c:929`). We
+*can and should* make the fork advertise itself — e.g. append " Indev" so it reads
+**"ClassiCube Indev 1.3.8"** — which is genuinely useful: it shows in MCGalaxy's
+player list / logs (MCGalaxy already parses this via `ClientName()`), so admins can
+see who's on the survival client at a glance.
+
+**But use it for identity/UX and a coarse fallback signal only — the authoritative
+capability gate stays the `SurvivalTest` CPE extension (§3, §20.0).** Why not gate
+on the name:
+- AppName is a free‑form, **spoofable, unversioned** string; string‑matching is
+  brittle across version bumps and forks. The CPE ext is the standard,
+  machine‑negotiated, **versioned** capability signal (branch on
+  `survival_Ext.serverVersion` when the wire format changes).
+- It conflates *identity* ("I am the Indev fork") with *capability* ("I support
+  SurvivalTest v2"). Route on capability, label with identity.
+- **Timing:** AppName is sent at handshake, *before* the client learns the map is
+  Indev (in MP the mode is server‑decided and arrives in `SURV_HELLO` after the
+  level). So it can't be a per‑map toggle — the **fork build always advertises
+  Indev** because it's always survival‑capable. That's fine and cleaner: the name
+  identifies the build, the ext confirms capability, and the per‑level `SurvivalMode`
+  + §16 policy decide what each session is actually sent.
+
+Recommendation: **do both** — set the fork AppName to "ClassiCube Indev 1.3.8"
+(identity, logs, and a cheap secondary sanity check) **and** gate all routing on
+`hasSurvival` (the real, versioned capability). If they ever disagree (name says
+Indev, ext absent), trust the ext and treat the client as non‑survival.
+
+### 20.5 Checklist
 
 - [ ] Add `hasSurvival` per session in `AddExtension`; set it from the client's
       `SurvivalTest` `ExtEntry`.
+- [ ] (Optional, recommended) Fork AppName → "ClassiCube Indev 1.3.8" for
+      identification; keep routing gated on `hasSurvival`, not the name.
 - [ ] Gate every `SURV_*` send + Indev `BlockDefinitions` + Indev texture URL on
       the matching flag(s); never send unnegotiated packets.
 - [ ] Give every Indev block a Classic **fallback id** for no‑CustomBlocks clients.
