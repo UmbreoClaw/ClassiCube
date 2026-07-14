@@ -1671,6 +1671,140 @@ Either way the **server** decides and drives it; the client just renders.
 - [ ] Every hit re‑validated (PvP on, reach, LOS, cooldown, not safe‑zone); never
       trust client‑reported damage.
 
+## 25. Wire format v1 — concrete byte layouts (starting spec)
+
+All on channel `0xB0`, packet `[0x35][0xB0][64‑byte payload]`. Payload `[0]` = the
+1‑byte message id below; `[1..63]` = fields. **Big‑endian.** Positions are int16
+fixed‑point `= round(coord * 32)` per axis (6 bytes/xyz) — swap to int32
+(`ExtEntityPositions`) for maps taller/wider than the int16/32 range. Yaw/pitch are
+`uint8 = round(deg * 256/360)`. This is a *first draft to implement against and
+refine*, not frozen; bump the `SurvivalTest` ext version when it changes (§20/§23.10).
+
+**Server → client (state):**
+
+```
+SURV_HELLO      0x01  [1]mode(0 off/1 c030s/2 indev/3 indevCreative)
+                      [2]flags(b0 enhanced, b1 pvp, b2 deathDrops)  [3]protoVer
+SURV_WORLDINFO  0x02  [1..2]groundLevel(i16)  [3..4]waterLevel(i16)  [5]fluidId
+                      [6]theme  [7]flags(b0 floating)  [8]edgeBlk  [9]sidesBlk
+                      [10..11]sidesOffset(i16)  [12..14]skyRGB  [15..17]fogRGB
+                      [18..20]cloudRGB  [21..22]cloudHeight(i16)
+                      [23..24]worldTime(u16)  [25]skyBrightness
+SURV_HEALTH     0x03  [1]health(0..20)  [2..3]score(i16)
+SURV_TIME       0x04  [1..2]worldTime(u16)  [3]easedSkyLight(0..15)
+SURV_MOB_SPAWN  0x10  [1..2]mobId(u16)  [3]type  [4..9]pos  [10]yaw [11]pitch
+                      [12]health  [13]flags(b0 helmet,b1 armor,b2 fur)
+SURV_MOB_MOVE   0x11  [1..2]mobId  [3..8]pos  [9]yaw  [10]pitch
+SURV_MOB_STATE  0x12  [1..2]mobId  [3]health  [4]flags(b0 hurt,b1 fuse,b2 onFire,
+                                                       b3 graze,b4 dead)
+SURV_MOB_DESP   0x13  [1..2]mobId  [3]reason
+SURV_INV_FULL   0x20  [1]baseSlot  [2]runLen  then runLen×{id(u16),count(u8),dmg(i16)}
+                      (5 bytes each → ≤12/frame; chunk across frames)
+SURV_INV_SLOT   0x21  [1]slot  [2..3]id(u16)  [4]count  [5..6]dmg(i16)
+                      (slots: 0..35 main, 36..44 craft, 45..98 container, 100+ armor)
+SURV_CONT_OPEN  0x22  [1]kind(1 chest/2 furnace/3 large)  [2]rows
+SURV_CONT_SLOT  0x23  [1]slot  [2..3]id  [4]count  [5..6]dmg
+SURV_FURN_PROG  0x24  [1]burn(0..12)  [2]cook(0..24)
+SURV_DROP_SPAWN 0x30  [1..2]dropId(u16)  [3..4]itemId(u16, ≥256 = item)  [5]count
+                      [6..11]pos  [12..17]vel(i16 = coord/sec × 512)  [18]rot0(u8)
+SURV_DROP_PICKUP 0x31 [1..2]dropId  [3]pickerEntityId(u8 Classic entity id)
+SURV_DROP_REMOVE 0x32 [1..2]dropId  [3]reason(0 despawn/1 destroyed)
+SURV_PLAYER_EQUIP 0x50 [1]entityId(u8)  [2..3]heldId(u16)  [4..11]armor[4](u16 each)
+SURV_BLOCKMETA  0x40  [1..6]xyz(i16 block coords)  [7]meta
+```
+
+**Client → server (intents):** (server validates every one — §8.2/§20.3)
+
+```
+SURV_ATTACK       0x80  [1]targetKind(0 mob/1 player)  [2..3]targetId
+                        (mob = 16‑bit SURV id; player = 8‑bit Classic entity id)
+SURV_USE_ITEM     0x81  [1]heldSlot  [2..7]targetBlock xyz  [8]face
+SURV_INV_CLICK    0x82  [1]slot  [2]button(0 L/1 R/2 shiftL/...)
+SURV_CONT_CLICK   0x83  [1]slot  [2]button
+SURV_CRAFT        0x84  [1]op(0 place/1 takeResult)  [2]cell  [3..4]id
+SURV_HELD_SLOT    0x85  [1]hotbarIndex
+SURV_DROP_ITEM    0x86  [1]slot  [2]wholeStack(0/1)
+SURV_RESPAWN      0x87  (menu action)
+```
+
+Reuse standard packets where they fit (don't duplicate): player movement =
+Classic position packets (+`ExtEntityPositions`); held *block* = `HeldBlock`;
+knockback = `VelocityControl`; env colours for stock clients = `EnvColors` (§21).
+
+### 25.1 Other players' equipment (armor / held item)
+
+Showing a *remote* player's worn armor and held item is bespoke — standard
+ClassiCube renders neither on other entities. Stream **`SURV_PLAYER_EQUIP`**
+(above): the player's Classic entity id + held item id + the 4 armor ids. Fork
+clients render it with the same hooks as the local player (`IndevArmor_Render`
+plates + the held‑item render) applied to that entity; **stock clients ignore it**
+(no handler) — they just see the base player model. This parallels the mob
+approach (§15.1): bespoke, fork‑only, graceful degradation. It's **polish**, not a
+Phase‑0..4 requirement — the local player's own armor/health/HUD comes first.
+
+## 26. Item drops (deep dive + code pointers)
+
+Drops are their own entity system in `src/SurvivalTest.c` — read it before
+networking them; the model below reuses it almost wholesale.
+
+### 26.1 Client code map
+
+- **State:** `struct DropItem` (`position`,`prevPos`,`velocity`, `block` = full id
+  space [block id, or ≥256 item id], `count`, `age`/`prevAge` for the spin/bob/glow,
+  `rot0`, `pickupDelay`, `onGround`, `pickingUp`/`pickupTime`/`pickupFrom` for the
+  fly‑in). Pool `st_drops[DROP_MAX]` (`DROP_MAX = 256`, evicts oldest when full).
+- **Spawn:** `SurvivalTest_SpawnDropAt` (`:538`) — the **only RNG** is here (spawn
+  velocity `(rand·0.2−0.1)·20` per axis + `rot0`); `SpawnDropWorld`/`SpawnDrop` are
+  the public/inset wrappers. `pickupDelay` = 10t Indev toss / 0 c0.30.
+- **Physics:** `SurvivalTest_DropPhysics` (`:761`) — **deterministic**: gravity,
+  `Collisions_MoveAndWallSlide`, `×0.98` drag, `×0.7` ground friction. **No per‑tick
+  RNG** (verified). This is what lets clients simulate from spawn state (§26.3).
+- **Pickup:** `SurvivalTest_DropTryPickup` (`:802`) — AABB overlap of the drop vs
+  the player bb grown ±1 horizontally (genuine `findEntities(bb.grow(1,0,1))`), then
+  `addResource()` (partial stacks allowed, stays if inventory full), then the
+  `TakeEntityAnim` fly‑in (removes after ~3t).
+- **Tick/despawn:** `SurvivalTest_TickDrops` (`:895`); despawn at `age ≥ 6000`
+  ticks (Item.tick). Save/iterate: `SurvivalTest_DropNext` (already in `.mclevel`
+  Entities — §18.1). Render: `IndevTest_DropIsSprite` (mini‑block cube vs items.png
+  billboard) + the age‑driven spin/bob/glow.
+
+### 26.2 Drop sources (all become server‑side)
+
+Block break (`SurvivalTest_GetBlockDrop`/`SpawnIndevDrops`), mob death
+(`indevDeathDrop`), chest scatter (`IndevTE_Scatter`), TNT/explosion
+(`ExplodeDropsForBlock`), player Q‑toss, and (optional) PvP death (§24.3). In MP
+the **server** runs each of these and emits `SURV_DROP_SPAWN`.
+
+### 26.3 Networking model (server‑authoritative, client‑simulated render)
+
+- **Spawn:** the server does the RNG (velocity/rot0) and sends
+  `SURV_DROP_SPAWN { dropId, itemId, count, pos, vel, rot0 }`. The client seeds a
+  local `DropItem` from that and runs the **same deterministic `DropPhysics`** — so
+  the drop falls and settles **identically on every client** with *no per‑tick
+  position stream*. (Optional `SURV_DROP_MOVE` only if a block changes under a
+  resting drop and positions could diverge — rare.)
+- **Pickup is server‑authoritative:** the server (which tracks player positions from
+  the movement stream + its own drop sim) detects the overlap + `pickupDelay` +
+  inventory space, updates the inventory (`SURV_INV_SLOT`), and sends
+  `SURV_DROP_PICKUP { dropId, pickerEntityId }`. The **picker's** client plays the
+  fly‑in animation; **all** clients then remove the drop. Never let the client
+  self‑award a pickup (anti‑dupe / anti‑reach‑hack).
+- **Despawn (6000t)** and merging (Indev/c0.30 don't merge drops — keep them
+  separate) are server‑owned; a `SURV_DROP_REMOVE` retires the entity everywhere.
+- **Interest management (§23.3):** many drops appear at once (a chopped tree, a
+  chest scatter). Batch the `SURV_DROP_SPAWN` frames, and only stream drops within a
+  relevance radius of each player; drop them client‑side when out of range. The
+  256‑slot pool is per‑client render budget, not a server cap.
+
+### 26.4 Checklist
+
+- [ ] Server runs all drop sources + deterministic `DropPhysics` + 6000t despawn.
+- [ ] `SURV_DROP_SPAWN` carries pos+vel+rot0; clients simulate locally (no per‑tick
+      stream); verify a drop lands in the same cell on two clients.
+- [ ] Pickup is server‑detected → `SURV_INV_SLOT` + `SURV_DROP_PICKUP`; the picker
+      plays the fly‑in, everyone removes. No client self‑award.
+- [ ] Batch multi‑drop scatters; relevance‑filter per player.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
