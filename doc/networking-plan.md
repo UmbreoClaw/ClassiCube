@@ -67,8 +67,11 @@ pointer. `.mclevel` handling is fully covered — format §18, save lifecycle §
       (don't re‑run the initial spawn). — §18, §28
 
 **P1 — Indev *creative* multiplayer (first playable; simplest — §14):**
-- [ ] **Indev Creative** SP mode (verify vs `PlayerControllerCreative`: no HUD,
-      instant break, palette hotbar, mobs still spawn). — §14
+- [x] **Indev Creative** SP mode — `SurvivalTest_CreativeActive()` gates no‑HUD,
+      instant no‑drop building with infinite blocks, flight, mobs still spawn;
+      block‑picker GUI replaces the palette (Option A). *(landed, SP)* — §14
+- [ ] **Indev Creative** MP — make it **server‑dictated**: `SURV_HELLO` sets the
+      resolver's effective state; validate actions server‑side. — §14, §16, §20.3
 - [x] **`src/SurvivalNet.c` foundation** — extension negotiated
       (`Server.SupportsSurvival`), receive dispatch gated + `SURV_HELLO`/
       `SURV_WORLDINFO` parse/log, `SurvivalNet_Send` wrapper. *(landed)*
@@ -699,6 +702,24 @@ server simulates and validates; the client only sends intents and renders.**
 ---
 
 ## 14. Pseudo‑creative Indev mode (research + future task)
+
+> **STATUS (SP landed).** The singleplayer creative mode now exists:
+> `OPT_INDEV_CREATIVE` + `SurvivalTest_Creative` + the **`SurvivalTest_CreativeActive()`**
+> resolver (= `Creative && IndevTest_Enabled`), an in‑game Misc‑options toggle
+> (Indev‑only), and the behaviors below wired through that predicate (no damage,
+> instant no‑drop building with infinite blocks, no survival HUD, flight + reach 5).
+> **Two deliberate deviations from genuine**, both convenience‑over‑authenticity:
+> (a) genuine Indev's last build actually shipped creative *disabled* (private,
+> never‑constructed `PlayerControllerCreative`), so the whole mode is our revival;
+> (b) instead of the genuine 9‑slot **palette hotbar**, we use a **Beta‑1.8‑style
+> scrolling block‑picker** (reuses the stock `InventoryScreen`/`TableWidget` grid +
+> scrollbar; a cell click deposits a full stack and keeps the picker open). Mobs
+> still spawn (genuine). **MP note for this session:** creative must be
+> **server‑dictated** — the resolver is already shaped so `SURV_HELLO` sets the
+> effective state in MP and the local toggle is SP‑only; the server validates
+> every action regardless (§16, §20.3), so a client flipping its local flag gains
+> nothing. Implemented item‑side is blocks‑only (Option A); an items picker is
+> deferred (Option B).
 
 **This is genuine Indev behaviour, not an invention.** Indev shipped two
 controllers (`net/minecraft/client/controller/`):

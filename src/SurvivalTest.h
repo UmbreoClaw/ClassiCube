@@ -36,6 +36,23 @@ extern cc_bool SurvivalTest_Enabled;
 /*  c0.30-s mechanics are unaffected and apply in both modes. */
 extern cc_bool SurvivalTest_Enhanced;
 
+/* Whether the non-genuine Indev "creative" convenience mode is enabled (off by
+    default; Indev gamemode only). Creative = no damage, instant no-drop building
+    with infinite blocks, no survival HUD, flight - plus a scrolling block-picker
+    inventory. This is NOT authentic: genuine Indev's last build shipped creative
+    disabled (private, never-constructed PlayerControllerCreative). Kept strictly
+    off the faithful survival/c0.30-s path. In multiplayer the SERVER dictates it;
+    this local toggle is singleplayer-only (see SurvivalNet / doc/networking-plan
+    §14). Read it ONLY through SurvivalTest_CreativeActive(), never directly. */
+extern cc_bool SurvivalTest_Creative;
+/* Whether creative is actually in effect right now: the local toggle in SP, the
+    server-sent mode in MP (deferred). Gated to Indev - c0.30-s and plain creative
+    ClassiCube are never affected. Route ALL creative checks through this. */
+cc_bool SurvivalTest_CreativeActive(void);
+/* Deposits a full stack of the given block/item id into the inventory (the
+    creative block-picker's click action). No-op unless creative is active. */
+void SurvivalTest_CreativeGive(int id);
+
 /* Player's current health points (0 to SURVIVAL_MAX_HEALTH). 0 = dead. */
 extern int SurvivalTest_Health;
 /* Maximum health points (10 hearts * 2 HP). */

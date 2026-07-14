@@ -543,6 +543,7 @@ static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured*
 	float scale;
 
 	if (!SurvivalTest_Enabled) return 0;
+	if (SurvivalTest_CreativeActive()) return 0; /* creative: no health/armor HUD */
 
 	/* Match the hotbar's TRUE on-screen scale (Gui_GetHotbarScale bakes out */
 	/*  DPI, then HotbarWidget_Reposition multiplies it back in via */
@@ -723,6 +724,7 @@ static int HUDScreen_BuildBubblesMesh(struct HUDScreen* s, struct VertexTextured
 	float scale;
 
 	if (!SurvivalTest_Enabled)         return 0;
+	if (SurvivalTest_CreativeActive()) return 0; /* creative: no air/breath HUD */
 	if (!SurvivalTest_HeadUnderwater()) return 0;
 	if (!Gui.IconsTex)                 return 0;
 
@@ -2282,6 +2284,10 @@ static struct InventoryScreen {
 	struct TableWidget table;
 	struct TextWidget title;
 	cc_bool releasedInv, deferredSelect;
+	/* Indev creative block-picker mode: a cell click deposits a full stack into
+	    the survival inventory and keeps the picker open, instead of selecting the
+	    block and closing. Set from SurvivalTest_CreativeActive() in Show. */
+	cc_bool creative;
 	struct Widget* __widgets[2];
 } InventoryScreen CC_BIG_VAR;
 
@@ -2434,9 +2440,14 @@ static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* de
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (InputDevice_IsEnter(key, device) && table->selectedIndex != -1) {
-		Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
-		Gui_Remove((struct Screen*)s);
-		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
+		if (s->creative) {
+			/* Deposit a stack; keep the picker open (Beta-style). */
+			SurvivalTest_CreativeGive(table->blocks[table->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+			Gui_Remove((struct Screen*)s);
+			CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
+		}
 	} else if (Elem_HandlesKeyDown(table, key, device)) {
 	} else {
 		return Elem_HandlesKeyDown(&HUDScreen_Instance.hotbar, key, device);
@@ -2463,6 +2474,20 @@ static int InventoryScreen_PointerDown(void* screen, int id, int x, int y) {
 	if (table->scroll.draggingId == id) return TOUCH_TYPE_GUI;
 	if (HUDscreen_PointerDown(Gui_HUD, id, x, y)) return TOUCH_TYPE_GUI;
 	handled = Elem_HandlesPointerDown(table, id, x, y);
+
+	if (s->creative) {
+		/* A committed cell click sets pendingClose; in creative that becomes a
+		    stack deposit that keeps the picker open. Clicking off the grid
+		    (!handled) still closes it. */
+		if (table->pendingClose && table->selectedIndex != -1) {
+			SurvivalTest_CreativeGive(table->blocks[table->selectedIndex]);
+			table->pendingClose = false;
+		} else if (!handled) {
+			Gui_Remove((struct Screen*)s);
+			CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
+		}
+		return TOUCH_TYPE_GUI;
+	}
 
 	if (!handled || table->pendingClose) {
 		hotbar = Input_IsCtrlPressed() || Input_IsShiftPressed();
@@ -2510,6 +2535,7 @@ void InventoryScreen_Show(void) {
 	struct InventoryScreen* s = &InventoryScreen;
 	s->grabsInput = true;
 	s->closable   = true;
+	s->creative   = SurvivalTest_CreativeActive();
 
 	s->VTABLE = &InventoryScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_INVENTORY);
@@ -3690,8 +3716,10 @@ static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
 
 void SurvivalInvScreen_Show(void) {
 	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
-	/* Non-survival modes use the normal creative block-grid inventory. */
-	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
+	/* Non-survival modes - and Indev creative - use the scrolling block-grid */
+	/*  picker (InventoryScreen_Show reads SurvivalTest_CreativeActive() to switch */
+	/*  its click into a stack-deposit). */
+	if (!SurvivalTest_Enabled || SurvivalTest_CreativeActive()) { InventoryScreen_Show(); return; }
 	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
 	/*  fixed hotbar - so opening the inventory does nothing at all. The storage/ */
 	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */

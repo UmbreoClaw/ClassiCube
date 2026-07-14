@@ -5047,6 +5047,54 @@ server-authoritative sim, and handlers for the remaining server→client message
 (mobs 0x10–0x13, inventory 0x20–0x25, drops 0x30–0x32, blockmeta 0x40, equip
 0x50) + client→server intent senders. All ids are already reserved in the enum.
 
+## SESSION LOG — Indev creative mode (Option A: blocks-only picker)
+
+### Non-genuine convenience creative for the Indev gamemode
+A user-requested Beta-1.8-style creative: a scrolling block-picker GUI you click
+to deposit stacks, plus creative behaviors (no damage, instant no-drop building
+with infinite blocks, no survival HUD, flight). **Explicitly non-genuine** —
+genuine Indev's last build shipped creative *disabled* (private, never-constructed
+`PlayerControllerCreative`; only `instanceof` checks + commented-out keybinds
+remain — see `/tmp/indev_eagler`). Kept strictly off the faithful survival path.
+
+**Toggle & resolver (the structural decision):**
+- `OPT_INDEV_CREATIVE` + `SurvivalTest_Creative` global, read in `SurvivalTest_Init`.
+- `SurvivalTest_CreativeActive()` = `SurvivalTest_Creative && IndevTest_Enabled`.
+  **All** creative checks route through this, never the raw flag. In MP the
+  server will set the effective state from `SURV_HELLO` and downstream code needs
+  no change (SP toggle vs server-dictated — doc/networking-plan §14).
+- In-game **Misc options → "Indev creative"** bool toggle (mirrors "Enhanced
+  survival"; `MenuOptions.c`), `Menu_Remove`'d unless the gamemode is Indev.
+  Applies on next map load (hacks/reach set in `OnNewMapLoaded`).
+
+**Behaviors (all gated on `SurvivalTest_CreativeActive()`):**
+- No damage: early-out in `SurvivalTest_Damage` (the `survivalWorld=false`
+  equivalent — player takes none; combat is inert).
+- Instant break: `SurvivalTest_CanInstaBreak` returns true for every block.
+- No drops on break + no consume on place (infinite blocks): both guarded in
+  `SurvivalTest_BlockChanged`.
+- No survival HUD: hearts+armor builder (`HUDScreen_BuildHeartsMesh`) and the
+  air-bubbles builder early-out. Score/arrows already Indev-hidden.
+- Flight/speed + 5-block creative reach in `SurvivalTest_OnNewMapLoaded`
+  (overrides the survival fly-off/reach-4 defaults).
+
+**The picker (reuses the stock scrolling block table — zero new scroll code):**
+- The survival-inventory bind (default **I**) routes through `SurvivalInvScreen_Show`,
+  which now opens the stock `InventoryScreen` block grid when creative is active.
+- `InventoryScreen` gained a `creative` flag (set from `CreativeActive()` in Show).
+  In creative, a committed cell click calls `SurvivalTest_CreativeGive(block)`
+  (deposits one full `ST_MaxStack` stack via `AddItem`) and **keeps the picker
+  open** (Beta-style) instead of selecting-and-closing; clicking off the grid
+  still closes. Same branch added to the Enter-key path.
+
+**Rig-verified (Xvfb):** creative ON → no hearts/armor/air HUD, empty hotbar,
+picker opens on I with its scrollbar, clicking deposits a 99 stack into the next
+free slot and stays open, hover shows block names. Creative OFF → 10 hearts
+return (faithful survival untouched). Full `make PLAT=linux` builds+links clean.
+
+**Deferred:** Option B (items in the picker, not just blocks); MP server-dictated
+creative (the resolver is already shaped for it).
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.

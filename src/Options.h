@@ -87,6 +87,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_GAME_VERSION "game-version"
 #define OPT_SURVIVAL_MODE "survival-mode"
 #define OPT_SURVIVAL_ENHANCED "survival-enhanced"
+#define OPT_INDEV_CREATIVE "indev-creative"
 #define OPT_INDEV_MODE "indev-mode"
 /* THE authoritative gamemode key (0 off, 1 c0.30 survival, 2 indev). The two
 /*  legacy booleans above are only written for downgrade compat and only read

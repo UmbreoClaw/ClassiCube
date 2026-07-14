@@ -50,7 +50,15 @@ int SurvivalTest_Gamemode(void) {
 
 cc_bool SurvivalTest_Enabled;
 cc_bool SurvivalTest_Enhanced;
+cc_bool SurvivalTest_Creative;
 int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
+
+cc_bool SurvivalTest_CreativeActive(void) {
+	/* SP: the local toggle. MP: server-dictated (deferred - SurvivalNet will set
+	    this from SURV_HELLO, so downstream checks need no change). Indev-only, so
+	    faithful c0.30-s and plain creative ClassiCube stay completely untouched. */
+	return SurvivalTest_Creative && IndevTest_Enabled;
+}
 
 /* Mob.invulnerableDuration: 20 ticks (1s). hurt() uses a dual threshold - */
 /*  while the window is fresher than its half-point only the excess over the */
@@ -1233,6 +1241,7 @@ static cc_bool SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 	if (!SurvivalTest_Enabled || !p) return false;
 	if (st_isDead)             return false;
 	if (st_godMode)            return false; /* debug invincibility - blocks every damage source */
+	if (SurvivalTest_CreativeActive()) return false; /* creative: survivalWorld=false, no damage */
 	if (damage <= 0)           return false;
 
 	if (IndevTest_Enabled) {
@@ -6540,6 +6549,17 @@ void SurvivalTest_DebugGiveItem(int id) {
 	SurvivalTest_AddItem((cc_uint16)id);
 }
 
+void SurvivalTest_CreativeGive(int id) {
+	int n, max;
+	if (!SurvivalTest_CreativeActive() || id == BLOCK_AIR) return;
+	/* Deposit one full stack of the picked id (Item.getItemStackLimit) into the
+	    inventory - AddItem tops up a matching stack or fills the first free slot. */
+	max = ST_MaxStack((cc_uint16)id);
+	for (n = 0; n < max; n++) {
+		if (!SurvivalTest_AddItem((cc_uint16)id)) break; /* inventory full */
+	}
+}
+
 /* Public wrappers for the Indev layer's held-item actions (hoe wear, */
 /*  seed consumption). */
 void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amount); }
@@ -6693,12 +6713,15 @@ static void SurvivalTest_BlockChanged(void* obj,
 	}
 
 	if (block == BLOCK_AIR) {
-		/* Block was mined - spawn its physical drop(s) on the ground */
-		SurvivalTest_SpawnDropsForBlock(coords, oldBlock);
-	} else {
+		/* Block was mined - spawn its physical drop(s) on the ground. Creative */
+		/*  never drops (base PlayerController.sendBlockRemoved has no dropItem). */
+		if (!SurvivalTest_CreativeActive())
+			SurvivalTest_SpawnDropsForBlock(coords, oldBlock);
+	} else if (!SurvivalTest_CreativeActive()) {
 		/* Block was placed - consume one from the selected hotbar slot. */
 		/* Guarded so a placement that didn't come from the held slot (or a */
-		/*  slot holding an item id) can never eat the wrong stack. */
+		/*  slot holding an item id) can never eat the wrong stack. Creative */
+		/*  places from an infinite supply, so it never consumes. */
 		if (block == ST_ID_BLOCK(st_inv[Inventory.SelectedIndex].id))
 			SurvivalTest_ConsumeSelected();
 	}
@@ -6789,7 +6812,8 @@ static int SurvivalTest_Hardness(BlockID block) {
 /*  everything else only breaks through the continuous per-tick path below. */
 /*  Always true outside survival mode, leaving creative's instant-delete untouched. */
 cc_bool SurvivalTest_CanInstaBreak(BlockID block) {
-	if (!SurvivalTest_Enabled) return true;
+	if (!SurvivalTest_Enabled)         return true;
+	if (SurvivalTest_CreativeActive()) return true; /* creative: instant-delete every block */
 	return SurvivalTest_Hardness(block) == 0;
 }
 
@@ -7468,6 +7492,7 @@ static void SurvivalTest_Init(void) {
 	/* Loaded unconditionally so the inventory screen can read it even before */
 	/*  any survival logic runs (it gates a UI choice, not a gameplay rule). */
 	SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
+	SurvivalTest_Creative = Options_GetBool(OPT_INDEV_CREATIVE,    false);
 
 	/* The survival core also runs under Indev mode - IndevTest_Component's
 	    Init ran first (see Game.c ordering), so its flag is already set. */
@@ -7536,6 +7561,15 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 
 	/* SurvivalGameMode.getReachDistance() returns 4 blocks, vs 5 for Creative */
 	p->ReachDistance = 4.0f;
+
+	/* Indev creative (non-genuine convenience): re-enable flight/speed and the
+	    5-block creative reach, overriding the survival defaults above. */
+	if (SurvivalTest_CreativeActive()) {
+		p->Hacks.CanFly   = true;
+		p->Hacks.CanSpeed = true;
+		HacksComp_Update(&p->Hacks);
+		p->ReachDistance  = 5.0f;
+	}
 
 	SurvivalTest_SpawnInitialMobs();
 }

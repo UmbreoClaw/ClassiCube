@@ -1164,6 +1164,12 @@ static void    MiO_SetSurvivalEnhanced(cc_bool v) {
 	Options_SetBool(OPT_SURVIVAL_ENHANCED, v);
 }
 
+static cc_bool MiO_GetIndevCreative(void) { return SurvivalTest_Creative; }
+static void    MiO_SetIndevCreative(cc_bool v) {
+	SurvivalTest_Creative = v;
+	Options_SetBool(OPT_INDEV_CREATIVE, v);
+}
+
 static cc_bool MiO_GetInvert(void) { return Camera.Invert; }
 static void    MiO_SetInvert(cc_bool v) { 
 	Camera.Invert = v;
@@ -1211,6 +1217,9 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 		MenuOptionsScreen_AddBool(s, "Enhanced survival",
 			MiO_GetSurvivalEnhanced, MiO_SetSurvivalEnhanced,
 			"&eAdds non-classic survival extras, like the 3D\n&einventory paperdoll. Off keeps survival faithful\n&eto Minecraft Classic 0.30.");
+		MenuOptionsScreen_AddBool(s, "Indev creative",
+			MiO_GetIndevCreative, MiO_SetIndevCreative,
+			"&eNon-genuine convenience mode for the Indev gamemode:\n&efly, instant no-drop building with infinite blocks from\n&ea scrolling picker, no damage. Takes effect on the next\n&emap load. Indev gamemode only.");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 
@@ -1219,6 +1228,8 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 	if (!Server.IsSinglePlayer) Menu_Remove(s, 4);
 	/* "Enhanced survival" only applies while survival mode is active */
 	if (!SurvivalTest_Enabled)  Menu_Remove(s, 9);
+	/* "Indev creative" only applies in the Indev gamemode */
+	if (SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_INDEV) Menu_Remove(s, 10);
 }
 
 void MiscOptionsScreen_Show(void) {
