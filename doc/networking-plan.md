@@ -1392,15 +1392,19 @@ The server defines each Indev block's draw type, textures, collide, sound **and
 shape** to the client:
 
 - **Full cubes** (`IndevBlock_Define` sets MinBB 0,0,0 / MaxBB 1,1,1, `DRAW_OPAQUE`)
-  — **farmland**, chest, furnace, diamond ore, bookshelf, etc. Render **perfectly**
-  on any `BlockDefinitions` client (they're just textured cubes). Note our farmland
-  is a full cube (as in genuine Indev — the 15/16 reduction is a later‑MC thing),
-  so it has no special size to miss.
-- **Custom boxes** — e.g. the **torch** (`MinBB` 7/16..9/16, `MaxBB` y 0..10/16, a
-  thin tall box) and any slab‑like heights. Expressible with **`DefineBlockExt`**
-  (full min/max bounds) or the basic `DefineBlock` **Shape** byte (height →
-  `MaxBB.y`). A `BlockDefinitionsExt` client renders the exact box; a
-  basic‑`BlockDefinitions`‑only client gets the height but not odd x/z insets.
+  — chest, furnace, diamond ore, bookshelf, etc. Render **perfectly** on any
+  `BlockDefinitions` client (they're just textured cubes).
+- **Custom boxes** — **farmland** is **15/16 tall** (genuine
+  `BlockFarmland.setBlockBounds(0,0,0, 1, 15/16, 1)`; our block now sets
+  `MaxBB.y = 15/16`), and the **torch** is a thin tall box (`MinBB` 7/16..9/16,
+  `MaxBB` y 0..10/16); slabs are half‑height. These need **`DefineBlockExt`** (full
+  min/max bounds) or the basic `DefineBlock` **Shape** byte (height → `MaxBB.y`,
+  which covers farmland). A `BlockDefinitionsExt` client renders the exact box; a
+  basic‑`BlockDefinitions` client gets the height (fine for farmland) but not odd
+  x/z insets (torch). Send farmland's reduced height so stock clients see the
+  1‑px‑shorter tilled soil. (Genuine keeps farmland's *collision* full‑height;
+  CC ties render bounds to the collision box, so ours is 15/16 both — a harmless
+  1/16 difference. The server should send the render height regardless.)
 - **Sprite/cross blocks** — saplings, flowers, mushrooms: `DefineBlock` draw =
   sprite → stock clients render the X‑cross. Faithful (genuine Indev draws these as
   crosses too).
@@ -1431,10 +1435,32 @@ client's `Blocks.*` table exactly. Send `DefineBlockExt` for the custom‑box bl
 sprite/standing fallback shape for stock clients. Fork clients ignore these and use
 their baked‑in bespoke renderer for full fidelity.
 
-### 22.4 Checklist
+### 22.4 Paintings are entities, not blocks — bespoke, fork‑only
+
+Paintings are **not blocks** — they're `EntityPainting` (genuine `setSize(0.5,0.5)`
+with a per‑art bounding box derived from `art.sizeX/sizeY`, mounted flat on a wall
+by facing). We render them with our own painting entity + the `kz.png` art atlas
+(`SurvivalTest_RenderPaintings`, task #32). Stock ClassiCube has **no painting
+entity type**, and there's no block to fall back to, so:
+
+- **Fork clients:** stream paintings like mobs — a bespoke `SURV_PAINTING_SPAWN`
+  (pos, facing, art id → picks size + atlas cell) / `SURV_PAINTING_REMOVE`, drawn
+  by the existing entity renderer. The per‑art bounding box travels as the art id.
+- **Stock / CPE clients:** they simply **don't see paintings** — harmless, since
+  paintings are purely decorative and affect no gameplay or collision the server
+  cares about. Don't try to fake them with a block; degrade to invisible.
+- **Optional later:** a flat `CustomModels` model per art size could let stock CPE
+  clients see a painting quad, but that's polish, not required.
+
+Persistence: paintings already round‑trip in `.mclevel` (they're in the `Entities`
+list, §18.1), so the server loads/saves them with the world and re‑streams to fork
+clients on join.
+
+### 22.5 Checklist
 
 - [ ] Server defines every Indev block via `DefineBlock`/`DefineBlockExt` with the
       full shape/draw/texture/collide/sound set (not just textures).
+- [ ] Send farmland's 15/16 render height; slabs' half height; torch's box.
 - [ ] Custom‑box blocks (torch) use `DefineBlockExt`; crops/wall‑torch get a
       sprite/standing fallback shape for stock clients.
 - [ ] Verify on a stock client: crops visibly advance through stages, farmland/
