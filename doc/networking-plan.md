@@ -13,6 +13,12 @@
 >
 > **This first networking milestone focuses on Indev.** c0.30‑s comes later; the
 > design must leave room for it but you only need to wire Indev end‑to‑end first.
+>
+> **The client handshake foundation has since landed** (extension negotiation +
+> receive/log + send path). Its focused implementation record — file map, message
+> flow, wire layouts, and a "is this the best way?" design review — is in
+> **`doc/survival-handshake.md`**. Read that alongside §3/§4/§20/§25 here; build
+> the server handshake against `src/SurvivalNet.h`, the wire contract.
 
 ---
 
