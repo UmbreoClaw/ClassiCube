@@ -48,6 +48,10 @@ step‑by‑step cookbook for the fiddly bits. Update this file as decisions har
       into Indev mode on a server‑provided world (cookbook §17.2–17.3).
 - [ ] **Block/item definition sync** (§15.3): server sends `BlockDefinitions`;
       client + server share one table.
+- [ ] **`.mclevel` persistence** (§18): extend MCGalaxy's `.mclevel` I/O to
+      round‑trip our full survival schema (inventory/armor/mobs/tile‑entities/
+      surroundings/time/metadata) byte‑compatibly with `src/Formats.c`; run the
+      round‑trip parity test (§18.4).
 - [ ] Server runs the mob **spawner**, **day/night**, **random ticks**; relays block
       changes. Client **gates its own sim off** in MP (§15.2, cookbook §17.4).
 - [ ] **Mob puppet** wiring (§15.1): `SURV_MOB_*` → `st_mobs[]`, render‑only.
@@ -394,6 +398,8 @@ Each phase is independently shippable and stays gated behind `SurvivalTest`.
   send it. `doc/indev-generation.md` + `src/IndevGen.c` are your spec.
 - Deliverable: `/os map add indev` (or MCGalaxy's gen command) produces an Indev
   world server‑side, streamable to the client.
+- Pairs with **§18** — persist generated/edited Indev worlds as `.mclevel`
+  (byte‑compatible with the client) so survival state survives restarts.
 
 ### 8.2 Server‑side checks & handling
 
@@ -969,6 +975,95 @@ client‑side in MP). Keep rendering, sound, GUI, and interpolation running.
    CPE clients degrade gracefully.
 3. Bump `survival_Ext` version whenever the shared table changes, and branch on the
    negotiated version so old/new clients don't silently mismatch.
+
+## 18. `.mclevel` persistence & client compatibility
+
+`.mclevel` (NBT) is Indev's native on‑disk format and **our client already
+reads and writes it with the full survival state** (`src/Formats.c`,
+`MCLevel_Save` / the `MCLevel_*` parse callbacks). For multiplayer, the server
+must persist Indev worlds so survival state survives a restart, and those files
+must round‑trip **byte‑compatibly** with the client's schema so a world saved in
+singleplayer loads on the server and vice‑versa. This is also the *authoritative
+state snapshot* the server loads its live sim from and re‑streams as `SURV_*`.
+
+### 18.1 The exact schema our client uses (match it tag‑for‑tag)
+
+`MinecraftLevel` (compound) contains:
+- **`About`**: `Author`(str), `Name`(str), `CreatedOn`(i64).
+- **`Environment`**: `SkyColor`/`FogColor`/`CloudColor`(i32 RGB), `SkyBrightness`(u8),
+  `CloudHeight`(u16), `TimeOfDay`(i16, the day/night `worldTime`),
+  `SurroundingGroundHeight`/`SurroundingWaterHeight` (**signed** i16 — floating maps
+  store negative, e.g. −128), `SurroundingGroundType`/`SurroundingWaterType`
+  (u8 block ids, genuine quirk: `GroundType` is always written as grass=2).
+- **`Map`**: `Width`/`Height`/`Length`(u16), `Spawn`(i16[3]), `Blocks`(u8 array,
+  volume), `Data`(u8 array — **metadata high nibble | light low nibble**; the
+  high nibble carries chest/furnace facing, farmland moisture, crop stage, torch
+  orientation, fire age via `IndevTest_BlockDataMetaAt`).
+- **`Entities`** (list of compounds): the **`LocalPlayer`**
+  (`id`, `Pos`/`Motion`/`Rotation` float lists, `FallDistance`, `Fire`, `Air`,
+  `Health`, `HurtTime`, `DeathTime`, `AttackTime`, `Score`, and **`Inventory`** —
+  a list of `{Slot(u8), id(i16), Count(u8), Damage(i16)}`, with **worn armor at
+  Slot 100+index**); plus one compound per live **mob** (`id`=name string
+  "Zombie"/"Skeleton"/"Pig"/"Creeper"/"Spider"/"Sheep", `Pos`, `Rotation`,
+  `Health`), per **item drop** (`Item` sub‑compound with `id`/`Count`/`Damage`),
+  and per **painting**.
+- **`TileEntities`** (list): chests/furnaces at a position with an `Items` list
+  (same item‑compound shape) and, for furnaces, burn/cook fields.
+
+The `MCLevel_Save` writer (`src/Formats.c:1805`) and the parse callbacks
+(`MCLevel_ParseMap`/`_ParseEnvironment`/`_CommitEntity`/`_CommitTileEntity`/
+`_ParseItemField`) are the authoritative reference — **the MCGalaxy port must
+emit identical tag names, types, nesting, and order.**
+
+### 18.2 Block‑id spaces — the corruption trap
+
+There are **three** id spaces; mixing them corrupts worlds:
+1. **Genuine Indev on‑disk** ids (what `.mclevel` stores).
+2. **Client engine** ids (what our `World.Blocks` holds at runtime).
+3. **MCGalaxy internal** ids (the server's block table).
+
+Our client converts on I/O: `IndevTest_BlockToIndev` (engine→genuine, on save)
+and `IndevTest_CanonicalBlock`/the load remap (genuine→engine, on load) — see
+`src/IndevTest.c` (e.g. crate 64 → chest 54, facing furnace variants → canonical).
+The server needs the **same** genuine↔internal mapping for `.mclevel` I/O, and a
+separate internal↔client mapping for the wire (that's what `BlockDefinitions`
++ the shared table in §15.3/§17.7 handle). Keep all three tables derived from one
+source of truth; a single off‑by‑one here silently rewrites blocks.
+
+### 18.3 Steps for MCGalaxy
+
+1. **Check what exists.** Look in `MCGalaxy/Levels/IO/` for an existing
+   `.mclevel` importer/exporter. Genuine‑Indev import may already exist but it
+   will **not** understand our survival extensions (`Inventory`, Slot 100+ armor,
+   mob `Entities`, `TileEntities`, `Surrounding*`, `TimeOfDay`, the `Data`
+   metadata nibble). Extend it (or add `IndevLevelImporter`/`Exporter`).
+2. **Read the full schema** into the server's per‑level survival state: world +
+   `Data` metadata → block‑meta store; `LocalPlayer.Inventory`/armor/health/score →
+   player state; mob `Entities` → the server mob list; `TileEntities` → container
+   contents; `Environment` surroundings/time → the level's Indev params.
+3. **Write it back identically** on save, using genuine Indev ids
+   (internal→genuine remap) and the same tag layout as §18.1. Round‑trip must be
+   lossless.
+4. **Persist alongside the MCGalaxy `Level`.** MCGalaxy's native `.lvl` won't hold
+   survival state; either keep the Indev world *as* `.mclevel` (preferred — it's
+   the shared format) or add a sidecar. Custom blocks still need MCGalaxy's
+   BlockDefinitions entries for the network layer (§17.7).
+5. **Feed the network layer from this state:** on join, `SURV_WORLDINFO` is the
+   `Environment` subset; the block stream is `Map.Blocks` (remapped to client ids);
+   mobs/inventory/tile‑entities are streamed as `SURV_*` from the loaded state.
+   `.mclevel` = persistence; `SURV_*` = the live wire view of the same manifest.
+
+### 18.4 Round‑trip parity test (do this before trusting it)
+
+Save a world in the SP client → load on the server → save on the server → load
+back in the SP client, and assert **identical**: block array + `Data` metadata,
+player inventory/armor/health/score, mob list (type/pos/health), tile‑entity
+contents, surroundings, and `TimeOfDay`. Diff the two `.mclevel` files directly
+(they should be byte‑equal modulo `About.CreatedOn`). Reuse the parity mindset
+from `doc/indev-generation.md`. Watch the known gotchas: the **signed**
+`Surrounding*Height` (floating = negative), the always‑grass `SurroundingGroundType`
+quirk, armor **Slot 100+** numbering, the `Data` nibble packing (meta high / light
+low), and the genuine↔engine block remaps (crate/furnace/torch/chest).
 
 ## References
 
