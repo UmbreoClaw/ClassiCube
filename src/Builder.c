@@ -99,7 +99,8 @@ static void AddSpriteVertices(BlockID block) {
 	/*  (4 tilted sides + tip cap) padded to 8 with degenerate quads so */
 	/*  the banked sprite layout stays quad-aligned - Builder_DrawWallTorch. */
 	part->sCount += IndevFire_IsFire(block) ? 12 * 4 :
-		(IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block)) ? 8 * 4 : 4 * 4;
+		(IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block) ||
+		 IndevTest_IsGears(block)) ? 8 * 4 : 4 * 4;
 }
 
 static void AddVertices(BlockID block, Face face) {
@@ -751,9 +752,69 @@ static void Builder_DrawFire(int x, int y, int z) {
 	#undef FIRE_DEGEN
 }
 
+/* BlockGears renderType 5: a gear‑textured quad flush on each ADJACENT SOLID
+    wall (isBlockNormalCube), inset 0.05 off the wall and oversized 2/16 on every
+    edge; nothing if no wall is adjacent. We emit each present wall as an opposed
+    pair (double‑sided so the winding doesn't matter), padded to 4 banks / 8 quads
+    with degenerates — the banked layout the wall‑torch path uses. */
+static void Builder_DrawGears(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float u1, u2, va, vb, X, Y, Z, yb, yt;
+	int stride;
+	const float o = 2.0f/16.0f, d = 0.05f;
+
+	X = (float)x; Y = (float)y; Z = (float)z;
+	yb = Y - o; yt = Y + 1.0f + o;
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	va  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	vb  = va + Atlas1D.InvTileSize * UV2_Scale;
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+	v = &Builder_Vertices[part->sOffset];
+
+	#define GEAR_V(px, py, pz, gu, gv) \
+		v->x = (px); v->y = (py); v->z = (pz); v->Col = color; v->U = (gu); v->V = (gv); v++;
+	#define GEAR_DEGEN() GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va)
+	/* one bank = a vertical quad between corners A(ax,az) and B(bx,bz) + its
+	    mirror; or two degenerate quads when that wall isn't solid. */
+	#define GEAR_BANK(present, ax, az, bx, bz) \
+		if (present) { \
+			GEAR_V((ax), yb, (az), u2, vb) GEAR_V((ax), yt, (az), u2, va) \
+			GEAR_V((bx), yt, (bz), u1, va) GEAR_V((bx), yb, (bz), u1, vb) \
+			GEAR_V((bx), yb, (bz), u1, vb) GEAR_V((bx), yt, (bz), u1, va) \
+			GEAR_V((ax), yt, (az), u2, va) GEAR_V((ax), yb, (az), u2, vb) \
+		} else { GEAR_DEGEN() GEAR_DEGEN() } \
+		v -= 8; v += stride;
+
+	/* -X wall: quad on the x+d plane, spanning z from z-o to z+1+o */
+	GEAR_BANK(x > 0            && Blocks.FullOpaque[World_GetBlock(x - 1, y, z)], X + d,     Z - o, X + d,     Z + 1 + o)
+	/* +X wall: plane x+1-d */
+	GEAR_BANK(x < World.MaxX   && Blocks.FullOpaque[World_GetBlock(x + 1, y, z)], X + 1 - d, Z - o, X + 1 - d, Z + 1 + o)
+	/* -Z wall: plane z+d, spanning x from x-o to x+1+o */
+	GEAR_BANK(z > 0            && Blocks.FullOpaque[World_GetBlock(x, y, z - 1)], X - o,     Z + d, X + 1 + o, Z + d)
+	/* +Z wall: plane z+1-d */
+	GEAR_BANK(z < World.MaxZ   && Blocks.FullOpaque[World_GetBlock(x, y, z + 1)], X - o,     Z + 1 - d, X + 1 + o, Z + 1 - d)
+
+	part->sOffset += 8;
+	#undef GEAR_V
+	#undef GEAR_DEGEN
+	#undef GEAR_BANK
+}
+
 static void Builder_DrawSprite(int x, int y, int z) {
 	if (IndevTest_IsCropBlock(Builder_Block)) { Builder_DrawCrops(x, y, z); return; }
 	if (IndevTest_IsWallTorch(Builder_Block)) { Builder_DrawWallTorch(x, y, z); return; }
+	if (IndevTest_IsGears(Builder_Block))     { Builder_DrawGears(x, y, z); return; }
 	if (IndevFire_IsFire(Builder_Block))      { Builder_DrawFire(x, y, z); return; }
 	{
 	struct Builder1DPart* part;

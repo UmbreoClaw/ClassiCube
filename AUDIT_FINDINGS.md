@@ -339,7 +339,9 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     Indev-only and Mojang hosts no Indev jar (verified: 901-version manifest, zero
     "in-" ids), so it's EMBEDDED in Resources.c (kz_sea_png-style) at atlas tile
     123. Sources reuse the live water/lava tiles. Gears render is a sprite stand-in
-    for the genuine wall-mounted-quad renderType 5 (bespoke builder = future).
+    for the genuine wall-mounted-quad renderType 5. FOLLOW-UP DONE: Builder_DrawGears
+    now ports renderType 5 (gear quad flush on each adjacent solid wall, full-cube
+    pick bounds, no collision); rig-verified against a wall.
     CROPS/FARMLAND: stay at 85-92 / 83-84 (engine has no runtime block metadata,
     so 8 crop stages can't share one id; no free 8-run at 59). Save format is
     already genuine 59/60+metadata, so this is invisible outside the runtime ids.

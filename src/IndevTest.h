@@ -41,6 +41,9 @@ cc_bool IndevTest_IsWorkbench(BlockID b);
 /*  builder renders them tilted via the genuine renderBlockTorch geometry. */
 cc_bool IndevTest_IsWallTorch(BlockID b);
 int IndevTest_WallTorchMeta(BlockID b);
+/* Gears/cog (genuine renderType 5): the chunk builder renders it as gear quads */
+/*  flush on each adjacent solid wall. False outside Indev mode. */
+cc_bool IndevTest_IsGears(BlockID b);
 /* Atlas UVs of an item id's sprite (items.png, 16x16 grid). False when the */
 /*  id isn't a known Indev item - callers skip drawing then. */
 cc_bool IndevTest_ItemSpriteUV(int id, float* u1, float* v1, float* u2, float* v2);

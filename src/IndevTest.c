@@ -646,6 +646,7 @@ static cc_bool Indev_IsWallTorch(BlockID b) {
 cc_bool IndevTest_IsWallTorch(BlockID b) { return IndevTest_Enabled && Indev_IsWallTorch(b); }
 /* Torch metadata of a wall-torch id (1-4), for the tilt tables. */
 int IndevTest_WallTorchMeta(BlockID b) { return b - INDEV_BLOCK_TORCH_W1 + 1; }
+cc_bool IndevTest_IsGears(BlockID b) { return IndevTest_Enabled && b == INDEV_BLOCK_GEARS; }
 
 static cc_bool Indev_IsFarmland(BlockID b) {
 	return b == INDEV_BLOCK_FARMLAND || b == INDEV_BLOCK_FARMLAND_WET;
@@ -876,10 +877,9 @@ static void IndevBlocks_Define(void) {
 	/* Gears/cog (55): non-solid, walk-through decorative (Material.circuits),
 	    hardness 0.5F (=10), drops itself, tile 123 (embedded genuine tex 62).
 	    Genuine bounds: NO collision (getCollisionBoundingBoxFromPool -> null) and
-	    DEFAULT full-cube pick bounds (BlockGears sets no bounds). Genuine renders
-	    (renderType 5) as gear quads flush on each ADJACENT SOLID WALL - a bespoke
-	    render; we approximate with a standing sprite for now (a custom wall-mount
-	    builder like the wall torches would be the exact port). */
+	    DEFAULT full-cube pick bounds (BlockGears sets no bounds). DRAW_SPRITE routes
+	    it through Builder_DrawGears, which ports the genuine renderType 5 geometry:
+	    a gear quad flush on each ADJACENT SOLID WALL (nothing if no wall adjacent). */
 	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 123, 123, 123, 123, SOUND_STONE, 10);
 	Blocks.Collide[INDEV_BLOCK_GEARS]         = COLLIDE_NONE;
 	Blocks.ExtendedCollide[INDEV_BLOCK_GEARS] = COLLIDE_NONE;
