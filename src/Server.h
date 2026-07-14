@@ -68,6 +68,8 @@ CC_VAR extern struct _ServerConnectionData {
 
 	/* Whether the server supports NotifyAction CPE */
 	cc_bool SupportsNotifyAction;
+	/* Whether the server supports the SurvivalTest CPE (Indev/c0.30-s multiplayer) */
+	cc_bool SupportsSurvival;
 } Server;
 
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */

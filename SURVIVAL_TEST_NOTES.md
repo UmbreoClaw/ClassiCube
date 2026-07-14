@@ -5003,6 +5003,50 @@ GUI leftovers 843508a).
 
 ---
 
+## SESSION LOG — networking client handshake foundation
+
+### Survival multiplayer client scaffold (client-first reference for MCGalaxy)
+The planning phase (`doc/networking-plan.md`, §0–§31) is done; this lays the
+FIRST client-side stone so the server session can build its handshake to match
+ours. Scope is deliberately **minimal foundation** — negotiate the extension,
+receive/log the handshake, expose the send path — with **no simulation
+mode-flip** (server-authoritative ownership handover is deferred to the
+integrated server session where sim/entity/inventory handoff is designed as one
+piece).
+
+New files:
+- `src/SurvivalNet.h` — the wire contract. `#define SURVNET_CHANNEL 0xB0`,
+  `enum SurvNetMsg` (server→client 0x01–0x50, client→server 0x80–0x87),
+  `SurvivalNet_Component`, `SurvivalNet_Send`. Matches `doc/networking-plan.md`
+  §25 byte layouts.
+- `src/SurvivalNet.c` — receive dispatch + send wrapper. Gated on
+  `!Server.IsSinglePlayer && Server.SupportsSurvival` (`SurvivalNet_Active`);
+  switches on `data[0]`; SURV_HELLO / SURV_WORLDINFO parse+chat-log stubs.
+  `SurvivalNet_Send` = thin wrapper over `CPE_SendPluginMessage(0xB0, ...)`,
+  no-op unless active. Registers on `NetEvents.PluginMessageReceived` in Init.
+
+CPE negotiation (the gate that keeps Classic untouched):
+- `src/Protocol.c`: added `survival_Ext = { "SurvivalTest", 1 }`, appended
+  `&survival_Ext` to `cpe_clientExtensions[]`, and set
+  `Server.SupportsSurvival = true` in the ExtEntry handler (alongside
+  `notifyAction_Ext`). We advertise the ext; it only goes live if the server
+  echoes it back.
+- `src/Server.h`: added `cc_bool SupportsSurvival;` to the Server struct.
+- `src/Game.c`: `Game_AddComponent(&SurvivalNet_Component);` + include.
+
+**Why this is safe for Classic:** a stock Classic/CPE server never sends
+ExtEntry for "SurvivalTest", so `SupportsSurvival` stays false, so both the
+receive handler and `SurvivalNet_Send` early-out — zero behavior change. In
+singleplayer `IsSinglePlayer` is true, which also fails the gate. Verified: the
+whole game builds+links clean; `nm` confirms `SurvivalNet_Component`,
+`SurvivalNet_Send`, `SurvivalNet_OnPluginMessage`, and `survival_Ext` are in the
+binary.
+
+**Deferred (next / server session):** SURV_HELLO mode-flip into a
+server-authoritative sim, and handlers for the remaining server→client messages
+(mobs 0x10–0x13, inventory 0x20–0x25, drops 0x30–0x32, blockmeta 0x40, equip
+0x50) + client→server intent senders. All ids are already reserved in the enum.
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.

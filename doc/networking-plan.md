@@ -63,9 +63,11 @@ pointer. `.mclevel` handling is fully covered — format §18, save lifecycle §
 **P1 — Indev *creative* multiplayer (first playable; simplest — §14):**
 - [ ] **Indev Creative** SP mode (verify vs `PlayerControllerCreative`: no HUD,
       instant break, palette hotbar, mobs still spawn). — §14
-- [ ] **`src/SurvivalNet.c`** receive path + `SURV_HELLO`/`SURV_WORLDINFO` mode
-      handshake (flip Indev mode from the packet in MP, keep the options path in SP).
-      — §17.2–17.3, §25
+- [x] **`src/SurvivalNet.c` foundation** — extension negotiated
+      (`Server.SupportsSurvival`), receive dispatch gated + `SURV_HELLO`/
+      `SURV_WORLDINFO` parse/log, `SurvivalNet_Send` wrapper. *(landed)*
+- [ ] **`src/SurvivalNet.c`** mode‑flip — flip Indev mode from `SURV_HELLO` in MP
+      (keep the options path in SP). — §17.2–17.3, §25
 - [ ] **Gate the client's Indev sim OFF in MP** — `IndevTest_TickRandomBlocks`,
       `Furnace_Tick`, `Indev_TickDayNight`, spawner, `IndevGen`, and force
       `Physics.Enabled` off on survival maps. — §15.2, §17.4, §23.2
@@ -273,6 +275,19 @@ the server in MP instead of by local options. **Keep SP reading options as now.*
 The survival net layer hangs off the **MP** path only.
 
 ### 4.2 Recommended new client module: `src/SurvivalNet.c` (+ `.h`)
+
+> **STATUS (foundation landed).** The client scaffold now exists in the repo:
+> `src/SurvivalNet.h` (wire contract — `SURVNET_CHANNEL 0xB0`, `enum SurvNetMsg`,
+> `SurvivalNet_Component`, `SurvivalNet_Send`) and `src/SurvivalNet.c` (receive
+> dispatch gated on `!Server.IsSinglePlayer && Server.SupportsSurvival`,
+> `SURV_HELLO`/`SURV_WORLDINFO` parse+log stubs, the `SurvivalNet_Send` wrapper).
+> The **"SurvivalTest" CPE extension** is negotiated in `src/Protocol.c`
+> (`survival_Ext`, `cpe_clientExtensions[]`, ExtEntry sets
+> `Server.SupportsSurvival`); the flag lives in `src/Server.h`; the component is
+> registered in `src/Game.c`. Server session: **build your handshake to match
+> `SurvivalNet.h` / §25.** What is **NOT** yet done (this list): the sim
+> mode‑flip and every server→client applier below (mobs/inventory/drops/…) plus
+> the intent senders — all message ids are already reserved in `enum SurvNetMsg`.
 
 Keep all networked‑survival glue in one new file so the simulation files stay
 readable and the SP path is untouched. Responsibilities:

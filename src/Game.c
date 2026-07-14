@@ -43,6 +43,7 @@
 #include "EntityRenderers.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "SurvivalNet.h"
 #include "IndevFire.h"
 
 struct _GameData Game;
@@ -454,6 +455,7 @@ static void Game_Load(void) {
 	Game_AddComponent(&EntityRenderers_Component);
 	Game_AddComponent(&IndevTest_Component);
 	Game_AddComponent(&SurvivalTest_Component);
+	Game_AddComponent(&SurvivalNet_Component);
 
 	Plugins_LoadAll();
 	for (comp = comps_head; comp; comp = comp->next) {
