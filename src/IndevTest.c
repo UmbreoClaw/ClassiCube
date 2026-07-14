@@ -865,13 +865,15 @@ static void IndevBlocks_Define(void) {
 	IndevBlock_Define(INDEV_BLOCK_DIAMOND_ORE, "Diamond Ore", 119, 119, 119, 119, SOUND_STONE, 60);
 
 	/* Genuine blocks that used to leak through as ClassiCube CPE defaults.
-	    Definitions only for now (ids/hardness/drops/behaviour); the two Indev-
-	    only textures - the TEAL diamond block (tex 40) and gears (tex 62) - come
-	    in the textures-follow step, so both use tile 119 as a temporary stand-in.
-	    None are craftable in in-20100223 (creative/technical). */
+	    Diamond block's texture is fetched from the beta jar (tile 122, verified
+	    teal); gears is the only one still on the 119 placeholder - its tile is
+	    Indev-only (absent from the beta jar), so it awaits the Indev-jar fetch
+	    source. None are craftable in in-20100223 (creative/technical). */
 	/* Diamond block (57): opaque cube, hardness 5.0F (=100), drops itself.
-	    soundMetalFootstep -> STONE (Indev has no metal footstep). */
-	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 119, 119, 119, 119, SOUND_STONE, 100);
+	    soundMetalFootstep -> STONE (Indev has no metal footstep). Tile 122 is
+	    the (teal) diamond block fetched from the beta jar's terrain.png (120 is
+	    the 2nd Indev fire animation instance, so it can't be used here). */
+	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 122, 122, 122, 122, SOUND_STONE, 100);
 	/* Gears/cog (55): flat, walk-through, non-solid decorative (Material.circuits),
 	    hardness 0.5F (=10), drops itself. A 1px plate. */
 	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 119, 119, 119, 119, SOUND_STONE, 10);

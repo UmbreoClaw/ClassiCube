@@ -1012,6 +1012,8 @@ static const struct BetaTile { cc_uint8 sx, sy, dx, dy; } beta_tiles[] = {
 	{  6,5,  3,7 }, /* 115 farmland wet */
 	{  7,5,  4,7 }, /* 116 farmland dry */
 	{  2,3,  7,7 }, /* 119 diamond ore (118 is the live fire animation) */
+	{  8,1, 10,7 }, /* 122 diamond block (teal, from the beta jar terrain.png).
+	                   NB: 120 is the 2nd Indev fire animation instance. */
 };
 
 /* The two kz.png cells b1.7.3 later redrew (Sea at 64,32 32x16 and Stage at
