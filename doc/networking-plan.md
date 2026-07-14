@@ -2209,6 +2209,90 @@ That's a clean intermediate milestone, not a reason to keep it separate.)
       mirrors via its map‑load `Game_Reset` + re‑define.
 - [ ] Classic maps verified unchanged (default/CPE blocks, no Indev defs).
 
+## 31. Integrating the Indev generator + its world types
+
+Indev world creation is a 4‑axis matrix (our client's `IndevGenScreen`,
+`src/Menus.c:1263`): **type** × **shape** × **size** × **theme**. Map it onto one
+parameterised MCGalaxy generator, not 144 registrations.
+
+### 31.1 The axes (and what each does)
+
+- **World type / shape** — `indevgen_type` (`src/IndevGen.c:33`): **Inland**(0,
+  bordered by an infinite grass plane at ground level), **Island**(1, ringed by
+  ocean at sea level), **Floating**(2, sky islands over a void with a negative
+  `groundLevel` + invisible bedrock floor), **Flat**(3). Set via `IndevGen_Setup(type, theme)`.
+- **Theme** — `indevgen_theme`: **Normal**(0, water/grass, skylight 15),
+  **Hell**(1, lava instead of water, dark skylight 7, grass quirks — `:477,:648,:794`),
+  **Paradise**(2, higher beaches, 10× flowers — `:451,:1368`), **Woods**(3, +50 tree
+  passes, skylight 12 — `:794,:1364`).
+- **Shape (aspect)** — Square / Long / Deep: the width×length×height *proportions*.
+- **Size** — Small / Normal / Huge: base dimensions.
+
+Shape + size are just **presets that pick the map dimensions**. Since MCGalaxy's
+`/newlvl` and `/os map add` already take (or default) explicit dimensions, those two
+axes are **subsumed by the dims the command supplies** — the generator only needs
+**type + theme** as flavour args.
+
+### 31.2 One parameterised `indev` generator
+
+Register a single generator (§8.1); pass **type** and **theme** through `MapGenArgs`,
+take dimensions from the command (or the `/os` default), and the **seed** from
+`MapGenArgs`:
+
+```
+/newlvl <name> <x> <y> <z> indev [type] [theme]
+/os map add indev [type] [theme]         # x/y/z = os default size
+    type  = inland | island | floating | flat     (default inland)
+    theme = normal | hell | paradise | woods       (default normal)
+    e.g.  /newlvl sky 256 64 256 indev floating hell
+```
+
+The generator function then:
+1. parse `type`/`theme` from `args.Args` (default inland/normal);
+2. run the `IndevGen` C# port for the requested **dims + seed + type + theme**
+   (`doc/indev-generation.md` + `src/IndevGen.c` are the byte‑exact spec — §8.1);
+3. do the **survival‑level setup** (§30.3): `SurvivalMode = indev`, attach the
+   per‑level Indev block collection, set the texture URL, and persist (§28).
+
+Put the arg syntax in the generator's `desc` so `/help newlvl`/the gen list shows
+it. Optionally add a few **convenience aliases** for popular combos
+(`indev_floating`, `indev_hell`, `indev_woods`) that just call the same function
+with preset args — nice for `/os map add` where remembering args is friction.
+
+### 31.3 Seed parity (must match SP)
+
+For a given `(seed, type, theme, dims)` the MCGalaxy world must be **byte‑identical**
+to the SP client's, so shared/downloaded seeds reproduce. That means porting the
+**three RNG streams exactly** (gen `rand`, `world.random` = seed+1 with the burned
+`nextInt`, spawn = seed+2 — §8.1 / tasks 26–28) and the noise stack. Reuse the
+Java‑oracle parity harness from `doc/indev-generation.md`: fixed seed → dump the
+server world → diff against the SP dump; they must be equal.
+
+### 31.4 Dimensions & edge cases
+
+- **Floating/Island** need the env planes + surroundings the SP generator sets
+  (`IndevGen_ApplyPostLoad` → `IndevTest_SetSurroundings`); persist them into
+  `world.mclevel` (§18.1) and send `SURV_WORLDINFO` (§21/§25) so the client shows the
+  right horizon/void.
+- **Hell** uses lava as the fluid and a darker skylight — make sure the theme flows
+  into the surroundings/`TimeOfDay`/skylight fields, not just the blocks.
+- **Huge** maps are large; the generator + the initial 1000‑pass spawn (§8.1) run at
+  gen time — keep it off the main tick (MCGalaxy generates async) and stream the
+  finished level.
+- **`/os map add`** default size: if it's smaller than an Indev world expects, the
+  noise still generates (it scales), but document that Indev worlds look best near
+  the genuine sizes; allow an explicit size where the command supports it.
+
+### 31.5 Checklist
+
+- [ ] One `indev` generator registered (theme in `/os map add` + `/newlvl`); type +
+      theme via args, dims from the command, seed from `MapGenArgs`.
+- [ ] Generator runs the `IndevGen` port then the §30.3 survival‑level setup.
+- [ ] Seed parity vs SP verified with the fixed‑seed dump/diff harness.
+- [ ] Surroundings/theme (floating void, hell lava, skylight) persisted + sent via
+      `SURV_WORLDINFO`.
+- [ ] Optional convenience aliases for popular type/theme combos.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
