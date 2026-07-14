@@ -557,7 +557,15 @@ static void OnInit(void) {
 	Game_Tasks.network.callback = Server.Tick;
 	ScheduledTask2_Add(&Game_Tasks.network);
 
-	String_AppendConst(&Server.AppName, GAME_APP_NAME);
+	/* Advertise the Indev fork by name in the CPE handshake so servers/admins
+	    can identify survival clients (see doc/networking-plan.md §20.4). This is
+	    identity only - authoritative capability gating uses the SurvivalTest CPE
+	    extension, not this string. c0.30-s / creative keep the stock name. */
+	if (SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV) {
+		String_AppendConst(&Server.AppName, "ClassiCube Indev " GAME_APP_VER);
+	} else {
+		String_AppendConst(&Server.AppName, GAME_APP_NAME);
+	}
 	String_AppendConst(&Server.AppName, Platform_AppNameSuffix);
 
 #ifdef CC_BUILD_WEB
