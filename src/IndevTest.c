@@ -865,24 +865,28 @@ static void IndevBlocks_Define(void) {
 	IndevBlock_Define(INDEV_BLOCK_DIAMOND_ORE, "Diamond Ore", 119, 119, 119, 119, SOUND_STONE, 60);
 
 	/* Genuine blocks that used to leak through as ClassiCube CPE defaults.
-	    Diamond block's texture is fetched from the beta jar (tile 122, verified
-	    teal); gears is the only one still on the 119 placeholder - its tile is
-	    Indev-only (absent from the beta jar), so it awaits the Indev-jar fetch
-	    source. None are craftable in in-20100223 (creative/technical). */
+	    Diamond block's texture is fetched from the beta jar (tile 122, teal);
+	    gears' tile is Indev-only (no jar hosts it) so it's embedded in Resources.c
+	    at tile 123. None are craftable in in-20100223 (creative/technical). */
 	/* Diamond block (57): opaque cube, hardness 5.0F (=100), drops itself.
 	    soundMetalFootstep -> STONE (Indev has no metal footstep). Tile 122 is
 	    the (teal) diamond block fetched from the beta jar's terrain.png (120 is
 	    the 2nd Indev fire animation instance, so it can't be used here). */
 	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 122, 122, 122, 122, SOUND_STONE, 100);
-	/* Gears/cog (55): flat, walk-through, non-solid decorative (Material.circuits),
-	    hardness 0.5F (=10), drops itself. A 1px plate. */
-	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 119, 119, 119, 119, SOUND_STONE, 10);
+	/* Gears/cog (55): non-solid, walk-through decorative (Material.circuits),
+	    hardness 0.5F (=10), drops itself, tile 123 (embedded genuine tex 62).
+	    Genuine bounds: NO collision (getCollisionBoundingBoxFromPool -> null) and
+	    DEFAULT full-cube pick bounds (BlockGears sets no bounds). Genuine renders
+	    (renderType 5) as gear quads flush on each ADJACENT SOLID WALL - a bespoke
+	    render; we approximate with a standing sprite for now (a custom wall-mount
+	    builder like the wall torches would be the exact port). */
+	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 123, 123, 123, 123, SOUND_STONE, 10);
 	Blocks.Collide[INDEV_BLOCK_GEARS]         = COLLIDE_NONE;
 	Blocks.ExtendedCollide[INDEV_BLOCK_GEARS] = COLLIDE_NONE;
-	Blocks.Draw[INDEV_BLOCK_GEARS]            = DRAW_TRANSPARENT;
+	Blocks.Draw[INDEV_BLOCK_GEARS]            = DRAW_SPRITE;
 	Blocks.BlocksLight[INDEV_BLOCK_GEARS]     = false;
-	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_GEARS], 0.0f, 0.0f,        0.0f);
-	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_GEARS], 1.0f, 1.0f/16.0f, 1.0f);
+	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_GEARS], 0.0f, 0.0f, 0.0f);
+	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_GEARS], 1.0f, 1.0f, 1.0f);
 	Block_DefineCustom(INDEV_BLOCK_GEARS, false);
 	/* Water/lava source (52/53): BlockSource - renders like the still fluid and
 	    refills its 4 horizontal air neighbours each random tick (Indev_TickSource,

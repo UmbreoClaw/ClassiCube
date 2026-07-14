@@ -334,11 +334,12 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     None are craftable in in-20100223 (verified CraftingManager - no diamond/gear
     recipes), so no recipes added. BlockTo/FromIndev now map all four 1:1; hidden
     list trimmed to 59/60/63/64/65. Un-hidden in-inventory.
-    TEXTURES PENDING (user: "blocks now, textures follow"): diamond block and
-    gears use tile 119 as a temporary stand-in. Their genuine tiles are Indev-
-    only (teal diamond tex 40, gears tex 62) and NOT in the patcher's b1.7.3
-    source, so they must be embedded from Indev's terrain.png (kz_sea_png-style)
-    - a separate step. Sources reuse the live water/lava tiles (correct already).
+    TEXTURES DONE: diamond block's teal tile IS in the beta jar (fetched to atlas
+    120->moved to 122 after finding 120 == INDEV_FIRE_TEX_LOC2). Gears' tile is
+    Indev-only and Mojang hosts no Indev jar (verified: 901-version manifest, zero
+    "in-" ids), so it's EMBEDDED in Resources.c (kz_sea_png-style) at atlas tile
+    123. Sources reuse the live water/lava tiles. Gears render is a sprite stand-in
+    for the genuine wall-mounted-quad renderType 5 (bespoke builder = future).
     CROPS/FARMLAND: stay at 85-92 / 83-84 (engine has no runtime block metadata,
     so 8 crop stages can't share one id; no free 8-run at 59). Save format is
     already genuine 59/60+metadata, so this is invisible outside the runtime ids.
