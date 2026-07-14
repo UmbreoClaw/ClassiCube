@@ -287,3 +287,36 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     deliberate deviation because multiplayer support is planned; may
     later be gated behind a multiplayer option when that work starts.
     Notes + code comments corrected.
+
+20. [V] Indev block-ID faithfulness (user-flagged: "pillar and crate present").
+    Genuine Indev's block registry (Block.java) ends at 62 (furnace lit).
+    ClassiCube's CPE defaults occupy 50-65; we correctly redefine the
+    genuine-matching ids - torch(50), fire(51), chest(54), diamond ore(56),
+    workbench(58), furnace(61/62) - but 9 ids carried NON-genuine ClassiCube
+    blocks into Indev:
+      52 sandstone / 53 snow   (genuine = infinite water/lava springs, unimpl.)
+      55 light-pink wool       (genuine = gears, unimpl.)
+      57 brown wool            (genuine = diamond block, unimpl.)
+      59 turquoise wool        (genuine = crops - we host at 85-92)
+      60 ice                   (genuine = farmland - we host at 83-84)
+      63 pillar / 64 crate / 65 stone brick  (genuine = nothing; Indev stops at 62)
+    FIXED: IndevBlocks_Define now sets CanPlace=false + Inventory_Remove for all
+    nine, so only genuine Indev blocks are placeable / in the inventory map.
+    Indev-only (c0.30-s and plain creative untouched). gdb-verified:
+    CanPlace[52,53,55,57,59,60,63,64,65]=0, faithful 50/54/56/58/61=1,
+    Inventory.Map[62..65]=0.
+    OPEN (internal-id deviation, not user-visible): crops/farmland run at our
+    relocated ids 85-92/83-84 instead of genuine 59/60 (the genuine ids were
+    taken by ClassiCube CPE wool/ice); .mclevel load remaps genuine->ours. Gears
+    (55), diamond block (57) and the water/lava spring blocks (52/53) are simply
+    not implemented. Relocating crops/farmland to 59/60 + implementing the rest
+    would be full id parity but is a larger, save-format-touching change - left
+    as a deliberate, transparent deviation for now.
+    CONSISTENCY (user asked "update the generator too?"): no other update needed.
+    IndevGen.c places only stone/dirt/grass/sand/gravel/water/lava/ores/plants -
+    never a hidden id (verified). The .mclevel remap handles them both ways:
+    IndevTest_BlockFromIndev (load) turns genuine 52->water/53->lava/55->air/
+    57->iron block/59->crops/60->farmland; _BlockToIndev (save) writes our
+    relocated farmland(83)/crops(85+) back as genuine 60/59. So nothing generates
+    or deserializes a hidden block - the picker + manual place were the only
+    exposures, and both are now closed.

@@ -5095,6 +5095,43 @@ return (faithful survival untouched). Full `make PLAT=linux` builds+links clean.
 **Deferred:** Option B (items in the picker, not just blocks); MP server-dictated
 creative (the resolver is already shaped for it).
 
+## SESSION LOG — creative made faithful + Indev block-ID cleanup
+
+### Fully-faithful Indev creative (replaces the bare block-picker)
+User steered creative back toward faithfulness (the Beta-1.8 tabbed picker was
+reverted). Genuine Indev creative (`PlayerControllerCreative`) had **no** item
+picker - it filled the 9 hotbar slots from `Session.registeredBlocksList` and
+opened the normal `GuiInventory`. Matched that exactly:
+- **Inventory GUI**: creative now opens the Indev-textured `SurvivalInvScreen`
+  (armor/paperdoll/2x2 craft/storage/hotbar), same as survival - not the stock
+  floating ClassiCube block grid. (`SurvivalInvScreen_Show`: dropped the
+  `|| CreativeActive()` bare-grid route; the now-dead `InventoryScreen.creative`
+  deposit hooks were removed.)
+- **Palette hotbar**: `SurvivalTest_CreativeFillPalette` fills each empty hotbar
+  slot on creative map-load with the genuine list - stone, cobblestone, brick,
+  dirt, planks, log, leaves, torch, slab. Creative never depletes them, so it's
+  a genuine infinite palette. Gated on `SurvivalTest_CreativeActive()`.
+- Rig-verified (Xvfb): hotbar shows the 9 genuine palette blocks, `I` opens the
+  textured Indev inventory panel (not the bare grid), no survival HUD.
+
+### Indev block-ID faithfulness (user-flagged pillar/crate)
+Genuine Indev ends at block 62. Nine ClassiCube CPE default blocks were leaking
+into Indev at ids 52,53,55,57,59,60,63,64,65 (sandstone/snow/extra wools/ice/
+pillar/crate/stone brick). `IndevBlocks_Define` now hides all nine (CanPlace=
+false + `Inventory_Remove`), leaving only genuine Indev blocks. Indev-only, so
+c0.30-s and plain creative keep their full block sets. gdb-verified. Full detail
++ the crops(59)/farmland(60) internal-id relocation are in AUDIT_FINDINGS.md #20.
+
+### Creative-never-bleeds-into-survival audit (user-requested)
+Every creative behavior routes through `SurvivalTest_CreativeActive()` =
+`Creative && IndevTest_Enabled`. So the toggle is inert in c0.30-s (IndevTest
+off) and in Indev *survival* (Creative off). Verified gate sites: damage
+(`SurvivalTest_Damage`), instant break (`CanInstaBreak`), no drops / no consume
+(`BlockChanged`), flight+reach+palette (`OnNewMapLoaded`), no HUD (hearts/air
+builders). The block-hiding lives in `IndevBlocks_Define` (Indev-only, applies
+to Indev survival too - correct, since those blocks aren't genuine in either).
+No creative code path is reachable from c0.30-s.
+
 ## ENGINE NOTES (useful pointers)
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.

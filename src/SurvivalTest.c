@@ -7546,6 +7546,26 @@ static void SurvivalTest_OnNewMap(void) {
 	SurvivalTest_SyncHotbar();
 }
 
+/* PlayerControllerCreative.onRespawn: the creative palette hotbar. Fills each
+    EMPTY hotbar slot with the genuine Session.registeredBlocksList block (stone,
+    cobblestone, brick, dirt, planks, log, leaves, torch, slab); existing slots
+    (e.g. a reloaded creative world) are kept. Creative placement never depletes
+    these, so one of each is a genuine infinite palette. */
+static void SurvivalTest_CreativeFillPalette(void) {
+	static const cc_uint16 pal[SURVIVAL_HOTBAR_SLOTS] = {
+		BLOCK_STONE, BLOCK_COBBLE, BLOCK_BRICK, BLOCK_DIRT, BLOCK_WOOD,
+		BLOCK_LOG, BLOCK_LEAVES, 50 /* INDEV_BLOCK_TORCH */, BLOCK_SLAB
+	};
+	int i;
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		if (st_inv[i].id != BLOCK_AIR && st_inv[i].count > 0) continue;
+		st_inv[i].id     = pal[i];
+		st_inv[i].count  = 1;
+		st_inv[i].damage = 0;
+	}
+	SurvivalTest_SyncHotbar();
+}
+
 static void SurvivalTest_OnNewMapLoaded(void) {
 	struct LocalPlayer* p;
 	if (!SurvivalTest_Enabled) return;
@@ -7569,6 +7589,7 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 		p->Hacks.CanSpeed = true;
 		HacksComp_Update(&p->Hacks);
 		p->ReachDistance  = 5.0f;
+		SurvivalTest_CreativeFillPalette(); /* genuine creative palette hotbar */
 	}
 
 	SurvivalTest_SpawnInitialMobs();

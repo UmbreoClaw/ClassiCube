@@ -8,6 +8,7 @@
 #include "Graphics.h"
 #include "TexturePack.h"
 #include "Block.h"
+#include "Inventory.h"
 #include "Audio.h"
 #include "Platform.h"
 #include "String_.h"
@@ -933,6 +934,23 @@ static void IndevBlocks_Define(void) {
 		Vec3_Set(Blocks.MinBB[id], 0.0f, 0.0f,        0.0f);
 		Vec3_Set(Blocks.MaxBB[id], 1.0f, 4.0f/16.0f,  1.0f);
 		Block_DefineCustom(id, false);
+	}
+
+	/* Faithfulness: genuine Indev's block registry ends at 62 (furnace lit).
+	    ClassiCube's CPE defaults fill 52-65 with blocks Indev never had at those
+	    ids - sandstone(52), snow(53), the extra wools(55,57,59), ice(60), pillar
+	    (63), crate(64), stone brick(65) - and Indev's own crops(59)/farmland(60)
+	    live at our relocated ids 85+/83 instead. Hide every one of those from the
+	    Indev block set (not placeable, not in the inventory map) so only genuine
+	    Indev blocks exist. Indev-only: this function never runs in c0.30-s or
+	    plain creative, so their block sets are untouched. */
+	{
+		static const cc_uint8 nonGenuine[] = { 52, 53, 55, 57, 59, 60, 63, 64, 65 };
+		int n;
+		for (n = 0; n < (int)Array_Elems(nonGenuine); n++) {
+			Blocks.CanPlace[nonGenuine[n]] = false;
+			Inventory_Remove(nonGenuine[n]);
+		}
 	}
 }
 
