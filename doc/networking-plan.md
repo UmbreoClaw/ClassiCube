@@ -421,6 +421,215 @@ Stand up the authoritative **SurvivalTest server module/plugin** (§5.2) and mak
    `SURV_HELLO`. Prove the gate (vanilla server unaffected).
 6. Then walk the phases (§7). Update this file as the wire format solidifies.
 
+## 12. Client code map — what to read / reuse / gate, per subsystem
+
+These are the exact symbols the networked layer touches. In MP survival, the
+authoritative logic moves to the server; the client keeps the *render/predict/
+intent* half. Every "authoritative" call below needs an
+`if (Server.IsSinglePlayer) { …as now… } else { …driven by server…}` split.
+
+**Health** (`src/SurvivalTest.c`)
+- State: `int SurvivalTest_Health` (`:53`, extern in `.h`), `SURVIVAL_MAX_HEALTH`
+  (20), `st_score` (`:85`), `st_lastHealth`/invuln window inside `SurvivalTest_Damage`.
+- Authoritative: `SurvivalTest_Damage(damage, attackerPos)` (`:~1240`) — invuln
+  frames (equal-hit half-block), armor absorption call, knockback dir; public
+  wrappers `SurvivalTest_Hurt` (`:1289`), `SurvivalTest_HurtFrom` (`:1290`),
+  `SurvivalTest_Heal` (`:1338`). Every call site (fall/lava/fire/explosion/mob at
+  `:3210,:3367,:3685,:4056`) must become server‑side in MP.
+- Render/HUD: hearts drawn in `src/Screens.c` (HUDScreen). In MP the HUD just
+  reflects the server's `SURV_HEALTH`.
+
+**Mobs** (`src/SurvivalTest.c`)
+- State: `struct Mob` (fields: `type,active,hasTarget,targetSlot,health,invincTicks,
+  hurtTicks,attackTime,fire,fuseTicks/fuseState,graze,walkDist,hasHelmet/hasArmor,
+  Base.prev/next` for interpolation), pool `st_mobs[]`, `mobTypeInfo[]` table,
+  `enum MobType`.
+- Authoritative: spawners `Mob_SpawnerRun`/`Mob_IndevSpawnPass`/`Mob_IndevSpawnerRun`/
+  `SurvivalTest_IndevInitialSpawn`, AI `Mob_IndevCreatureAI`/`Mob_IndevCreatureUpdate`/
+  `Mob_BasicAIUpdate` + pathfinder `Mob_FindPath`, combat `Mob_IndevAttackEntity`/
+  `Mob_Hurt`/`Mob_Die`, factory `SurvivalTest_SpawnMobAt`, size `Mob_ApplySize`,
+  ground/normal‑cube `Mob_BlockIsSolid`/`Mob_BlockIsNormalCube`.
+- Render: `SurvivalTest_RenderMobs`, `Mob_UpdateBodyYaw`, model set via
+  `Entity_SetModel`. This half stays client‑side (fed by `SURV_MOB_*`).
+- Debug: `SurvivalTest_DebugSpawnMob` (`/client spawn`) is handy for MP testing.
+
+**Armor** (`src/SurvivalTest.c`, `src/IndevArmor.c`, `src/IndevTest.c`)
+- State: `st_armor[SURVIVAL_ARMOR_SLOTS]` (`:150`) — `[0]boots [1]legs [2]chest
+  [3]helmet`, saved as `.mclevel` Slot 100+index.
+- Authoritative: absorption in `SurvivalTest_Damage` (`:1210–1253`) — `remain`/
+  `reduce` weighting + per‑hit +1 wear to each worn piece, piece breaks when
+  `damage > IndevTest_ArmorMaxDamage`. Helpers `IndevTest_ArmorPiece`,
+  `IndevTest_ArmorReduce`, `IndevTest_ArmorMaxDamage`.
+- Render: `IndevArmor_Render` (`:5010`) worn plates; HUD armor bar in `Screens.c`.
+
+**Inventory / crafting / containers** (`src/SurvivalTest.c`, `src/IndevTest.c`)
+- State: `st_inv[SURVIVAL_INV_SLOTS]` (36), `st_craft[SURVIVAL_CRAFT_SLOTS]`,
+  `st_cursor`, `struct SurvivalSlot {id,count,damage}` (in `.h`), unified addressing
+  `SurvivalTest_SlotPtr` (`:6264`, with `SURVIVAL_{INV,CRAFT,CONTAINER,ARMOR}_BASE`
+  extended‑slot ranges). Change ticker `SurvivalTest_InvVersion`/`_InvChanged`.
+- Ops (make server‑authoritative): `SurvivalTest_AddItem`, `SurvivalTest_DamageHeldTool`,
+  `SurvivalTest_ConsumeSelected`, crafting `IndevTest_MatchRecipe`/`SurvivalTest_CraftResult`/
+  `_CraftTake`, containers `IndevTest_OpenContainer`/`_ContainerSlot`/`_ContainerSlotCount`,
+  furnace `Furnace_Tick`, chest scatter `IndevTE_Scatter`.
+- GUI (stays client‑side, becomes a view of server state): `SurvivalInvScreen_*`
+  in `src/Screens.c`.
+
+**World / time / metadata / tile‑entities** (`src/IndevTest.c`, `src/IndevGen.c`, `src/IndevFire.c`)
+- Day/night: `indev_worldTime`, `indev_lastSkyLight`, `Indev_TickDayNight`,
+  `Indev_EasedSkyLight`.
+- Surroundings/env: `IndevTest_SetSurroundings`/`_ApplySurroundings`,
+  `indev_surGround/surWater/surFluid`; env planes via `Env_*`.
+- Tile entities: `struct IndevTE` + `indev_tes[]` (chest/furnace contents),
+  `IndevTE_Find/_Create/_Scatter`.
+- Block metadata: `IndevTest_BlockDataMeta(At)` / `IndevTest_ApplyDataMeta(At)`
+  (chest facing, furnace lit, farmland moisture, crop stage), fire age in
+  `src/IndevFire.c` (`IndevFire_Age/_SetAge`).
+- Random ticks: `IndevTest_TickRandomBlocks` → grass/leaf/farmland/crop/fire.
+- Worldgen: `src/IndevGen.c` (`IndevGen_*`) — **client does NOT run this in MP**.
+
+**Serialization surface = the sync manifest** (`src/Formats.c`, MCLevel_*)
+The `.mclevel` reader/writer already enumerates *every* piece of survival state
+that must cross the wire: player `Inventory` (main + Slot 100+ armor), `Entities`
+(mobs w/ type+health+pos), `TileEntities` (chest/furnace `Items`), `Environment`
+(`Surrounding{Ground,Water}{Type,Height}`, colours), map dims/spawn. Treat
+`MCLevel_ParseEnvironment`/`_CommitEntity`/`_CommitTE`/the inventory parser as the
+canonical list when designing `SURV_WORLDINFO` / `SURV_INV_FULL` / `SURV_MOB_SPAWN`.
+
+---
+
+## 13. Server‑side handling — questions & recommended answers
+
+Design answers for the server module (§8.2). Default stance everywhere: **the
+server simulates and validates; the client only sends intents and renders.**
+
+**Health**
+- *Q: Who owns it?* Server. In MP the client's `SurvivalTest_Health` is a display
+  mirror; local `_Hurt/_HurtFrom/_Heal` are suppressed and replaced by `SURV_HEALTH`.
+- *Q: How is damage derived so it can't be spoofed?* Server computes it from
+  server‑tracked state: fall damage from the server's view of the player's
+  fall distance (never trust a client "I took fall damage" message), lava/fire
+  from the block the server sees under/around the player, mob melee from the
+  server's mob combat, explosion from server‑side blast falloff. Port the exact
+  math + the 20‑tick invulnerability window (equal‑damage hits half‑blocked) from
+  `SurvivalTest_Damage`.
+- *Q: Regen?* Indev has **no** natural regeneration (no hunger system; that's
+  Alpha+). Health only drops; it resets on respawn/new world. c0.30‑s is the same.
+  So there is no regen packet — don't add one.
+- *Q: Death?* Server detects `health <= 0`, sends a death `SURV_HEALTH`(0) +
+  a death/score message; client shows the existing `GameOverScreen`. Respawn =
+  server loads/regenerates and re‑streams (there is no in‑place respawn in Indev).
+- *Q: Knockback?* Use the `VelocityControl` CPE packet from the server rather than
+  a custom vector — the client already implements it.
+
+**Mob + armor state**
+- *Q: Bespoke mob channel vs standard Classic entities?* Recommend standard
+  entities for transport (`OPCODE_EXT_ADD_ENTITY2` + `ChangeModel` for the model,
+  normal pos/orient updates + `ExtEntityPositions`) and put *only* the
+  survival‑specific bits (mob type for AI‑independent client anim, health for the
+  hurt‑flash, creeper `fuseState`, `onFire`) on `SURV_MOB_STATE`. This reuses all
+  the existing nametag/interp/model plumbing; you lose nothing because the client
+  no longer runs AI. Keep `SURV_MOB_SPAWN` only if you need type/health atomically
+  with the spawn.
+- *Q: Does the client need mob health/AI?* No AI (server‑only). It needs enough
+  for rendering: type→model, `hurtTicks` flash, creeper swell, fire overlay,
+  death animation. Feed those from `SURV_MOB_STATE`.
+- *Q: Where does armor absorption run?* Server, inside its damage routine (port
+  of `SurvivalTest_Damage` armor block). The server owns the 4 armor slots +
+  their durability and wears/breaks them. The client only needs the slot contents
+  + damage to draw the HUD armor bar and (optionally) worn plates — send via
+  `SURV_INV_SLOT` for slots 100–103.
+- *Q: Show other players' worn armor?* Defer. First pass: only the local player's
+  HUD + server‑side absorption. Later, worn plates on remote players via
+  `CustomModels`/a plates model.
+
+**Inventory tracking**
+- *Q: Authority + anti‑dupe?* Server owns `main[36] + armor[4] + craft grid +
+  cursor + open container`. The client sends **intents** (`SURV_INV_CLICK`,
+  `SURV_CONTAINER_CLICK`, `SURV_CRAFT`, `SURV_DROP_ITEM`, `SURV_USE_ITEM`,
+  `SURV_HELD_SLOT`); the server validates (slot exists, recipe affordable, stack
+  limits, container open + in reach) and echoes authoritative slot states. The
+  cursor‑held stack is **server‑tracked** — the client renders what the server
+  says, so click races can't dupe.
+- *Q: Full state vs deltas over 64‑byte frames?* On open/join send a chunked
+  `SURV_INV_FULL` (base slot + run of id/count/dmg triples across several frames);
+  thereafter send `SURV_INV_SLOT` deltas. Same for containers
+  (`SURV_CONTAINER_OPEN` then `SURV_CONTAINER_SLOT`).
+- *Q: Block/tool consumption?* Server‑side only. Placing consumes 1 from the held
+  slot; breaking wears the tool (`IndevTest_ToolUseWear`) and drops per
+  `SurvivalTest_GetBlockDrop`/`SpawnIndevDrops`. Never let the client decrement.
+- *Q: Crafting grid?* Server owns the grid; client sends place/take‑result
+  intents; server runs `IndevTest_MatchRecipe` (incl. mirrored layouts) and echoes
+  grid + result slot. Large‑chest 54‑slot combining (`indev_openTE2`) is a
+  server concern too.
+
+**World tracking & status**
+- *Q: Who runs the world simulation?* Server. Day/night (`worldTime` +
+  `updateDaylightCycle` skylight easing), all random ticks (grass spread/decay,
+  leaf decay, farmland/crop growth, fire spread, sapling growth), furnace
+  smelting, item‑drop despawn (6000‑tick), TNT/explosions. Results reach clients
+  as normal `OPCODE_SET_BLOCK` (block id) + `SURV_BLOCKMETA` (nibble) +
+  `SURV_DROP_*` (items) + `SURV_TIME`.
+- *Q: How does the client learn Indev's non‑Classic world params?* `SURV_WORLDINFO`
+  right after `LEVEL_END`, carrying the `.mclevel` `Environment` set (ground/water
+  level, surrounding fluid/heights, theme, floating flag, colours). Client applies
+  via `IndevTest_SetSurroundings` + `Env_*`.
+- *Q: Block id space beyond Classic 0–49?* Torch 50, fire 51, chest 54, furnaces,
+  crops, diamond, etc. must be defined to the client with `BlockDefinitions`/
+  `CustomBlocks` CPE so it renders them; keep the server's definitions in lockstep
+  with the client's SP block table.
+- *Q: Per‑level gating?* The server must run the survival sim **only** on
+  Indev/c0.30‑s levels and leave Classic levels as plain creative — the exact
+  mirror of the client's `SurvivalTest_Enabled`/`IndevTest_Enabled` gate. A level
+  property (e.g. `level.SurvivalMode = off|c030s|indev|indevCreative`) drives both
+  the sim and the `SURV_HELLO` sent to joiners.
+
+---
+
+## 14. Pseudo‑creative Indev mode (research + future task)
+
+**This is genuine Indev behaviour, not an invention.** Indev shipped two
+controllers (`net/minecraft/client/controller/`):
+
+- `PlayerControllerSP` = **survival** (`world.survivalWorld = true`): timed mining
+  (`blockStrength`/`sendBlockRemoving`), block drops on harvest, tool wear
+  (`onBlockDestroyed`), health HUD.
+- `PlayerControllerCreative` = **creative** (`world.survivalWorld = false`):
+  `shouldDrawHUD() = false` (no hearts / no health), **instant break** (base
+  `clickBlock` destroys immediately, no mining time), an **infinite palette
+  hotbar** (`onRespawn` fills the 9 hotbar slots from the registered block list,
+  stack sizes forced — placing never depletes), no tool wear/consumption — **but
+  `onUpdate` still runs `mobSpawner.performSpawning()`, so mobs still spawn** (you
+  just have no health to lose). No flight in this era.
+
+So "pseudo‑creative Indev" = the Indev world + block set + mob spawning + day/night,
+with the *survival* layer (health/damage, mining time, item consumption, tool
+wear, inventory scarcity, crafting need) switched off. It is the genuine Indev
+Creative game mode.
+
+**Why it matters for networking:** it is by far the **simplest networked Indev
+target** — no health sync, no inventory transactions, no crafting/containers,
+instant‑break via plain `OPCODE_SET_BLOCK`. It's the ideal Phase‑0/1 proving
+ground: get the Indev *world* (server‑generated), *blocks*, *mobs*, and *day/night*
+flowing over the wire before taking on the hard survival authority migration.
+
+**Tasks it implies (do the SP research/impl first, then network it):**
+1. Add a 4th mode to the gamemode enum — **Indev Creative** — distinct from the
+   current `OFF` (plain ClassiCube creative) and `INDEV` (Indev survival). It sets
+   `IndevTest_Enabled = true` (Indev world/blocks/gen/day‑night/mob‑spawning) but
+   leaves the survival simulation off: no `SurvivalTest_Health`/damage, instant
+   break, infinite blocks, no crafting/inventory scarcity, HUD hides hearts.
+   Gate off a `SurvivalTest_CreativeIndev()` predicate; make sure `c0.30-s` and
+   `INDEV survival` are unaffected. Mirror genuine `PlayerControllerCreative`
+   (mobs still spawn; `survivalWorld=false`).
+2. Verify vs the decompiled `PlayerControllerCreative` (instant break, palette
+   hotbar contents/order, HUD‑off, mob spawner still ticking).
+3. Network it: `SURV_HELLO` mode = indev‑creative; server generates the Indev
+   world, spawns mobs, ticks day/night + random blocks, and relays block changes —
+   but sends no health/inventory/container messages and lets the client place/break
+   freely (still validated for reach). This is the first end‑to‑end Indev MP demo.
+
+---
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
@@ -428,3 +637,5 @@ Stand up the authoritative **SurvivalTest server module/plugin** (§5.2) and mak
 - MCGalaxy (server base, this fork): https://github.com/UmbreoClaw/mcgalaxy
 - Client transport: `src/Protocol.c` (`CPE_SendPluginMessage` `:891`, `CPE_PluginMessage` `:1551`), `src/Protocol.h:98`, `src/Server.c`, `src/Server.h`.
 - Simulation reference (the C "spec" to mirror server‑side): `src/SurvivalTest.c`, `src/IndevTest.c`, `src/IndevGen.c`, `doc/indev-generation.md`, `SURVIVAL_TEST_NOTES.md`.
+- Per‑subsystem client symbols: §12. Server‑side design Q&A: §13. Indev creative mode: §14.
+- Indev creative/survival game modes (decompiled): `net/minecraft/client/controller/PlayerControllerCreative.java` (creative: `survivalWorld=false`, no HUD, instant break, palette hotbar, mobs still spawn) and `PlayerControllerSP.java` (survival). Serialization manifest: `src/Formats.c` `MCLevel_*`.
