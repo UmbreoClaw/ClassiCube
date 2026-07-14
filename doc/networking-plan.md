@@ -2011,6 +2011,116 @@ events (the SurvivalTest server module subscribes — §5.2, §8.2).
 - [ ] Loaded worlds restore saved mobs; only *generated* worlds run the initial spawn.
 - [ ] Temp‑file + atomic rename; per‑player save on disconnect.
 
+## 29. Server‑side admin/debug commands (MCGalaxy)
+
+Port the client `/client …` debug toolkit to real MCGalaxy commands — but now they
+are **authoritative server actions** that mutate server state and stream the result
+to clients via `SURV_*`, not local pokes.
+
+### 29.1 The set to port (our client debug commands are the spec)
+
+From `src/SurvivalTest.c` (the F9 menu became `/client` chat commands, task #34):
+- **spawn** — `SurvivalTest_DebugSpawnMob(type, noAI, armor)` (+ `DebugSpawnTnt`,
+  `DebugSpawnDrops`, arrow): `/client spawn <zombie|skeleton|pig|creeper|spider|
+  sheep|human|tnt|drops|arrow> [count] [noai] [armor]`.
+- **give** — `SurvivalTest_DebugGiveItem(id)` / `GiveCommand`: give any block/item
+  (tools, food, materials) by name or id, optional count.
+- **time** — set `worldTime`. **god** — invulnerability toggle. **heal** / **hurt** —
+  set/adjust health. **arrows** — give arrows. **kill** — `DebugKillAllMobs`.
+
+Server‑side each does the authoritative thing + emits the sync message:
+`spawn` → server spawns the mob in its sim → `SURV_MOB_SPAWN` to nearby clients;
+`give` → adds to the player's **server** inventory → `SURV_INV_SLOT`; `time` →
+sets server `worldTime` → `SURV_TIME` (+ `EnvColors` for stock clients, §21);
+`heal/hurt/god` → server health → `SURV_HEALTH`; `kill` → despawn all → `SURV_MOB_DESP`.
+**Reuse the client functions as the exact behaviour spec** (types, counts, item
+table, parse rules) — the C# is a port, not a redesign.
+
+### 29.2 Making an MCGalaxy command (structure)
+
+MCGalaxy commands are `Command` subclasses. One **parent** command with
+subcommands keeps the namespace clean and mirrors our `/client` layout (and avoids
+colliding with MCGalaxy's own `/spawn` = go‑to‑spawn and `/give` = economy):
+
+```csharp
+public sealed class CmdSurv : Command2 {
+    public override string name { get { return "Surv"; } }
+    public override string shortcut { get { return "sv"; } }
+    public override string type { get { return CommandTypes.Other; } }
+    // >>> permission: staff only (moderator+). See §29.3.
+    public override LevelPermission defaultRank { get { return LevelPermission.Operator; } }
+
+    public override void Use(Player p, string message, CommandData data) {
+        // require a survival level (§29.4)
+        if (!IsSurvivalLevel(p.level)) { p.Message("Not a survival map."); return; }
+        string[] a = message.SplitSpaces();
+        switch (a[0].ToLower()) {
+            case "spawn": /* validate, spawn mob in server sim, SURV_MOB_SPAWN */ break;
+            case "give":  /* add to server inventory, SURV_INV_SLOT */ break;
+            case "time":  /* set worldTime, SURV_TIME + EnvColors */ break;
+            case "god": case "heal": case "hurt": /* server health, SURV_HEALTH */ break;
+            case "kill":  /* despawn mobs, SURV_MOB_DESP */ break;
+            default: Help(p); break;
+        }
+    }
+    public override void Help(Player p) {
+        p.Message("&T/Surv spawn <mob> [count] [noai] [armor]");
+        p.Message("&T/Surv give <item> [count] &H| time <t> | god | heal | hurt | kill");
+    }
+}
+```
+
+Use `Command2`/`CommandData` (the current MCGalaxy base) and MCGalaxy helpers for
+arg parsing, player lookup (`PlayerInfo.FindMatches`), and messaging (`p.Message`).
+
+### 29.3 ⚠️ Permissions — set to moderator+ (staff only)
+
+**Set `defaultRank` to a staff level (`LevelPermission.Operator`, or the fork's
+`Moderator` rank if it defines one).** These commands spawn mobs, hand out items,
+toggle god mode and edit health/time — regular players must **not** have them, or
+survival is trivially broken. Operators can still re‑tune it at runtime with
+`/cmdset Surv <rank>`; the point is the **default is staff‑only**, never Guest.
+(MCGalaxy's default ranks are Guest/Builder/AdvBuilder/Operator/Owner — if the fork
+has a custom "Moderator" rank between AdvBuilder and Operator, use it; otherwise
+Operator is the standard staff default.)
+
+### 29.4 ⚠️ Auto command load — it must be picked up when compiled
+
+MCGalaxy **auto‑registers** commands compiled into it: `Command.InitAll()` reflects
+over the assembly and registers every **public, non‑abstract `Command` subclass**.
+So to get the new command loaded when compiled:
+- Make the class **`public sealed class Cmd…  : Command2`** (not internal/abstract)
+  and put it in the **MCGalaxy assembly** that `InitAll` scans (or ship it as a
+  plugin DLL in `plugins/` for the plugin loader to pick up).
+- Confirm it appears in `/cmdlist` / `/help Surv` after build — that's the proof it
+  auto‑loaded. If it doesn't show, it wasn't in the scanned assembly or wasn't
+  public.
+- Gate its *behaviour* on survival levels (§29.4 check `IsSurvivalLevel`), but its
+  *registration* is unconditional (it just no‑ops on non‑survival maps).
+
+### 29.5 Notes
+
+- **Authoritative + streamed:** never mutate only a client — do it on the server and
+  let the normal `SURV_*` sync carry it to everyone (so `/surv spawn` shows the mob
+  to all nearby players, `/surv give` echoes the real inventory).
+- **Target selection:** default to the invoking player / their current level;
+  accept an optional player arg for staff acting on others (MCGalaxy convention).
+- **Reuse the tables:** the item/block name→id table and mob type list are the same
+  as the client's (`indev_items[]`, the mob enum) — share one definition (§15.3) so
+  `/surv give iron pickaxe` means the same thing on both ends.
+- **Logging:** these are staff actions — log them (MCGalaxy logs command use), useful
+  for abuse review.
+
+### 29.6 Checklist
+
+- [ ] One parent `/Surv` command (subcommands spawn/give/time/god/heal/hurt/kill),
+      ported from the client debug functions as the spec.
+- [ ] `defaultRank` = Operator / Moderator+ (staff only); adjustable via `/cmdset`.
+- [ ] Public `Command2` subclass in the scanned assembly → auto‑loaded; verify in
+      `/cmdlist`.
+- [ ] Every action is server‑authoritative and streams via `SURV_*`.
+- [ ] Behaviour gated to survival levels; item/mob tables shared with the client.
+
 ## References
 
 - CPE spec: https://c4k3.github.io/wiki.vg/Classic_Protocol_Extension.html
