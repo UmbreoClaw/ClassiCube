@@ -1168,6 +1168,10 @@ static cc_bool MiO_GetIndevCreative(void) { return SurvivalTest_Creative; }
 static void    MiO_SetIndevCreative(cc_bool v) {
 	SurvivalTest_Creative = v;
 	Options_SetBool(OPT_INDEV_CREATIVE, v);
+	/* Damage/break/HUD already read CreativeActive() live; flight is player
+	    state set at map load, so re-apply it now - turning creative off stops
+	    flying immediately instead of on the next map load. */
+	SurvivalTest_CreativeUpdateHacks();
 }
 
 static cc_bool MiO_GetInvert(void) { return Camera.Invert; }
@@ -1219,7 +1223,7 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			"&eAdds non-classic survival extras, like the 3D\n&einventory paperdoll. Off keeps survival faithful\n&eto Minecraft Classic 0.30.");
 		MenuOptionsScreen_AddBool(s, "Indev creative",
 			MiO_GetIndevCreative, MiO_SetIndevCreative,
-			"&eNon-genuine convenience mode for the Indev gamemode:\n&efly, instant no-drop building with infinite blocks from\n&ea scrolling picker, no damage. Takes effect on the next\n&emap load. Indev gamemode only.");
+			"&eNon-genuine convenience mode for the Indev gamemode:\n&efly, instant no-drop building with infinite blocks, no\n&edamage. Applies at once; the starter block palette fills\n&eon the next map load. Indev gamemode only.");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 

@@ -7566,6 +7566,29 @@ static void SurvivalTest_CreativeFillPalette(void) {
 	SurvivalTest_SyncHotbar();
 }
 
+/* Applies the current mode's fly/speed/reach to the local player. Creative gets
+    flight + speed + reach 5; survival revokes them (and, via HacksComp_Update,
+    drops the player out of any active flight/noclip immediately - so toggling
+    creative OFF stops flying right away, not on the next map load). Called on map
+    load and whenever the creative toggle changes. */
+void SurvivalTest_CreativeUpdateHacks(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!SurvivalTest_Enabled || !p) return;
+
+	if (SurvivalTest_CreativeActive()) {
+		p->Hacks.CanFly   = true;
+		p->Hacks.CanSpeed = true;
+		p->ReachDistance  = 5.0f;
+	} else {
+		/* Classic 0.30-s / Indev survival had no fly, noclip or speed hacks. */
+		p->Hacks.CanFly    = false;
+		p->Hacks.CanNoclip = false;
+		p->Hacks.CanSpeed  = false;
+		p->ReachDistance   = 4.0f;
+	}
+	HacksComp_Update(&p->Hacks);
+}
+
 static void SurvivalTest_OnNewMapLoaded(void) {
 	struct LocalPlayer* p;
 	if (!SurvivalTest_Enabled) return;
@@ -7573,24 +7596,9 @@ static void SurvivalTest_OnNewMapLoaded(void) {
 	p = Entities.CurPlayer;
 	if (!p) return;
 
-	/* Classic 0.30-s had no fly, noclip, or speed hacks */
-	p->Hacks.CanFly    = false;
-	p->Hacks.CanNoclip = false;
-	p->Hacks.CanSpeed  = false;
-	HacksComp_Update(&p->Hacks);
-
-	/* SurvivalGameMode.getReachDistance() returns 4 blocks, vs 5 for Creative */
-	p->ReachDistance = 4.0f;
-
-	/* Indev creative (non-genuine convenience): re-enable flight/speed and the
-	    5-block creative reach, overriding the survival defaults above. */
-	if (SurvivalTest_CreativeActive()) {
-		p->Hacks.CanFly   = true;
-		p->Hacks.CanSpeed = true;
-		HacksComp_Update(&p->Hacks);
-		p->ReachDistance  = 5.0f;
+	SurvivalTest_CreativeUpdateHacks(); /* fly/speed/reach for the current mode */
+	if (SurvivalTest_CreativeActive())
 		SurvivalTest_CreativeFillPalette(); /* genuine creative palette hotbar */
-	}
 
 	SurvivalTest_SpawnInitialMobs();
 }

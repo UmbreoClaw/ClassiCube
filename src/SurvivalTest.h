@@ -52,6 +52,10 @@ cc_bool SurvivalTest_CreativeActive(void);
 /* Deposits a full stack of the given block/item id into the inventory (the
     creative block-picker's click action). No-op unless creative is active. */
 void SurvivalTest_CreativeGive(int id);
+/* Applies the current mode's fly/speed/reach to the local player - creative
+    grants flight, survival revokes it (dropping any active flight immediately).
+    Call after the creative toggle changes so it takes effect at once. */
+void SurvivalTest_CreativeUpdateHacks(void);
 
 /* Player's current health points (0 to SURVIVAL_MAX_HEALTH). 0 = dead. */
 extern int SurvivalTest_Health;
