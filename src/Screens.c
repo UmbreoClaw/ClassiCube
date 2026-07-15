@@ -2602,6 +2602,11 @@ static struct SurvivalInvScreen {
 	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory, lblLargeChest;
 	float fontTexF;  /* panel scale the label/count textures were built for */
 	struct Entity    doll;
+	/* Set when opened by a right-click on a workbench/chest/furnace block: the
+	    very right-click that opened the screen is re-delivered here as a CCMOUSE_R
+	    key event, so swallow that first one (else it right-click-splits whatever
+	    slot sits under the crosshair). */
+	cc_bool skipOpenRClick;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
 /* Returns the pixel origin (top-left corner) of an inventory slot: hotbar */
@@ -3659,9 +3664,15 @@ static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* 
 		Gui_Remove((struct Screen*)s);
 	}
 	/* Right mouse arrives as a key event, not a pointer event - route it */
-	/*  through the same click logic using the tracked mouse position. */
-	if (key == CCMOUSE_R && s->mouseX >= 0) {
-		SurvivalInv_Click(s, s->mouseX, s->mouseY, true);
+	/*  through the same click logic using the tracked mouse position. But the */
+	/*  right-click that OPENED a workbench/container is re-delivered here first; */
+	/*  swallow it so it doesn't split the slot under the crosshair. */
+	if (key == CCMOUSE_R) {
+		if (s->skipOpenRClick) {
+			s->skipOpenRClick = false;
+		} else if (s->mouseX >= 0) {
+			SurvivalInv_Click(s, s->mouseX, s->mouseY, true);
+		}
 	}
 	return true;
 }
@@ -3703,6 +3714,11 @@ void SurvivalInvScreen_Show(void) {
 	/*  inventory (Indev's whole point is the 2x2 grid), so both open it; plain */
 	/*  c0.30-s keeps the authentic no-op. */
 	if (!SurvivalTest_Enhanced && !IndevTest_Enabled) return;
+	/* Workbench (3x3) and chest/furnace open via a right-click on the block, so
+	    that right-click leaks in as the first CCMOUSE_R - swallow it (see KeyDown).
+	    The pocket inventory opens via the inventory key, so it has no leaked click. */
+	s->skipOpenRClick = IndevTest_OpenKind() != INDEV_CONTAINER_NONE ||
+	                    SurvivalTest_CraftDim() == 3;
 	s->grabsInput = true;
 	s->closable   = true;
 	s->VTABLE     = &SurvivalInvScreen_VTABLE;
