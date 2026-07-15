@@ -5280,3 +5280,39 @@ landing - freeze velocity (steady death cam), set the impact hurt-wobble
 (st_hurtTicks), and reset st_deathTicks so the zoom/roll start clean. Common
 falls still die on a lower island from fall damage (genuine); -16 is just the
 backstop for falling clean through a gap.
+
+### Fix: perpetual death camera wobble (frozen hurtTime) + floating-depth audit
+User (comparing genuine Indev side-by-side): our Indev death has a "massive
+wobble" where genuine's is subtle; suspected a c0.30 Survival Test effect leaking
+into Indev, and separately that our floating worlds might be "lower" so you fall
+deep. Ran a 7-agent workflow (genuine Indev EntityRenderer vs genuine c0.30
+Renderer.hurtEffect vs our SurvivalTest_ApplyHurtTilt; genuine LevelGenerator vs
+our IndevGen dimensions).
+
+WOBBLE - confirmed real bug, NOT a leak. Genuine Indev and c0.30 camera math is
+byte-for-byte identical: hurt tilt sin((hurtTime/10)^4*pi)*14deg, death keel-roll
+40-8000/(deathTime+200), FOV zoom, and the same no-else STACKING (both stack the
+hurt wobble on the keel-roll for the first ~10 ticks - that part is genuine).
+Root cause was ours-only: SurvivalTest_Tick's `if (st_isDead) {...return;}`
+branch returned BEFORE the `if (st_hurtTicks>0) st_hurtTicks--` line, which is the
+only place the player's hurt timer decrements. So after death st_hurtTicks froze
+at 10, GetHurtTilt never returned false, and the per-hit tilt recomputed every
+frame as the render partial-tick swept 0..1 - a ~20Hz sawtooth ~12deg roll
+forever, on top of the keel-roll = the "massive wobble." Genuine's
+EntityLiving.onEntityUpdate keeps decrementing hurtTime while dead, so the wobble
+decays over ~0.5s and only the slow keel-roll + FOV zoom remain. This affected
+EVERY death (mob kills set st_hurtTicks=10 on the killing blow too), pre-existing;
+the recent void-death st_hurtTicks arming just made it obvious. Fix: decrement
+st_hurtTicks inside the dead branch (one line). Constants/stacking/keel-roll left
+exactly as genuine - no Indev-specific change, since the two versions are identical.
+
+DEPTH - no differential; ours matches genuine exactly. World height is the genuine
+Indev preset (64 default; 256 only for the Deep shape), NOT ClassiCube cube sizes
+and NOT taller/lower (Menus.c:1296-1305 -> Generator.c:90-93). Floating layer
+count (height-64)/48+1 and per-layer waterLevel=height-32-layer*48 are
+byte-identical (IndevGen.c:1294,1299), lowest island y~32 in both, spawn genuine.
+The "fall deep" is GENUINE single-layer behavior: the default Square/Normal
+floating preset is ONE island at y~32 with open void below - the stacked
+catch-islands (every 48 blocks) only exist on the Deep/256 shape (5 layers). Our
+only deviation, ST_VOID_KILL_Y=-16, makes the fatal fall SHORTER than genuine
+(which has no void death and falls indefinitely), never deeper. No change made.

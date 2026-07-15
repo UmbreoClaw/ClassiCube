@@ -7225,10 +7225,15 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	e = &p->Base;
 
 	/* While dead the Game Over screen is up and the world is frozen, but */
-	/*  deathTime keeps counting - it drives the death camera roll + FOV zoom */
-	/*  (the projection matrix is cached, so poke it while the FOV animates). */
+	/*  EntityLiving.onEntityUpdate keeps running: deathTime counts UP (drives */
+	/*  the death camera roll + FOV zoom) AND hurtTime still counts DOWN. Missing */
+	/*  the hurtTime decrement froze st_hurtTicks at 10, so the per-hit tilt */
+	/*  re-fired every frame forever - a perpetual ~20Hz wobble stacked on the */
+	/*  keel-roll. Decrement it here so the killing blow's wobble decays over its */
+	/*  ~10 ticks and then only the slow keel-roll + zoom remain (genuine). */
 	if (st_isDead) {
 		st_deathTicks++;
+		if (st_hurtTicks > 0) st_hurtTicks--;
 		Camera_UpdateProjection();
 		return;
 	}
