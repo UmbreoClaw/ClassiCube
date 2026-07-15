@@ -1167,6 +1167,20 @@ There are **three** id spaces; mixing them corrupts worlds:
 2. **Client engine** ids (what our `World.Blocks` holds at runtime).
 3. **MCGalaxy internal** ids (the server's block table).
 
+**Why (1) and (2) differ — the metadata‑nibble split.** Genuine Indev stores
+`blocks[]` (id) + a parallel `data[]` byte per block, whose **high nibble is the
+block metadata** (0‑15): farmland moisture, chest/furnace facing, crop growth
+stage (all 8 stages are the ONE id 59), torch direction, fire age. Neither our
+client nor MCGalaxy (both Classic‑protocol, id‑only — no per‑position metadata
+array) can pack `id+meta`, so each `(genuine id, nibble)` becomes a **distinct
+runtime id**: crops 85‑92, farmland 83/84, chest facing 71‑74, furnace 75‑82, wall
+torch 94‑97 (id space is cheap — `ExtendedBlocks` gives 65535). The on‑disk `Data`
+array must therefore be **rebuilt from the runtime id on save and decomposed back
+on load** — that's exactly what `IndevTest_BlockToIndev`+`BlockDataMeta` /
+`BlockFromIndev` do. The `data` **low** nibble (light) is not round‑tripped; both
+engines recompute lighting. Fire's dynamic age lives in a side per‑position store
+(`IndevTest_BlockDataMetaAt`), not an id. The server must mirror all of this.
+
 Our client converts on I/O: `IndevTest_BlockToIndev` (engine→genuine, on save)
 and `IndevTest_CanonicalBlock`/the load remap (genuine→engine, on load) — see
 `src/IndevTest.c` (e.g. crate 64 → chest 54, facing furnace variants → canonical).

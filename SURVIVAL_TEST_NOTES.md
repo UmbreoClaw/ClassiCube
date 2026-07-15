@@ -5160,6 +5160,36 @@ genuine 59). The `.mclevel` save/load already encodes them as genuine 59/60 +
 metadata, so this is invisible outside the runtime ids.
 
 ## ENGINE NOTES (useful pointers)
+
+### Indev block metadata vs our id-multiplexing (why crops/farmland use many ids)
+Genuine Indev keeps TWO byte-arrays per world (`World.java`): `blocks[]` (the id)
+and `data[]` (one companion byte per block), where `data` is split into nibbles:
+low 4 bits = **light** (`data & 15`), high 4 bits = **metadata** (`getBlockMetadata`
+returns `data >>> 4 & 15`; `setBlockMetadata` writes `(data & 15) + (val << 4)`).
+So every block carries a 4-bit metadata (0-15). Uses: farmland moisture (0 dry /
+1-7 wet), chest+furnace facing (2-5), crops growth (0-7 → all 8 stages are ONE id
+59), torch direction (1-4 wall / 5 floor), fire age (0-15).
+
+**ClassiCube has NO per-position metadata array** — `struct _WorldData` (`World.h`)
+is just `Blocks` (+ `Blocks2` = the *upper 8 bits of the id* for >255-block worlds,
+NOT metadata). Each position stores only an id. So we can't pack `id+meta`. Two
+workarounds:
+- **A distinct id per rendered state** (id space is cheap — EXTENDED_BLOCKS gives
+  up to 65535): crops 85-92, farmland 83/84, chest facing 71-74, furnace 75-82,
+  wall torch 94-97. One genuine `(id, nibble)` → one of our ids.
+- **A side per-position store** for dynamic metadata that would need too many ids:
+  fire age via `IndevTest_BlockDataMetaAt` (keyed by block index).
+
+**The `.mclevel` boundary rebuilds Indev's exact format** so saves stay byte-genuine:
+save = `IndevTest_BlockToIndev` + `IndevTest_BlockDataMeta` (our id → genuine id +
+high-nibble); load = `IndevTest_BlockFromIndev` (genuine id + nibble → our id). We
+do NOT round-trip the light nibble — ClassiCube recomputes lighting on load.
+
+Adding a REAL metadata array would be an engine-core rework (every id-keyed
+consumer — the chunk builder's `Block_Tex`/draw paths, `Physics.OnRandomTick[]`,
+`Blocks.MinBB[]`/collide/pick — assumes id→fixed), for no visible or save-format
+gain over the multi-id approach. Not worth it; multi-id is the idiomatic solution.
+
 - Component pattern: `IGameComponent` with Init/Free/Reset/OnNewMap/OnNewMapLoaded.
   `SurvivalTest_Component` registered in `src/Game.c`.
 - 20 Hz tick: `ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick)`.
