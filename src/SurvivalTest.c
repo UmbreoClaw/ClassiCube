@@ -76,10 +76,11 @@ cc_bool SurvivalTest_CreativeActive(void) {
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
 /* Y below which falling through the world's bottom (a floating-map void) is
-   fatal. Genuine in-20100223 has no explicit void death - a floating map is
-   simply bottomless (getBlockId clamps y<0 to the air at y=0) - but our engine
-   would otherwise leave you falling forever, so past this depth is a hard kill. */
-#define ST_VOID_KILL_Y   (-64.0f)
+   fatal. Genuine in-20100223 has no explicit void death - normally you land on
+   a lower floating-island layer and die from fall damage near terrain - so keep
+   this shallow (just under the world) rather than a deep empty-void plunge, so
+   the death camera zoom/roll play out against visible terrain like the original. */
+#define ST_VOID_KILL_Y   (-16.0f)
 /* Mob.hurtTime/hurtDuration: every successful hit sets a fixed 10-tick */
 /*  window (regardless of damage dealt), used only for the camera-tilt cue. */
 #define HURT_TILT_TICKS    10
@@ -7285,7 +7286,14 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 			e->VTABLE->SetLocation(e, &update);
 			Vec3_Set(e->Velocity, 0.0f, 0.0f, 0.0f);
 		} else if (!st_isDead) {
+			/* Mirror a genuine fatal landing: the impact hurt-wobble, then the */
+			/*  death state that drives the FOV zoom + keel-over roll (st_deathTicks). */
+			/*  Freeze the fall so the death camera is steady, like onDeath's near-stop. */
 			Indev_PlaySoundAt(e->Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+			Vec3_Set(e->Velocity, 0.0f, 0.0f, 0.0f);
+			st_hurtTicks  = HURT_TILT_TICKS;
+			st_hurtDir    = 0.0f;
+			st_deathTicks = 0;
 			SurvivalTest_Health = 0;
 			st_isDead = true;
 			SurvivalTest_DropInventory();

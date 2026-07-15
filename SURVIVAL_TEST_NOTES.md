@@ -5260,3 +5260,23 @@ floor. So the FEATURE is real/desired; the mechanism just needed to move from
 
 Builds + links clean (`make PLAT=linux`). c0.30-s untouched (`IndevTest_Enabled`
 false there, and the bedrock floor stays since the flag is never set).
+
+### Follow-up: void death should land near terrain (zoom/shake visible)
+User compared genuine Indev vs ours on a floating world: genuine "stops after a
+while" and the death screen zooms + camera keels over; ours plunged into a deep
+empty void and appeared to do neither.
+
+Diagnosis: the FOV zoom (Camera.c:53 <- SurvivalTest_DeathFovZoom) and death
+keel-over roll (Game.c:511 <- SurvivalTest_ApplyHurtTilt, st_deathTicks-driven)
+are both already wired and DO fire on the void death - you just couldn't see
+them because you died at y=-64 in featureless void. Genuine has no void-death
+plane at all: you land on a lower floating-island LAYER (our generator ports
+these - IndevGen.c:1294 layers=(height-64)/48+1) and die from fall damage near
+terrain, so the animation plays against visible ground.
+
+Fix: ST_VOID_KILL_Y -64 -> -16 (die just under the world, terrain still in view
+instead of an empty-void plunge), and the kill now mirrors a genuine fatal
+landing - freeze velocity (steady death cam), set the impact hurt-wobble
+(st_hurtTicks), and reset st_deathTicks so the zoom/roll start clean. Common
+falls still die on a lower island from fall damage (genuine); -16 is just the
+backstop for falling clean through a gap.
