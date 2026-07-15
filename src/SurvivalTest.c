@@ -7233,6 +7233,14 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/*  keel-roll. Decrement it here so the killing blow's wobble decays over its */
 	/*  ~10 ticks and then only the slow keel-roll + zoom remain (genuine). */
 	if (st_isDead) {
+		/* Death is modal: the only ways out are generating/loading a world (both
+		    clear st_isDead on map load) or respawning. But the Game Over screen's
+		    "Generate new level" button opens a menu whose cancel/escape chain
+		    (-> pause -> back to game) could drop you into live gameplay while still
+		    dead. If we ever end up with no menu grabbing input while dead, the
+		    screen was bypassed - re-assert it. (It grabs input, so this is a no-op
+		    whenever it or any menu is already up.) */
+		if (!Gui_GetInputGrab()) GameOverScreen_Show();
 		st_deathTicks++;
 		if (st_hurtTicks > 0) st_hurtTicks--;
 		Camera_UpdateProjection();

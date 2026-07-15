@@ -5316,3 +5316,19 @@ floating preset is ONE island at y~32 with open void below - the stacked
 catch-islands (every 48 blocks) only exist on the Deep/256 shape (5 layers). Our
 only deviation, ST_VOID_KILL_Y=-16, makes the fatal fall SHORTER than genuine
 (which has no void death and falls indefinitely), never deeper. No change made.
+
+### Fix: death screen bypass via Generate-new-level -> escape
+User: you can bypass the Game Over screen by clicking "Generate new level..." and
+then pressing escape. Cause: GameOverScreen_OnGen (Screens.c:3810) removes the
+Game Over screen and opens GenLevelScreen, whose cancel/escape routes to
+Menu_SwitchPause (Menus.c:1235) -> pause menu -> "Back to game" -> live gameplay
+while st_isDead is still true (dead, no screen, playable). Same for Load level.
+
+Fix (SurvivalTest.c, st_isDead branch of SurvivalTest_Tick): death is modal - the
+only exits are generating/loading a world (both clear st_isDead on map load via
+ResetState) or respawning. If we ever end up dead with NO screen grabbing input
+(Gui_GetInputGrab()==NULL, i.e. back in live gameplay), the screen was bypassed,
+so re-assert GameOverScreen_Show(). It grabs input, so the check is a no-op while
+it or any menu is already up; and it can't misfire during generation because the
+new map clears st_isDead before gameplay resumes. Catch-all - also covers pressing
+escape directly on the death screen. Applies to both c0.30-s and Indev survival.
