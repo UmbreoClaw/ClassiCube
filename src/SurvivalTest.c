@@ -76,11 +76,12 @@ cc_bool SurvivalTest_CreativeActive(void) {
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
 /* Y below which falling through the world's bottom (a floating-map void) is
-   fatal. Genuine in-20100223 has no explicit void death - normally you land on
-   a lower floating-island layer and die from fall damage near terrain - so keep
-   this shallow (just under the world) rather than a deep empty-void plunge, so
-   the death camera zoom/roll play out against visible terrain like the original. */
-#define ST_VOID_KILL_Y   (-16.0f)
+   fatal. Genuine in-20100223 has no explicit void death at all - normally you
+   land on a lower floating-island layer and die from fall damage, or (on a
+   single-layer world) fall forever - so this threshold is purely our backstop.
+   -32 gives a clear void plunge below the world bottom (y=0) while the death
+   camera zoom/roll still play out with terrain in frame, not an empty-sky drop. */
+#define ST_VOID_KILL_Y   (-32.0f)
 /* Mob.hurtTime/hurtDuration: every successful hit sets a fixed 10-tick */
 /*  window (regardless of damage dealt), used only for the camera-tilt cue. */
 #define HURT_TILT_TICKS    10
