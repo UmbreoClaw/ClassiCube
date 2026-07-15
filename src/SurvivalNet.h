@@ -23,7 +23,7 @@ extern struct IGameComponent SurvivalNet_Component;
    Multi-byte fields are big-endian; positions are int16 fixed-point (coord*32). */
 enum SurvNetMsg {
 	/* --- server -> client (authoritative state) --- */
-	SURV_HELLO        = 0x01, /* mode, flags(enhanced/pvp/deathDrops), protoVer */
+	SURV_HELLO        = 0x01, /* mode, flags(enhanced/creative/pvp/deathDrops), protoVer */
 	SURV_WORLDINFO    = 0x02, /* ground/water level, fluid, theme, floating, env, time */
 	SURV_HEALTH       = 0x03, /* health, score */
 	SURV_TIME         = 0x04, /* worldTime, eased sky light */

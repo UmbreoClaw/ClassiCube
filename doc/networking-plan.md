@@ -1839,8 +1839,8 @@ refine*, not frozen; bump the `SurvivalTest` ext version when it changes (§20/�
 **Server → client (state):**
 
 ```
-SURV_HELLO      0x01  [1]mode(0 off/1 c030s/2 indev/3 indevCreative)
-                      [2]flags(b0 enhanced, b1 pvp, b2 deathDrops)  [3]protoVer
+SURV_HELLO      0x01  [1]mode(0 off/1 c030s/2 indev)
+                      [2]flags(b0 enhanced, b1 creative, b2 pvp, b3 deathDrops)  [3]protoVer
 SURV_WORLDINFO  0x02  [1..2]groundLevel(i16)  [3..4]waterLevel(i16)  [5]fluidId
                       [6]theme  [7]flags(b0 floating)  [8]edgeBlk  [9]sidesBlk
                       [10..11]sidesOffset(i16)  [12..14]skyRGB  [15..17]fogRGB

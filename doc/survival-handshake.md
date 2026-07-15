@@ -152,7 +152,7 @@ fixed-point (`coord × 32`). Byte 0 is always the message id. Payload is the fix
 |---|---|---|---|
 | 0 | 1 | id = 0x01 | |
 | 1 | 1 | mode | 0 = off, 1 = c0.30-s, 2 = Indev |
-| 2 | 1 | flags | bit0 enhanced, bit1 pvp, bit2 deathDrops, … |
+| 2 | 1 | flags | bit0 enhanced, bit1 creative, bit2 pvp, bit3 deathDrops, … |
 | 3 | 1 | protoVer | sub-protocol revision (see caveat §6) |
 
 ### `SURV_WORLDINFO` (0x02) — server → client
