@@ -2458,6 +2458,12 @@ static void OnNewMapLoaded(void) {
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
 
+	/* Genuine getBlockId clamps y<0 to y=0, so floating maps (air at y=0) are
+	    bottomless - you fall through into the void instead of landing on the
+	    engine's default invisible bedrock floor. SurvivalTest kills you once
+	    you cross well below the world. */
+	World_FallThroughFloor = true;
+
 	/* Genuine surroundings: no border walls, but the OOB ground/fluid
 	    horizon planes (see Indev_ApplySurroundings). When the generator
 	    didn't record levels, pin them from what the map loader left in the

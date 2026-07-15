@@ -96,6 +96,10 @@ static CC_INLINE BlockID World_GetBlock(int x, int y, int z) {
 /* If coordinates are outside the map, returns BLOCK_AIR. */
 /* Otherwise returns the block at the given coordinates. */
 BlockID World_GetPhysicsBlock(int x, int y, int z);
+/* When set, physics below the map (y<0) reads the y=0 layer instead of a solid */
+/*  bedrock floor - the genuine Indev clamp, so floating maps are bottomless. */
+/*  Reset to false on every map load; the Indev component sets it for its maps. */
+extern cc_bool World_FallThroughFloor;
 /* Sets the block at the given coordinates. */
 /* NOTE: Does NOT check that the coordinates are inside the map. */
 void World_SetBlock(int x, int y, int z, BlockID block);

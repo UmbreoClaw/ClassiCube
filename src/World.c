@@ -51,6 +51,7 @@ void World_Reset(void) {
 	World.Loaded   = false;
 	World.LastSave = -200;
 	World.Seed     = 0;
+	World_FallThroughFloor = false;
 	Env_Reset();
 }
 
@@ -63,6 +64,7 @@ void World_SetNewMap(BlockRaw* blocks, int width, int height, int length) {
 	/* TODO: TEMP HACK */
 	if (!blocks) { width = 0; height = 0; length = 0; }
 
+	World_FallThroughFloor = false; /* Indev's OnNewMapLoaded re-enables it for its maps */
 	World_SetDimensions(width, height, length);
 	World.Blocks      = blocks;
 	World.Name.length = 0;
@@ -140,8 +142,19 @@ void World_SetBlock(int x, int y, int z, BlockID block) {
 }
 #endif
 
+/* When set, coordinates below the world read the y=0 layer instead of the
+   default solid bedrock floor - the genuine Indev getBlockId clamp (y<0 -> y=0).
+   On a floating map that layer is air, so you fall through into the open void
+   rather than landing on an invisible floor just below the islands. Set per-map
+   by the Indev component; a plain Classic/c0.30 map keeps the bedrock floor. */
+cc_bool World_FallThroughFloor;
+
 BlockID World_GetPhysicsBlock(int x, int y, int z) {
-	if (y < 0 || !World_ContainsXZ(x, z)) return BLOCK_BEDROCK;
+	if (!World_ContainsXZ(x, z)) return BLOCK_BEDROCK;
+	if (y < 0) {
+		if (World_FallThroughFloor) return World_GetBlock(x, 0, z);
+		return BLOCK_BEDROCK;
+	}
 	if (y >= World.Height) return BLOCK_AIR;
 
 	return World_GetBlock(x, y, z);

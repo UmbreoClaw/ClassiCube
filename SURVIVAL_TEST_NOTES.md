@@ -5214,3 +5214,49 @@ gain over the multi-id approach. Not worth it; multi-id is the idiomatic solutio
   compiled clean). Fixed by `apt-get update` then installing both packages — full
   `make PLAT=linux` now compiles **and links** successfully. Windows CI remains the
   authoritative compile gate either way.
+
+## SESSION LOG - Floating-world void death (fall through the map)
+
+User report + screenshot: on a floating world you "die too close to the islands"
+when you fall - it doesn't look genuine. Position readout showed (x, **0**, z):
+the player was standing on an invisible floor right under the islands, not
+falling into the open void.
+
+### Root cause
+Two engine facts collided:
+- Genuine `World.getBlockId` CLAMPS y<0 -> y=0 (World.java). On a floating map
+  the Assembling pass hollows y=0/y=1 to air, so "below the world" reads air ->
+  you fall through into a bottomless void. (Normal/hell maps have solid or lava
+  at y=0, so the clamp still gives a floor / lava sink there.)
+- ClassiCube's `World_GetPhysicsBlock` returns `BLOCK_BEDROCK` for ANY y<0 - a
+  global "you can't fall out of the map" convention. So on our floating maps you
+  dropped a couple blocks and landed on invisible bedrock at y=0, took the
+  genuine fall damage on that landing, and died right under the islands.
+
+Also confirmed while investigating: genuine in-20100223 has NO explicit void
+death opcode anywhere (Entity/EntityLiving/EntityPlayer/World all checked). A
+genuine floating map is simply bottomless - you fall forever. The "you die when
+you fall through" the user (correctly) observed is fall damage on our bedrock
+floor. So the FEATURE is real/desired; the mechanism just needed to move from
+"invisible floor next to the islands" to "open void + a deep hard kill."
+
+### Fix
+- **`World_FallThroughFloor`** (new global, `World.c`/`.h`): when set, y<0 reads
+  `World_GetBlock(x, 0, z)` - the genuine getBlockId clamp - instead of bedrock.
+  Reset to false in `World_Reset` and at the top of `World_SetNewMap`; the Indev
+  component sets it true in `OnNewMapLoaded`. So classic/c0.30 maps keep the
+  bedrock floor (mode purity), and non-floating Indev maps are unchanged (their
+  y=0 is solid, so the clamp still returns a floor). Floating maps become
+  genuinely bottomless.
+- **`ST_VOID_KILL_Y = -64`** (`SurvivalTest.c` tick): Indev-gated. Fall below it
+  and it's a hard kill (force Health=0 -> Game Over + drop inventory), exempt
+  while flying/noclip. Creative can't take damage, so instead it snap-teleports
+  back to spawn (LocationUpdate) to avoid an endless fall. This is the ONE
+  non-genuine bit (genuine = fall forever), added because our engine can't
+  express an infinite drop cleanly and the user wants the void to be fatal.
+- **Mob void cleanup** (`SurvivalTest_TickOneMob`): a mob that wanders off a
+  floating island past `ST_VOID_KILL_Y` gets its slot freed (`m->active=false`)
+  instead of falling forever and leaking the slot.
+
+Builds + links clean (`make PLAT=linux`). c0.30-s untouched (`IndevTest_Enabled`
+false there, and the bedrock floor stays since the flag is never set).

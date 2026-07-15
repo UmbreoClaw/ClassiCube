@@ -75,6 +75,11 @@ cc_bool SurvivalTest_CreativeActive(void) {
 #define AIR_SUPPLY_SECS    15.0f
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
+/* Y below which falling through the world's bottom (a floating-map void) is
+   fatal. Genuine in-20100223 has no explicit void death - a floating map is
+   simply bottomless (getBlockId clamps y<0 to the air at y=0) - but our engine
+   would otherwise leave you falling forever, so past this depth is a hard kill. */
+#define ST_VOID_KILL_Y   (-64.0f)
 /* Mob.hurtTime/hurtDuration: every successful hit sets a fixed 10-tick */
 /*  window (regardless of damage dealt), used only for the camera-tilt cue. */
 #define HURT_TILT_TICKS    10
@@ -4194,6 +4199,10 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 	e->Pitch    = e->prev.pitch;
 	e->RotY     = e->prev.rotY;
 
+	/* Wandered off a floating island into the bottomless void - despawn the */
+	/*  slot rather than leave it falling forever (genuine mobs just vanish). */
+	if (e->Position.y < ST_VOID_KILL_Y) { m->active = false; return; }
+
 	if (m->invincTicks > 0) m->invincTicks--;
 	if (m->hurtTicks   > 0) m->hurtTicks--;
 	/* Mob.tick decrements attackTime before the AI runs, so a hit landed this */
@@ -7260,6 +7269,30 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/*  shallow lava does NOT cushion a fall. */
 	if (inWater) st_falling = false;
 	SurvivalTest_UpdateFall(e, p, onGround);
+
+	/* Void death: on a floating Indev map you fall through the bottom of the */
+	/*  world (World_FallThroughFloor) - past ST_VOID_KILL_Y that is fatal. */
+	/*  Creative can't take damage, so instead snap it back to spawn to avoid */
+	/*  an endless fall. Flying/noclip are exempt (you're not really falling). */
+	if (IndevTest_Enabled && e->next.pos.y < ST_VOID_KILL_Y
+			&& !p->Hacks.Flying && !p->Hacks.Noclip) {
+		if (SurvivalTest_CreativeActive()) {
+			struct LocationUpdate update;
+			update.flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH | LU_POS_ABSOLUTE_INSTANT;
+			update.pos   = p->Spawn;
+			update.yaw   = p->SpawnYaw;
+			update.pitch = p->SpawnPitch;
+			e->VTABLE->SetLocation(e, &update);
+			Vec3_Set(e->Velocity, 0.0f, 0.0f, 0.0f);
+		} else if (!st_isDead) {
+			Indev_PlaySoundAt(e->Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+			SurvivalTest_Health = 0;
+			st_isDead = true;
+			SurvivalTest_DropInventory();
+			GameOverScreen_Show();
+			return;
+		}
+	}
 
 	/* Lava damage - Mob.tick: hurt(null, 10) every tick; the invulnerability */
 	/*  window's dual threshold (see SurvivalTest_Damage) is what shapes this */
