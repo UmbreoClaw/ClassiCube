@@ -730,8 +730,11 @@ server simulates and validates; the client only sends intents and renders.**
 >   the gamemode is Indev.
 > - **Behaviours (all gated on `CreativeActive()`):** no damage in/out
 >   (`survivalWorld=false` equiv), instant no‑drop breaking, **no block consumed on
->   place (infinite)**, no survival HUD, flight + speed + reach 5. **Mobs still
->   spawn** (genuine).
+>   place (infinite)**, no survival HUD, reach 5, and **flight/speed**. **Mobs still
+>   spawn** (genuine). Fidelity note: everything here is from the dead
+>   `PlayerControllerCreative` **except flight/speed** — genuine Indev had no fly at
+>   all (grep‑confirmed), so it's the one deliberate non‑genuine convenience (kept
+>   by choice). Reach 5 **is** genuine (base `getBlockReachDistance`, vs SP's 4).
 > - **Inventory = the genuine model** (Beta picker reverted): opening the inventory
 >   shows the **Indev `GuiInventory` panel** (the same textured `SurvivalInvScreen`
 >   survival uses), and blocks come from the genuine **9‑slot palette hotbar**

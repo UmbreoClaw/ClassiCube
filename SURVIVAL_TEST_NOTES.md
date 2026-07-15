@@ -5122,6 +5122,16 @@ false + `Inventory_Remove`), leaving only genuine Indev blocks. Indev-only, so
 c0.30-s and plain creative keep their full block sets. gdb-verified. Full detail
 + the crops(59)/farmland(60) internal-id relocation are in AUDIT_FINDINGS.md #20.
 
+### Fidelity note: flight is the ONE invented bit
+Everything creative does maps to the dead `PlayerControllerCreative` - no damage
+(`survivalWorld=false`), no HUD (`shouldDrawHUD()=false`), instant no-drop build,
+9-slot palette hotbar (`onRespawn`), mobs still spawn (`onUpdate` spawner) - AND
+reach 5 is genuine too (base `getBlockReachDistance`, SP overrides to 4). The
+sole non-genuine addition is **flight/speed**: Indev had no fly anywhere
+(grep-confirmed across the player + controller code). Kept by user choice as a
+deliberate convenience; `SurvivalTest_CreativeUpdateHacks` is where fly/speed are
+granted, so removing them later is a one-function change.
+
 ### Creative-never-bleeds-into-survival audit (user-requested)
 Every creative behavior routes through `SurvivalTest_CreativeActive()` =
 `Creative && IndevTest_Enabled`. So the toggle is inert in c0.30-s (IndevTest
