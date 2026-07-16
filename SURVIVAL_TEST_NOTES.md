@@ -5425,3 +5425,65 @@ together), but keep the docs. Done via `git checkout a97647d -- src/`:
   (Minecraft.java:323 "Minecraft 0.30", Renderer.hurtEffect:48, Mob.java:342
   hurtTime=hurtDuration=10 confirmed). Recorded here so future sessions can
   re-clone without hunting: EaglerPorts/in-20100223 + ManiaDevelopment/MCraft-Client.
+
+## SESSION LOG - Genuine Indev sky lighting (flooded 0-15 channel, caves get dark)
+
+User: how does Indev compute lighting, do caves get dark, don't we light
+everywhere? Right on all counts - our fancy-lighting sky was ClassiCube's BINARY
+column bit (sun vs a flat ~61% "shadow" shade), so caves only got tree-shade
+dark, never the genuine near-black, and the cave mouth had a hard edge instead
+of a fade. Genuine Light.java is a real flooded 0-15 channel.
+
+### Genuine model (Light.java, verified against EaglerPorts/in-20100223)
+- One 0-15 light value per block in data[]'s low nibble; heightmap-exposed cells
+  are sky sources at the eased day level, flood-filling 6-way losing >=1 per
+  block (>=lightOpacity; water=3). Emitters set a floor at Block.lightValue
+  (lava/fire 15, torch/lit-furnace 14, brown mushroom 1). Fully-opaque=0.
+- Day/night doesn't re-flood: updateDaylightCycle walks the map nudging every
+  sky cell +-1 as the level eases. Render = table[L], L15->1.0, L0->0.05 (the
+  (1-v)/(3v+1)*0.95+0.05 curve, World.java:1657). So caves bottom out near-black.
+
+### Port (FancyLighting.c, Indev-gated via indevSky = IndevTest_Enabled)
+- Sky reuses the LAVA nibble (genuine Indev has no tinted lava light - moved
+  every emitter to the LAMP nibble at its genuine lightValue in IndevBlocks_
+  Define, freeing the low nibble). Above-heightmap cells stay IMPLICIT (no
+  storage; the sun palette group), so only cave light costs memory.
+- CalculateChunkLightingSelf seeds each column's sky boundary cells (Indev_
+  SeedSkyColumn: column-bottom + cells at/under a neighbour's heightmap) at 15
+  and floods. Water attenuates the extra 2 in FlushLightQueue (opacity 3).
+- Day/night = palette rebuild only, NO re-flood: effSky = flood - (15 - k),
+  which is mathematically identical to genuine's incremental walk for the
+  max(lamp, sky) query. InitPaletteIndev builds table[max(lamp, effSky)] * face
+  shade; the skyLit (sun) group ignores the stored nibble and uses k directly.
+- Block changes: OnBlockChanged diffs the classic heightmap and Indev_SkyBlock
+  Changed unlights cells that lost sky + re-seeds the 5 affected columns.
+- Gameplay light query rerouted: IndevTest_LightLevel -> FancyLighting_IndevLight
+  (combined max of lamp + effSky), so spawn darkness rule / crop growth / grass
+  decay read the genuine value, not the old binary approximation.
+- Day/night tick: FancyLighting_SetIndevSky(k) before the Env sun-colour change
+  (which rebuilds palettes); stopped needing the SunCol/ShadowCol SCALE to carry
+  cave darkness (palette does it now) but kept it for the OOB horizon + non-fancy.
+
+### Rig verification (gdb, live singleplayer Indev world 128x64x128, fancy mode)
+Controlled sealed stone box in open air, then a 1-block roof skylight:
+- SEALED interior centre + corner = 0  (pitch black - CAVES GET DARK) [PASS]
+- directly under the skylight, y+1 and y+2 = 15 (full vertical sun)   [PASS]
+- 1 block off the shaft = 14, diagonal corner = 13 (-1/block flood)   [PASS]
+- torch bubble = 14/13/12                                             [PASS]
+- surface (open sky) = 15; buried solid = 0                           [PASS]
+In-world screenshot: real gradient inside the generated house (bright at the
+door, dark ceiling/corners) - previously one flat shade. (An earlier synthetic
+horizontal-tunnel dig read non-monotonic, but that was light leaking through
+real generated terrain around the bore, not the algorithm - the sealed box is
+the clean proof.)
+Non-Indev untouched: indevSky=false keeps the stock sun/shadow palettes, so
+c0.30-s and plain creative ClassiCube are byte-identical to before.
+
+### Rig/env notes
+- Fresh container had no default.zip -> "resources missing" dialog blocks world
+  load; seeded texpacks/default.zip from misc/ps1/classicube.zip to test.
+- Pre-existing latent risk observed: IndevTest_LightLevel can be reached from
+  the gen thread's MobSpawner before classic_heightmap exists on some paths
+  (NULL deref in ClassicLighting_GetLightHeight). Guarded reads already clamp
+  coords; the FancyLighting_IndevLight path early-outs on !chunkLightingData.
+  Not introduced here, but flagged for the full-fidelity audit (task #42).

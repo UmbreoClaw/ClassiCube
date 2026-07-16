@@ -12,6 +12,33 @@
 #include "ExtMath.h"
 #include "Options.h"
 #include "Queue.h"
+#include "IndevTest.h"
+
+/* ==== Indev genuine lighting (Light.java) ====
+   On Indev maps the sky is a real flooded 0..15 channel, not the binary
+   sun/shadow bit: cells above the heightmap are sky SOURCES, and light
+   flood-fills into caves losing (at least) 1 per block - so caves fade to
+   light 0, which the genuine brightness curve renders at 5% (near-black).
+   Storage reuses the LAVA nibble (genuine Indev has no tinted lava light;
+   every emitter - lava 15, fire 15, torch 14, lit furnace 14, brown
+   mushroom 1 - lives in the LAMP nibble at its genuine Block.lightValue).
+   Above-heightmap cells stay implicit (no storage; the sun palette group
+   ignores the stored nibble), so only cave light costs memory.
+
+   Day/night never re-floods: genuine updateDaylightCycle injects the eased
+   sky level k and re-walks the map, but with uniform attenuation that is
+   exactly effSky = skyFlood - (15 - k), so dimming is only a palette
+   rebuild. Final brightness = genuine table[max(lamp, effSky)]. */
+static cc_bool indevSky;          /* Indev map: flooded-sky mode is active */
+static int indevSkyLevel = 15;    /* eased day/night sky level k (4..15) */
+
+void FancyLighting_SetIndevSky(int level) {
+	if (level > 15) level = 15;
+	if (level < 0)  level = 0;
+	indevSkyLevel = level;
+	/* The caller (Indev day/night tick) changes Env.SunCol right after,
+	    which rebuilds the palettes and refreshes the chunk colours. */
+}
 
 struct LightNode {
 	IVec3 coords; /* 12 bytes */
@@ -77,12 +104,48 @@ static void InitPalette(PackedCol* palette, float shaded, PackedCol ambientColor
 		}
 	}
 }
+/* Genuine Indev palette: entry (lamp, skyStored) = white scaled through the
+    genuine lightBrightnessTable curve at max(lamp, effective sky), shaded by
+    the face factor (1.0 / 0.8 / 0.6 / 0.5 - the genuine RenderBlocks set).
+    skyLit palettes (the sun group, picked for cells above the heightmap)
+    ignore the stored nibble and use the current sky level directly - those
+    cells are implicit sources and may have no storage at all. */
+static void InitPaletteIndev(PackedCol* palette, float shaded, cc_bool skyLit) {
+	int lampLevel, skyStored, effSky, light;
+	float bright;
+
+	for (lampLevel = 0; lampLevel < FANCY_LIGHTING_LEVELS; lampLevel++) {
+		for (skyStored = 0; skyStored < FANCY_LIGHTING_LEVELS; skyStored++) {
+			effSky = skyLit ? indevSkyLevel
+			                : skyStored - (FANCY_LIGHTING_MAX_LEVEL - indevSkyLevel);
+			if (effSky < 0) effSky = 0;
+			light  = lampLevel > effSky ? lampLevel : effSky;
+			bright = IndevTest_BrightnessOfLight(light) * shaded;
+
+			palette[MakePaletteIndex(lampLevel, skyStored)] =
+				PackedCol_Scale(PACKEDCOL_WHITE, bright);
+		}
+	}
+}
+
 static void InitPalettes(void) {
 	int i;
 	for (i = 0; i < PALETTE_COUNT; i++) {
 		palettes[i] = (PackedCol*)Mem_Alloc(FANCY_LIGHTING_LEVELS * FANCY_LIGHTING_LEVELS, sizeof(PackedCol), "light color palette");
 	}
 	i = 0;
+	if (indevSky) {
+		InitPaletteIndev(palettes[i + PALETTE_YMAX_INDEX],  1,                    false);
+		InitPaletteIndev(palettes[i + PALETTE_XSIDE_INDEX], PACKEDCOL_SHADE_X,    false);
+		InitPaletteIndev(palettes[i + PALETTE_ZSIDE_INDEX], PACKEDCOL_SHADE_Z,    false);
+		InitPaletteIndev(palettes[i + PALETTE_YMIN_INDEX],  PACKEDCOL_SHADE_YMIN, false);
+		i += PALETTE_SHADES;
+		InitPaletteIndev(palettes[i + PALETTE_YMAX_INDEX],  1,                    true);
+		InitPaletteIndev(palettes[i + PALETTE_XSIDE_INDEX], PACKEDCOL_SHADE_X,    true);
+		InitPaletteIndev(palettes[i + PALETTE_ZSIDE_INDEX], PACKEDCOL_SHADE_Z,    true);
+		InitPaletteIndev(palettes[i + PALETTE_YMIN_INDEX],  PACKEDCOL_SHADE_YMIN, true);
+		return;
+	}
 	InitPalette(palettes[i + PALETTE_YMAX_INDEX],  1,                    Env.ShadowCol);
 	InitPalette(palettes[i + PALETTE_XSIDE_INDEX], PACKEDCOL_SHADE_X,    Env.ShadowCol);
 	InitPalette(palettes[i + PALETTE_ZSIDE_INDEX], PACKEDCOL_SHADE_Z,    Env.ShadowCol);
@@ -102,6 +165,10 @@ static void FreePalettes(void) {
 
 static int chunksCount;
 static void AllocState(void) {
+	/* Whether this map uses the genuine Indev flooded-sky model - resolved
+	    per lighting (re)alloc so map changes and mode flips pick it up */
+	indevSky = IndevTest_Enabled;
+
 	ClassicLighting_AllocState();
 	InitPalettes();
 	chunksCount = World.ChunksCount;
@@ -230,6 +297,14 @@ static void FlushLightQueue(cc_bool isLamp, cc_bool refreshChunk) {
 	while (lightQueue.count > 0) {
 		ln = *(struct LightNode*)(Queue_Dequeue(&lightQueue));
 
+		thisBlock = World_GetBlock(ln.coords.x, ln.coords.y, ln.coords.z);
+		/* Genuine Light.java attenuates by the RECEIVING cell's lightOpacity
+		    (minimum 1): water is 3, so light entering a water cell pays 2 on
+		    top of the standard 1 the sender already subtracted. */
+		if (indevSky && (thisBlock == BLOCK_WATER || thisBlock == BLOCK_STILL_WATER)) {
+			ln.brightness = ln.brightness > 2 ? ln.brightness - 2 : 0;
+		}
+
 		brightnessHere = GetBrightness(ln.coords.x, ln.coords.y, ln.coords.z, isLamp);
 
 		/* If this cell is already more lit, we can assume this cell and its neighbors have been accounted for */
@@ -238,7 +313,6 @@ static void FlushLightQueue(cc_bool isLamp, cc_bool refreshChunk) {
 
 		SetBrightness(ln.brightness, ln.coords.x, ln.coords.y, ln.coords.z, isLamp, refreshChunk);
 
-		thisBlock = World_GetBlock(ln.coords.x, ln.coords.y, ln.coords.z);
 		ln.brightness--;
 		if (ln.brightness == 0) continue;
 
@@ -268,6 +342,32 @@ cc_uint8 GetBlockBrightness(BlockID curBlock, cc_bool isLamp) {
 
 #define LightNode_Init(node, X, Y, Z, bright) \
 	node.coords.x = X; node.coords.y = Y; node.coords.z = Z; node.brightness = bright;
+
+/* Enqueues the sky SOURCE seeds for one column, restricted to [yMin, yMax]:
+    the bottom-most sky cell (spreads down into the column top / caves) and
+    every sky cell with a non-sky horizontal neighbor (cliff/cave-mouth faces,
+    i.e. y at or below some neighbor column's heightmap). Cells above every
+    neighbouring heightmap border only sky and spread nothing useful. */
+static void Indev_SeedSkyColumn(int x, int z, int yMin, int yMax) {
+	struct LightNode entry;
+	int h = ClassicLighting_GetLightHeight(x, z);
+	int top = h, y, hn;
+
+	if (x > 0)            { hn = ClassicLighting_GetLightHeight(x - 1, z); if (hn > top) top = hn; }
+	if (x < World.MaxX)   { hn = ClassicLighting_GetLightHeight(x + 1, z); if (hn > top) top = hn; }
+	if (z > 0)            { hn = ClassicLighting_GetLightHeight(x, z - 1); if (hn > top) top = hn; }
+	if (z < World.MaxZ)   { hn = ClassicLighting_GetLightHeight(x, z + 1); if (hn > top) top = hn; }
+
+	if (top < h + 1)        top = h + 1; /* always seed the column-bottom sky cell */
+	if (top > World.MaxY)   top = World.MaxY;
+	if (yMin < h + 1)       yMin = h + 1;
+	if (yMax > top)         yMax = top;
+
+	for (y = yMin; y <= yMax; y++) {
+		LightNode_Init(entry, x, y, z, FANCY_LIGHTING_MAX_LEVEL);
+		Queue_Enqueue(&lightQueue, &entry);
+	}
+}
 
 static void CalculateChunkLightingSelf(int chunkIndex, int cx, int cy, int cz) {
 	int x, y, z;
@@ -317,6 +417,18 @@ static void CalculateChunkLightingSelf(int chunkIndex, int cx, int cy, int cz) {
 				This has the added benefit of being able to skip allocating chunk lighting data in regions that have no light-casting blocks*/
 			}
 		}
+	}
+
+	/* Indev: sky is a real flooded channel - seed this chunk's columns' sky
+	    sources (boundary cells only) and flood them into caves/overhangs.
+	    Above-heightmap cells stay implicit via the sun palette group. */
+	if (indevSky) {
+		for (z = chunkStartZ; z < chunkEndZ; z++) {
+			for (x = chunkStartX; x < chunkEndX; x++) {
+				Indev_SeedSkyColumn(x, z, chunkStartY, chunkEndY - 1);
+			}
+		}
+		FlushLightQueue(false, false);
 	}
 
 	chunkLightingDataFlags[chunkIndex] = CHUNK_SELF_CALCULATED;
@@ -460,14 +572,49 @@ static void CalcBlockChange(int x, int y, int z, BlockID oldBlock, BlockID newBl
 
 	CalcUnlight(x, y, z, oldLightLevelHere, isLamp);
 }
+/* Indev sky maintenance after a block change: columns whose heightmap moved
+    exchange implicit-sun status with stored/flooded status, and the seed
+    boundary shifts. Unlight cells that lost the sky, then re-seed the five
+    affected columns and flood - the unlight machinery relights the rest. */
+static void Indev_SkyBlockChanged(int x, int y, int z, int oldH, int newH) {
+	int yy;
+	cc_uint8 stored;
+
+	if (newH > oldH) {
+		/* Heightmap rose: cells in (oldH, newH] lost their implicit sun.
+		    Boundary cells among them carry stored 15s that were spread into
+		    caves - unlight those; the placed cell itself was handled by the
+		    generic CalcBlockChange pass. */
+		for (yy = newH; yy > oldH; yy--) {
+			if (yy == y) continue;
+			stored = GetBrightness(x, yy, z, false);
+			if (stored > 0) CalcUnlight(x, yy, z, stored, false);
+		}
+	}
+
+	Indev_SeedSkyColumn(x, z, 0, World.MaxY);
+	if (x > 0)          Indev_SeedSkyColumn(x - 1, z, 0, World.MaxY);
+	if (x < World.MaxX) Indev_SeedSkyColumn(x + 1, z, 0, World.MaxY);
+	if (z > 0)          Indev_SeedSkyColumn(x, z - 1, 0, World.MaxY);
+	if (z < World.MaxZ) Indev_SeedSkyColumn(x, z + 1, 0, World.MaxY);
+	FlushLightQueue(false, true);
+}
+
 static void OnBlockChanged(int x, int y, int z, BlockID oldBlock, BlockID newBlock) {
+	int oldH, newH;
 	/* For some reason this is a possible case */
 	if (oldBlock == newBlock) { return; }
 
+	oldH = indevSky ? ClassicLighting_GetLightHeight(x, z) : 0;
 	ClassicLighting_OnBlockChanged(x, y, z, oldBlock, newBlock);
 
 	CalcBlockChange(x, y, z, oldBlock, newBlock, false);
 	CalcBlockChange(x, y, z, oldBlock, newBlock, true);
+
+	if (indevSky) {
+		newH = ClassicLighting_GetLightHeight(x, z);
+		Indev_SkyBlockChanged(x, y, z, oldH, newH);
+	}
 }
 /* Invalidates/Resets lighting state for all of the blocks in the world */
 /*  (e.g. because a block changed whether it is full bright or not) */
@@ -488,6 +635,37 @@ static cc_bool IsLit_Fast(int x, int y, int z) { return ClassicLighting_IsLit_Fa
     cached lamp/lava nibbles. Sky light is NOT included - callers combine it
     with the sky heightmap + time of day themselves (see Lighting.IsLit).
     Only meaningful while fancy lighting is the active mode. */
+/* Genuine Indev World.getBlockLightValue: the combined 0..15 light at a
+    position - max of the lamp level and the effective sky (implicit current
+    level above the heightmap, stored-flood minus the day/night subtraction
+    below it). Drives crop growth, monster spawn/burn rules, grass. */
+int FancyLighting_IndevLight(int x, int y, int z) {
+	cc_uint8 lightData = 0;
+	int cx, cy, cz, chunkIndex, lamp, effSky;
+	if (!World_Contains(x, y, z) || !chunkLightingData) return indevSkyLevel;
+
+	cx = x >> CHUNK_SHIFT;
+	cy = y >> CHUNK_SHIFT;
+	cz = z >> CHUNK_SHIFT;
+	chunkIndex = ChunkCoordsToIndex(cx, cy, cz);
+	CalcForChunkIfNeeded(cx, cy, cz, chunkIndex);
+
+	if (chunkLightingData[chunkIndex] != NULL) {
+		lightData = chunkLightingData[chunkIndex][GlobalCoordsToChunkCoordsIndex(x, y, z)];
+	}
+	lamp = lightData >> FANCY_LIGHTING_LAMP_SHIFT;
+
+	if (y > ClassicLighting_GetLightHeight(x, z)) {
+		/* Implicit sky source: the CURRENT eased level, never the stored
+		    nibble (a boundary cell stores its full-day 15). */
+		effSky = indevSkyLevel;
+	} else {
+		effSky = (lightData & FANCY_LIGHTING_MAX_LEVEL) - (FANCY_LIGHTING_MAX_LEVEL - indevSkyLevel);
+		if (effSky < 0) effSky = 0;
+	}
+	return lamp > effSky ? lamp : effSky;
+}
+
 int FancyLighting_BlockLightLevel(int x, int y, int z) {
 	cc_uint8 lightData;
 	int cx, cy, cz, chunkIndex, lamp, lava;

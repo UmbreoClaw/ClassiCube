@@ -775,6 +775,23 @@ static void IndevBlocks_Define(void) {
 	static const cc_uint8 metaFace[4] = { FACE_ZMIN, FACE_ZMAX, FACE_XMIN, FACE_XMAX };
 	int k;
 
+	/* Genuine Indev has ONE light channel: every emitter lives in the LAMP
+	    nibble at its genuine Block.lightValue, freeing the lava nibble to be
+	    the flooded SKY channel (FancyLighting.c). Move the engine's default
+	    lava-channel emitters over (lava lightValue = 15 genuine) and clear
+	    any other low-nibble stragglers so nothing pollutes the sky data. */
+	for (k = 0; k < BLOCK_COUNT; k++) {
+		cc_uint8 lava = Blocks.Brightness[k] & FANCY_LIGHTING_MAX_LEVEL;
+		cc_uint8 lamp = Blocks.Brightness[k] >> FANCY_LIGHTING_LAMP_SHIFT;
+		if (!lava) continue;
+		if (lava > lamp) lamp = lava;
+		Blocks.Brightness[k] = lamp << FANCY_LIGHTING_LAMP_SHIFT;
+	}
+	Blocks.Brightness[BLOCK_LAVA]       = 15 << FANCY_LIGHTING_LAMP_SHIFT;
+	Blocks.Brightness[BLOCK_STILL_LAVA] = 15 << FANCY_LIGHTING_LAMP_SHIFT;
+	/* mushroomBrown.setLightValue(2/16) - the faint brown mushroom glow */
+	Blocks.Brightness[BLOCK_BROWN_SHROOM] = 1 << FANCY_LIGHTING_LAMP_SHIFT;
+
 	/* Hardness from Block.java registration: workbench/chest setHardness(2.5F), */
 	/*  furnace 3.5F, torch 0.0F - our units are 20 per hardness-second. */
 	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  50);
@@ -1484,6 +1501,13 @@ static void Indev_TickDayNight(void) {
 	else if (indev_lastSkyLight < light) indev_lastSkyLight++;
 	else return;
 
+	/* The fancy-lighting Indev palettes dim by the eased level themselves
+	    (effective sky = flood - (15 - k), the genuine table at the end) -
+	    set k FIRST, then the sun-colour change below rebuilds the palettes
+	    and refreshes the chunk colours in one pass. The scaled sun/shadow
+	    colours still matter for the OOB horizon and non-fancy fallbacks. */
+	FancyLighting_SetIndevSky(indev_lastSkyLight);
+
 	f = IndevTest_BrightnessOfLight(indev_lastSkyLight);
 	Env_SetSunCol(PackedCol_Scale(ENV_DEFAULT_SUN_COLOR,       f));
 	Env_SetShadowCol(PackedCol_Scale(ENV_DEFAULT_SHADOW_COLOR, f));
@@ -1513,11 +1537,11 @@ int IndevTest_LightLevel(int x, int y, int z) {
 
 	/* genuine getBlockLightValue reads the EASED sky level (the stored light
 	    nibbles are nudged 1/tick by updateDaylightCycle), not the target */
-	if (Lighting.IsLit(x, y, z)) light = Indev_EasedSkyLight();
 	if (Lighting_Mode == LIGHTING_MODE_FANCY) {
-		int block = FancyLighting_BlockLightLevel(x, y, z);
-		if (block > light) light = block;
+		/* Genuine combined value: flooded sky (caves fade to 0) vs lamps */
+		return FancyLighting_IndevLight(x, y, z);
 	}
+	if (Lighting.IsLit(x, y, z)) light = Indev_EasedSkyLight();
 	return light;
 }
 
