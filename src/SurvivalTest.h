@@ -25,6 +25,23 @@ enum SurvivalGamemode {
     from any component's Init regardless of init sequence. */
 int SurvivalTest_Gamemode(void);
 
+/* The gamemode actually in effect: the local option in singleplayer, the
+    server-dictated SURV_HELLO mode in multiplayer (SurvivalNet_ActiveMode -
+    always OFF on stock servers and before the handshake). Gameplay code and
+    the per-map mode derivation use THIS; the raw option resolver above stays
+    for UI/launcher/identity uses. */
+int SurvivalTest_EffectiveGamemode(void);
+
+/* Re-derives both components' enabled flags after the server changed the
+    per-map survival mode (SURV_HELLO arrives after the level, so the normal
+    map hooks already ran with mode OFF). Called by SurvivalNet only. */
+void SurvivalTest_NetworkModeChanged(void);
+
+/* Applies a server-authoritative SURV_HEALTH update: sets health/score and
+    plays the matching presentation (hurt tilt/sound on a decrease, death
+    camera + Game Over on 0, revive when health rises while dead). MP only. */
+void SurvivalTest_ApplyNetHealth(int health, int score);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */
