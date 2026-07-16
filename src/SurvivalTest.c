@@ -27,6 +27,8 @@
 #include "IndevTest.h"
 #include "IndevArmor.h"
 #include "IndevFire.h"
+#include "SurvivalNet.h"
+#include "Server.h"
 #include "Input.h"
 #include "Gui.h"
 #include "Picking.h"
@@ -1249,6 +1251,11 @@ static cc_bool SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 	if (st_isDead)             return false;
 	if (st_godMode)            return false; /* debug invincibility - blocks every damage source */
 	if (SurvivalTest_CreativeActive()) return false; /* creative: survivalWorld=false, no damage */
+	/* MP: the SERVER owns health - every local damage source (fall, lava, fire,
+	    drowning, mobs) is a no-op; authoritative damage arrives as SURV_HEALTH
+	    and plays its presentation in SurvivalTest_ApplyNetHealth. One central
+	    gate here covers every SurvivalTest_Hurt caller. */
+	if (SurvivalNet_ServerDriven()) return false;
 	if (damage <= 0)           return false;
 
 	if (IndevTest_Enabled) {
@@ -1300,6 +1307,50 @@ static cc_bool SurvivalTest_Damage(int damage, const Vec3* attackerPos) {
 		GameOverScreen_Show();
 	}
 	return true;
+}
+
+/* Server-authoritative SURV_HEALTH applier (MP). The server owns the health
+    value and the death/respawn cycle; the client owns the PRESENTATION - the
+    hurt tilt/sound on a decrease, the death camera + Game Over screen on 0,
+    and the revive when health rises while dead (the server repositions us via
+    the normal teleport packet around the same time). No inventory drop here:
+    drops are server state (phase 5). */
+void SurvivalTest_ApplyNetHealth(int health, int score) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!SurvivalTest_Enabled || !p) return;
+	Math_Clamp(health, 0, SURVIVAL_MAX_HEALTH);
+	st_score = score;
+
+	if (health <= 0) {
+		if (st_isDead) return;
+		Indev_PlaySoundAt(p->Base.Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+		SurvivalTest_Health = 0;
+		st_lastHealth  = 0;
+		st_hurtTicks   = HURT_TILT_TICKS; /* the killing blow's impact wobble */
+		st_hurtDir     = 0.0f;
+		st_isDead      = true;
+		st_deathTicks  = 0;
+		GameOverScreen_Show();
+		return;
+	}
+
+	if (st_isDead) {
+		/* Server respawned us - drop the death presentation */
+		st_isDead      = false;
+		st_deathTicks  = 0;
+		st_hurtTicks   = 0;
+		st_invincTimer = 0.0f;
+		st_falling     = false;
+		Camera_UpdateProjection(); /* undo the death FOV zoom */
+		GameOverScreen_Hide();
+	} else if (health < SurvivalTest_Health) {
+		/* Server-applied damage: play the landed-hit presentation */
+		st_hurtTicks = HURT_TILT_TICKS;
+		st_hurtDir   = 0.0f;
+		Indev_PlaySoundAt(p->Base.Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+	}
+	SurvivalTest_Health = health;
+	st_lastHealth       = health;
 }
 
 void SurvivalTest_Hurt(int damage) { SurvivalTest_Damage(damage, NULL); }
@@ -5781,6 +5832,7 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 	struct Entity* e;
 	Vec3 eye;
 	if (!SurvivalTest_Enabled) return false;
+	if (SurvivalNet_ServerDriven()) return false; /* MP: arrows are server entities (phase 3) */
 	/* Indev has no Tab-fire - arrows are items fired by the BOW's right
 	    click (SurvivalTest_TryUseBow) */
 	if (IndevTest_Enabled)     return false;
@@ -5824,6 +5876,7 @@ cc_bool SurvivalTest_TryUseBow(void) {
 	Vec3 eye;
 	int i;
 	if (!IndevTest_Enabled || !p)                              return false;
+	if (SurvivalNet_ServerDriven())                            return false; /* MP: phase 3/4 */
 	if (!IndevTest_IsBow(st_inv[Inventory.SelectedIndex].id))  return false;
 	if (st_inv[Inventory.SelectedIndex].count <= 0)            return false;
 
@@ -6529,6 +6582,12 @@ void SurvivalTest_TryDropHeld(void) {
 	cc_uint16 id;
 	int i;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled || !p) return;
+	/* MP: dropping is an intent - the server owns the inventory and the drop
+	    entity (phases 4/5); it spawns the drop and streams it back. */
+	if (SurvivalNet_ServerDriven()) {
+		SurvivalNet_SendDropItem(slot, false);
+		return;
+	}
 	if (st_inv[slot].count <= 0) return;
 
 	id = st_inv[slot].id;
@@ -6582,12 +6641,13 @@ void SurvivalTest_DamageHeldItem(int amount) { SurvivalTest_DamageHeldTool(amoun
     (DamageHeldTool is Indev-gated and ToolUseWear returns 0 for non-tools). */
 void SurvivalTest_WearHeldToolForBlockBreak(void) {
 	if (!SurvivalTest_Enabled) return;
+	if (SurvivalNet_ServerDriven()) return; /* MP: durability is server state */
 	SurvivalTest_DamageHeldTool(
 		IndevTest_ToolUseWear(st_inv[Inventory.SelectedIndex].id, false));
 }
-void SurvivalTest_ConsumeHeld(void)          { SurvivalTest_ConsumeSelected(); }
+void SurvivalTest_ConsumeHeld(void)          { if (!SurvivalNet_ServerDriven()) SurvivalTest_ConsumeSelected(); }
 /* Fire consuming a TNT block arms it (onBlockDestroyedByPlayer) */
-void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled) SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); }
+void SurvivalTest_IgniteTnt(IVec3 coords)    { if (SurvivalTest_Enabled && !SurvivalNet_ServerDriven()) SurvivalTest_ArmTnt(coords, TNT_FUSE_DEFAULT()); }
 
 /* .mclevel entity save: iterates live mobs (returns the next active index */
 /*  after prev, or -1) and physical item drops, for the Entities list. */
@@ -6636,6 +6696,10 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 	IVec3 pos;
 	BlockID block;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled) return false;
+	/* MP: containers are server state opened via SURV_CONT_OPEN (phase 4) -
+	    the local GUIs are backed by local tile entities that don't exist on
+	    a server map. Until then act like classic (no container UI). */
+	if (SurvivalNet_ServerDriven()) return false;
 	if (!Game_SelectedPos.valid) return false;
 
 	pos = Game_SelectedPos.pos;
@@ -6667,6 +6731,7 @@ cc_bool SurvivalTest_TryEat(void) {
 	int slot;
 	BlockID block;
 	if (!SurvivalTest_Enabled) return false;
+	if (SurvivalNet_ServerDriven()) return false; /* MP: eating = server intent (phase 4) */
 
 	slot  = Inventory.SelectedIndex;
 	if (st_inv[slot].count <= 0) return false;
@@ -6722,6 +6787,10 @@ static void SurvivalTest_BlockChanged(void* obj,
 			if (!Painting_ValidSurface(&st_paintings[pi])) Painting_PopOff(&st_paintings[pi]);
 		}
 	}
+
+	/* MP: drops and the inventory are server state (phases 4/5) - never spawn
+	    a local drop or debit a local stack for a block change on a server map. */
+	if (SurvivalNet_ServerDriven()) return;
 
 	if (block == BLOCK_AIR) {
 		/* Block was mined - spawn its physical drop(s) on the ground. Creative */
@@ -7264,7 +7333,8 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	    NOT gated on onGround (genuine isn't) - trampling farmland below the
 	    feet (Block.onEntityWalking). e->next.pos is this tick's fresh
 	    position; e->Position is one tick stale here (see UpdateFall). */
-	if (IndevTest_Enabled && !p->Hacks.Flying && !p->Hacks.Noclip) {
+	if (IndevTest_Enabled && !SurvivalNet_ServerDriven()
+			&& !p->Hacks.Flying && !p->Hacks.Noclip) {
 		float wdx = e->next.pos.x - e->prev.pos.x;
 		float wdz = e->next.pos.z - e->prev.pos.z;
 		st_walkDist += Math_SqrtF(wdx * wdx + wdz * wdz) * 0.6f;
@@ -7289,7 +7359,9 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	/*  world (World_FallThroughFloor) - past ST_VOID_KILL_Y that is fatal. */
 	/*  Creative can't take damage, so instead snap it back to spawn to avoid */
 	/*  an endless fall. Flying/noclip are exempt (you're not really falling). */
-	if (IndevTest_Enabled && e->next.pos.y < ST_VOID_KILL_Y
+	/*  MP: the server's hazard detection owns dying, including the void. */
+	if (IndevTest_Enabled && !SurvivalNet_ServerDriven()
+			&& e->next.pos.y < ST_VOID_KILL_Y
 			&& !p->Hacks.Flying && !p->Hacks.Noclip) {
 		if (SurvivalTest_CreativeActive()) {
 			struct LocationUpdate update;
@@ -7334,20 +7406,24 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 			Indev_EntitySplash(e->Position, e->Velocity, 0.6f);
 		st_playerWasInWater = inWater;
 
-		if (ST_InFire(e)) {
-			SurvivalTest_Hurt(1);
-			if (!inWater) st_playerFire = 300;
+		/* Burning is local sim state - in MP the server owns fire damage and
+		    can't tell us we're alight yet, so don't fake the burn overlay. */
+		if (!SurvivalNet_ServerDriven()) {
+			if (ST_InFire(e)) {
+				SurvivalTest_Hurt(1);
+				if (!inWater) st_playerFire = 300;
+			}
+			if (inWater && st_playerFire > 0) {
+				Audio_PlayMobSound(MOBSND_FIZZ, 0.7f,
+					1.6f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.4f, 0.0f);
+				st_playerFire = 0;
+			}
+			if (st_playerFire > 0) {
+				if (st_playerFire % 20 == 0) SurvivalTest_Hurt(1);
+				st_playerFire--;
+			}
+			if (inLava) st_playerFire = 600;
 		}
-		if (inWater && st_playerFire > 0) {
-			Audio_PlayMobSound(MOBSND_FIZZ, 0.7f,
-				1.6f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.4f, 0.0f);
-			st_playerFire = 0;
-		}
-		if (st_playerFire > 0) {
-			if (st_playerFire % 20 == 0) SurvivalTest_Hurt(1);
-			st_playerFire--;
-		}
-		if (inLava) st_playerFire = 600;
 	}
 
 	/* Drowning. c0.30 Mob.tick: airSupply-- while the head is underwater,
@@ -7387,23 +7463,20 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		st_airTimer = AIR_SUPPLY_SECS;
 	}
 
-	/* Dropped items --------------------------------------------------------- */
-	SurvivalTest_TickDrops(e, delta);
-
-	/* Block breaking --------------------------------------------------------- */
+	/* Block breaking (dig timing is client presentation in MP too; the final
+	    break goes through the normal SetBlock flow the server validates) ----- */
 	SurvivalTest_TickBreaking();
 
-	/* Mobs ----------------------------------------------------------------- */
-	SurvivalTest_TickMobs(delta);
-
-	/* Arrows ----------------------------------------------------------------- */
-	SurvivalTest_TickArrows();
-
-	/* Paintings (Indev) ------------------------------------------------------ */
-	if (IndevTest_Enabled) SurvivalTest_TickPaintings();
-
-	/* TNT -------------------------------------------------------------------- */
-	SurvivalTest_TickTnt();
+	/* World simulation the SERVER owns in MP: drops, mobs, arrows, paintings
+	    and TNT all become streamed state (phases 3/5) - running them locally
+	    would desync the moment the server starts streaming. ------------------ */
+	if (!SurvivalNet_ServerDriven()) {
+		SurvivalTest_TickDrops(e, delta);
+		SurvivalTest_TickMobs(delta);
+		SurvivalTest_TickArrows();
+		if (IndevTest_Enabled) SurvivalTest_TickPaintings();
+		SurvivalTest_TickTnt();
+	}
 
 	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */
 	/*  smoke, torch/furnace flames) - visual only, runs its own RNG */
@@ -7543,17 +7616,10 @@ static void SurvivalTest_OnContextLost(void* obj) {
 	}
 }
 
-static void SurvivalTest_Init(void) {
-	/* Loaded unconditionally so the inventory screen can read it even before */
-	/*  any survival logic runs (it gates a UI choice, not a gameplay rule). */
-	SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
-	SurvivalTest_Creative = Options_GetBool(OPT_INDEV_CREATIVE,    false);
-
-	/* The survival core also runs under Indev mode - IndevTest_Component's
-	    Init ran first (see Game.c ordering), so its flag is already set. */
-	SurvivalTest_Enabled = SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF;
-	if (!SurvivalTest_Enabled) return;
-
+/* Mode-scoped one-time setup for entering survival (from launch options in SP,
+    or a SURV_HELLO mode flip in MP). The per-map hooks re-run the per-map parts;
+    this is the "became enabled at all" half. */
+static void SurvivalTest_EnableMode(void) {
 	Random_SeedFromCurrentTime(&st_dropRng);
 	Random_SeedFromCurrentTime(&st_mobRng);
 	Random_SeedFromCurrentTime(&st_arrowRng);
@@ -7569,18 +7635,36 @@ static void SurvivalTest_Init(void) {
 	/*  no glass shatter sound. Overridden here so creative stays stock. */
 	Blocks.DigSounds[BLOCK_SAND]  = SOUND_GRAVEL;
 	Blocks.DigSounds[BLOCK_GLASS] = SOUND_METAL;
+	SurvivalTest_RegisterCommands();
+}
+
+static void SurvivalTest_Init(void) {
+	/* Loaded unconditionally so the inventory screen can read it even before */
+	/*  any survival logic runs (it gates a UI choice, not a gameplay rule). */
+	SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
+	SurvivalTest_Creative = Options_GetBool(OPT_INDEV_CREATIVE,    false);
+
+	/* The survival core also runs under Indev mode - IndevTest_Component's
+	    Init ran first (see Game.c ordering), so its flag is already set.
+	    Effective mode: in MP this is OFF until a server SURV_HELLO flips it. */
+	SurvivalTest_Enabled = SurvivalTest_EffectiveGamemode() != SURVIVAL_GAMEMODE_OFF;
+
+	/* Registered unconditionally: every hook self-guards on SurvivalTest_Enabled,
+	    and a survival server can flip the mode ON at runtime via SURV_HELLO
+	    (SurvivalNet) - the hooks must already exist by then. */
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
 	TextureEntry_Register(&arrows_entry);
 	TextureEntry_Register(&cracks_entry);
-	SurvivalTest_RegisterCommands();
+
+	if (SurvivalTest_Enabled) SurvivalTest_EnableMode();
 }
 
 static void SurvivalTest_Free(void) {
-	if (!SurvivalTest_Enabled) return;
 	Event_Unregister_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Unregister_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);
+	if (!SurvivalTest_Enabled) return;
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);
 	Gfx_DeleteDynamicVb(&st_arrowVB);
@@ -7630,6 +7714,17 @@ void SurvivalTest_CreativeUpdateHacks(void) {
 	struct LocalPlayer* p = Entities.CurPlayer;
 	if (!SurvivalTest_Enabled || !p) return;
 
+	if (!Server.IsSinglePlayer) {
+		/* MP: hack PERMISSIONS belong to the server's HackControl packet (the
+		    server resolves them from the same per-session creative decision -
+		    networking-plan §25). Granting/revoking locally would fight it, or
+		    worse, grant flight the server never allowed. Reach is the one
+		    local piece: creative reach 5 is genuine, and the server validates
+		    every placement's reach anyway. */
+		p->ReachDistance = SurvivalTest_CreativeActive() ? 5.0f : 4.0f;
+		return;
+	}
+
 	if (SurvivalTest_CreativeActive()) {
 		p->Hacks.CanFly   = true;
 		p->Hacks.CanSpeed = true;
@@ -7644,18 +7739,66 @@ void SurvivalTest_CreativeUpdateHacks(void) {
 	HacksComp_Update(&p->Hacks);
 }
 
-static void SurvivalTest_OnNewMapLoaded(void) {
-	struct LocalPlayer* p;
-	if (!SurvivalTest_Enabled) return;
+int SurvivalTest_EffectiveGamemode(void) {
+	/* SP: the local option. MP: the server-dictated per-map mode (OFF on stock
+	    servers, before SURV_HELLO, and on non-survival maps) - local options
+	    never activate survival on someone else's server. */
+	return Server.IsSinglePlayer ? SurvivalTest_Gamemode() : SurvivalNet_ActiveMode();
+}
 
-	p = Entities.CurPlayer;
-	if (!p) return;
+/* Re-derives Enabled/Enhanced/Creative from the effective mode, running the
+    enable/disable transition work when the mode actually changed. Idempotent -
+    safe to call on every map load AND on a mid-map SURV_HELLO flip. */
+static void SurvivalTest_ApplyMode(void) {
+	cc_bool wasEnabled = SurvivalTest_Enabled;
+	SurvivalTest_Enabled = SurvivalTest_EffectiveGamemode() != SURVIVAL_GAMEMODE_OFF;
+
+	if (Server.IsSinglePlayer) {
+		SurvivalTest_Enhanced = Options_GetBool(OPT_SURVIVAL_ENHANCED, false);
+		SurvivalTest_Creative = Options_GetBool(OPT_INDEV_CREATIVE,    false);
+	} else {
+		/* SURV_HELLO flags byte overrides the local options entirely in MP */
+		int flags = SurvivalNet_ActiveFlags();
+		SurvivalTest_Enhanced = (flags & 0x01) != 0;
+		SurvivalTest_Creative = (flags & 0x02) != 0;
+	}
+
+	if (!SurvivalTest_Enabled) {
+		if (wasEnabled) SurvivalTest_UnregisterCommands();
+		return;
+	}
+	if (!wasEnabled) SurvivalTest_EnableMode();
+}
+
+/* Runs the map-activation work that OnNewMapLoaded would have done, for the MP
+    case where SURV_HELLO arrives AFTER the level finished loading. */
+static void SurvivalTest_MapActivate(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	if (!SurvivalTest_Enabled || !p) return;
 
 	SurvivalTest_CreativeUpdateHacks(); /* fly/speed/reach for the current mode */
+
+	/* Server-driven maps: inventory (so the palette hotbar too) and mobs are
+	    the server's job - phases 4 and 3 stream them. Touching the classic
+	    hotbar or spawning local mobs here would fight the server's state. */
+	if (SurvivalNet_ServerDriven()) return;
+
 	if (SurvivalTest_CreativeActive())
 		SurvivalTest_CreativeFillPalette(); /* genuine creative palette hotbar */
-
 	SurvivalTest_SpawnInitialMobs();
+}
+
+void SurvivalTest_NetworkModeChanged(void) {
+	/* Indev layer first - this component's activation reads IndevTest_Enabled,
+	    mirroring the IndevTest-before-SurvivalTest component ordering. */
+	IndevTest_NetworkModeChanged();
+	SurvivalTest_ApplyMode();
+	SurvivalTest_MapActivate();
+}
+
+static void SurvivalTest_OnNewMapLoaded(void) {
+	SurvivalTest_ApplyMode(); /* per-map re-derive (MP: OFF until SURV_HELLO) */
+	SurvivalTest_MapActivate();
 }
 
 /*########################################################################################################################*

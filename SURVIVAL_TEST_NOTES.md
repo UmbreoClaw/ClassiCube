@@ -5332,3 +5332,74 @@ so re-assert GameOverScreen_Show(). It grabs input, so the check is a no-op whil
 it or any menu is already up; and it can't misfire during generation because the
 new map clears st_isDead before gameplay resumes. Catch-all - also covers pressing
 escape directly on the death screen. Applies to both c0.30-s and Indev survival.
+
+## SESSION LOG - MP mode-flip: server-driven survival (client side complete)
+
+User: implement the client's server-handling packets now so the mcgalaxy Claude
+session can build against them. The fork (github.com/UmbreoClaw/mcgalaxy,
+survival-support) turned out to be AHEAD of us: phases 0+2 done server-side
+(HELLO/WORLDINFO/TIME/HEALTH sent, RESPAWN handled). Cloned it read-only to
+/tmp/mcgalaxy_ro and matched every byte against Network/SurvivalNet.cs.
+
+NOTE: the container was recycled mid-session (fresh clone on the default
+branch, /tmp ground truths lost). Recovered via git fetch origin survival-test;
+all work had been pushed. /tmp/indev_eagler + /tmp/mcraft_client need re-cloning
+when next needed. libgl1-mesa-dev/libxi-dev reinstalled for linking.
+
+### Wire-contract finding (drift caught by reading the real server)
+- SURV_HEALTH score is i32 BE (server SendHealth bytes 2-5); our SS25 draft said
+  i16. Client implements i32; SS25 fixed; handoff tells the server session to
+  re-snapshot its reference/ copies of our docs.
+- SURV_WORLDINFO v1 = single-byte heights [ground][water][fluid][theme][flags]
+  [sides][edge] (matches survival-handshake.md SS5); SS25's int16 layout is the
+  planned fuller revision, now marked as such.
+
+### What landed (client)
+- SurvivalNet.c: per-map activation (net_mode/net_flags; cleared OnNewMap and by
+  a mode-0 HELLO = live /Survival refresh; unknown mode -> off). Appliers:
+  HELLO -> SurvivalTest_NetworkModeChanged; WORLDINFO -> Indev OOB horizon
+  planes; HEALTH -> SurvivalTest_ApplyNetHealth (i32 score); TIME ->
+  IndevTest_SetWorldTime (server owns the CLOCK, client renders the genuine
+  celestial light from it - the server's ramp byte is deliberately unused).
+  SurvivalNet_ServerDriven() = capability + activation. Senders for all of
+  0x80-0x87; HELD_SLOT auto-sent on HeldBlockChanged; RESPAWN + DROP_ITEM wired.
+- Mode plumbing: SurvivalTest_EffectiveGamemode() = SP ? options : network.
+  Both components re-derive per map (OnNewMapLoaded) AND on the HELLO flip
+  (IndevTest_NetworkModeChanged -> SurvivalTest_ApplyMode/MapActivate; Indev
+  first, matching component order). Registrations made unconditional at Init
+  (self-guarding hooks/texture entries/data tables) so a server can flip Indev
+  on at runtime; classic-visible things stay gated: IndevBlocks_Define +
+  Indev_RegisterFarmTicks only run while Indev is on. Commands register/
+  unregister on the transition. MP flip-off mid-map leaves block DEFINITIONS
+  visually until next map (documented v1 limitation).
+- MP sim handover, one predicate: local damage OFF via a central gate in
+  SurvivalTest_Damage; mob spawner/ticks, drops, arrows, paintings, TNT,
+  furnace tick, day/night ADVANCE (apply still runs), eating, bow/arrows, tool
+  wear, container GUIs, survival inventory UI (falls back to classic picker),
+  drops+consume on BlockChanged, void death, trampling, burning overlay - all
+  gated. Break timing stays (presentation; server validates the SetBlock).
+  Hacks: in MP CreativeUpdateHacks only sets reach (4/5); permissions belong to
+  the server's HackControl. MiO_SetIndevCreative only mutates runtime in SP.
+- Death UX in MP: ApplyNetHealth 0 -> death camera + Game Over with a single
+  "Respawn" button (sends SURV_RESPAWN; screen stays until the authoritative
+  revive); health rise while dead -> revive (GameOverScreen_Hide, new export).
+  No local inventory drop (server owns drops).
+- Docs: SS4.2 status box rewritten (mode-flip landed); P-list items ticked; SS25
+  HEALTH i32 + WORLDINFO v1-vs-planned layouts; survival-handshake.md status,
+  SS1 table (both layers implemented), SS5 HEALTH/TIME layouts, SS6.4 resolved,
+  SS8 rewritten. NEW doc/server-session-handoff.md - the brief for the mcgalaxy
+  Claude session (setup, what's consumed, corrections, server TODOs incl. death
+  dwell + per-map time + BlockDefinitions, build order for phases 3-5).
+
+### Verification
+- Full make PLAT=linux builds + links clean; symbols present.
+- Server.IsSinglePlayer ordering verified: Server_Component (Game.c:443) inits
+  before IndevTest/SurvivalTest/SurvivalNet (456-458), so EffectiveGamemode is
+  valid at component Init. SP path byte-identical behaviour (Effective==options).
+- Stock-server safety: ActiveMode()==0 without the negotiated ext, so MP on a
+  normal server = everything off (and BlockPhysics random ticks/fire were
+  already SP-only).
+- End-to-end vs the real fork server: PREPARED but not run - built their CLI
+  (dotnet-sdk-8.0 + make cli, 0 errors) but the sandbox policy (correctly)
+  declined executing an external repo's binary in this session. The handoff doc
+  gives the server session the exact test to run; user can also run it locally.
