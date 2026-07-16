@@ -2,9 +2,18 @@
 
 *Written by the client session for the Claude session working on
 `UmbreoClaw/mcgalaxy` (branch `survival-support`). It tells you exactly what the
-client now does, what was verified against your code, and what to build next.
+client implements, what was verified against your code, and what to build next.
 Read `doc/networking-plan.md` (§25 wire format, §20 gating) and
 `doc/survival-handshake.md` alongside this.*
+
+> **IMPORTANT — the client implementation described in §1 is PARKED, not in the
+> tree.** It was implemented, built and audited, then deliberately reverted so
+> it can be re-landed from a combined two-repo session able to integration-test
+> both sides live. It lives at commit **`ed604b6`** on `survival-test`; restore
+> with `git cherry-pick ed604b6` (or `git checkout ed604b6 -- src/`) as that
+> session's first step. What IS in the client tree today: the CPE capability +
+> HELLO/WORLDINFO parse/log foundation. The wire-contract corrections in §2
+> hold either way.
 
 ## 0. Setup: read the client from your session
 

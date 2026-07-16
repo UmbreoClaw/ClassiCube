@@ -32,7 +32,6 @@ void InventoryScreen_Hide(void);
 void SurvivalInvScreen_Show(void);
 /* Shows the Survival Test "Game over!" screen (permadeath, no respawn). */
 void GameOverScreen_Show(void);
-void GameOverScreen_Hide(void);
 void HUDScreen_Show(void);
 void LoadingScreen_Show(const cc_string* title, const cc_string* message);
 void GeneratingScreen_Show(void);

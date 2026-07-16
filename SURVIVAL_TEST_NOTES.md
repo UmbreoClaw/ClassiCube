@@ -5403,3 +5403,25 @@ when next needed. libgl1-mesa-dev/libxi-dev reinstalled for linking.
   (dotnet-sdk-8.0 + make cli, 0 errors) but the sandbox policy (correctly)
   declined executing an external repo's binary in this session. The handoff doc
   gives the server session the exact test to run; user can also run it locally.
+
+### Follow-up: MP implementation PARKED at ed604b6 (user decision)
+User: revert all the network code for now (a combined session with BOTH repos is
+the right place to land it, where client+server can be integration-tested
+together), but keep the docs. Done via `git checkout a97647d -- src/`:
+- The tree is back to the pre-MP state: SurvivalNet foundation (CPE ext +
+  HELLO/WORLDINFO parse/log) stays; everything else from this session
+  (creative+fly, void death, wobble fix, death-screen bypass guard, ...) is
+  untouched - only the ed604b6 MP code (mode flip, appliers, ServerDriven
+  gates, respawn button) came out, and it remains cherry-pickable at ed604b6.
+- Docs kept, with statuses adjusted to "implemented + verified, PARKED at
+  ed604b6": networking-plan SS4.2 + P-list, survival-handshake status/SS1/
+  SS6.4/SS8, and a prominent restore note atop server-session-handoff.md. The
+  SS25 wire corrections (HEALTH score i32 BE, WORLDINFO v1 layout) are contract
+  truth and stand regardless.
+- Ground truths re-fetched after the container recycle and landmark-verified:
+  /tmp/indev_eagler = github.com/EaglerPorts/in-20100223 (EntityRenderer.java:88
+  death roll, LevelGenerator.java:356 groundLevel=-128 confirmed);
+  /tmp/mcraft_client = github.com/ManiaDevelopment/MCraft-Client
+  (Minecraft.java:323 "Minecraft 0.30", Renderer.hurtEffect:48, Mob.java:342
+  hurtTime=hurtDuration=10 confirmed). Recorded here so future sessions can
+  re-clone without hunting: EaglerPorts/in-20100223 + ManiaDevelopment/MCraft-Client.

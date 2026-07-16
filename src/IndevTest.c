@@ -3,7 +3,6 @@
 #include "Options.h"
 #include "Chat.h"
 #include "SurvivalTest.h"
-#include "SurvivalNet.h"
 #include "IndevArmor.h"
 #include "Funcs.h"
 #include "Graphics.h"
@@ -1459,13 +1458,8 @@ static void Indev_TickDayNight(void) {
 	float f;
 	int   light;
 
-	/* MP: the SERVER owns the clock (SURV_TIME sets indev_worldTime); only
-	    advance it locally when the sim is ours. The visual application below
-	    always runs, so server-pushed time still drives sun/sky/colours. */
-	if (!SurvivalNet_ServerDriven()) {
-		indev_worldTime++;
-		if (indev_worldTime >= 24000) indev_worldTime = 0;
-	}
+	indev_worldTime++;
+	if (indev_worldTime >= 24000) indev_worldTime = 0;
 	if (!indev_baseColsKnown || !World.Loaded) return;
 
 	/* getSkyColor: base * clamp01(cos*2 + 0.5) */
@@ -2217,7 +2211,6 @@ static void IndevTest_Tick(struct ScheduledTask* task) {
 	int i;
 	if (!IndevTest_Enabled) return;
 	Indev_TickDayNight();
-	if (SurvivalNet_ServerDriven()) return; /* MP: furnaces are server state (phase 4) */
 	for (i = 0; i < INDEV_TE_MAX; i++) {
 		if (!indev_tes[i].used || indev_tes[i].kind != INDEV_CONTAINER_FURNACE) continue;
 		Furnace_Tick(&indev_tes[i]);
@@ -2459,7 +2452,8 @@ void IndevTest_ApplySurroundings(void) {
 /*  snapshot the env colours as the day/night cycle's full-daylight base */
 /*  (a loaded .mclevel has applied its Environment colours by now), and */
 /*  switch to fancy lighting so torches/lit furnaces cast real light. */
-static void IndevTest_MapActivate(void) {
+static void OnNewMapLoaded(void) {
+	if (!IndevTest_Enabled) return;
 	IndevBlocks_Define();
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
@@ -2502,44 +2496,15 @@ static void IndevTest_MapActivate(void) {
 	}
 }
 
-static void OnNewMapLoaded(void) {
-	/* Per-map re-derive: in MP the mode is server-dictated (OFF until - unless -
-	    a SURV_HELLO follows the level), so Indev never self-activates on someone
-	    else's server no matter what the local options say. */
-	IndevTest_Enabled = SurvivalTest_EffectiveGamemode() == SURVIVAL_GAMEMODE_INDEV;
-	if (!IndevTest_Enabled) return;
-	IndevTest_MapActivate();
-}
-
-/* The MP mode flip (SURV_HELLO lands after the level, so OnNewMapLoaded already
-    ran with mode OFF). Called via SurvivalTest_NetworkModeChanged - Indev first,
-    matching the component ordering the survival core relies on. */
-void IndevTest_NetworkModeChanged(void) {
-	IndevTest_Enabled = SurvivalTest_EffectiveGamemode() == SURVIVAL_GAMEMODE_INDEV;
-	if (IndevTest_Enabled) {
-		IndevTest_MapActivate();
-	} else {
-		/* Flipped off mid-map (mode-0 HELLO from a live /Survival change):
-		    gameplay stops at once; the custom block DEFINITIONS linger visually
-		    until the next map load wipes them (Game_Reset) - v1 limitation. */
-		World_FallThroughFloor = false;
-	}
-}
-
 static void OnInit(void) {
 	/* Derived from the single authoritative gamemode value - the conflicting */
 	/*  "both modes set" state is unrepresentable there, and this works */
-	/*  regardless of component init order. Effective mode: OFF in MP until a
-	    server SURV_HELLO flips it at runtime. */
-	IndevTest_Enabled = SurvivalTest_EffectiveGamemode() == SURVIVAL_GAMEMODE_INDEV;
+	/*  regardless of component init order. */
+	IndevTest_Enabled = SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV;
+	if (!IndevTest_Enabled) return;
 
-	/* Registered unconditionally so a survival server can flip Indev ON at
-	    runtime via SURV_HELLO: the events/tick self-guard on IndevTest_Enabled,
-	    the texture entries are inert without their PNGs being drawn, and the
-	    item/armor tables are pure data. What stays mode-gated is anything
-	    classic-visible: the block table (IndevBlocks_Define) and the farm
-	    physics handlers (Indev_RegisterFarmTicks) only exist while Indev is on. */
 	IndevItems_Seed();
+	IndevBlocks_Define();
 	IndevArmor_Register();
 	TextureEntry_Register(&items_entry);
 	TextureEntry_Register(&kz_entry);
@@ -2549,14 +2514,12 @@ static void OnInit(void) {
 	TextureEntry_Register(&contgui_entry);
 	TextureEntry_Register(&sun_entry);
 	TextureEntry_Register(&moon_entry);
+
 	Random_Seed(&indev_teRng, (int)Game.Time + 1);
+	Indev_RegisterFarmTicks();
 	Event_Register_(&UserEvents.BlockChanged, NULL, IndevTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, IndevTest_ContextLost);
 	ScheduledTask_Add(GAME_DEF_TICKS, IndevTest_Tick);
-
-	if (!IndevTest_Enabled) return;
-	IndevBlocks_Define();
-	Indev_RegisterFarmTicks();
 }
 
 /*########################################################################################################################*

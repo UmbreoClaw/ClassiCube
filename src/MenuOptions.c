@@ -1166,11 +1166,8 @@ static void    MiO_SetSurvivalEnhanced(cc_bool v) {
 
 static cc_bool MiO_GetIndevCreative(void) { return SurvivalTest_Creative; }
 static void    MiO_SetIndevCreative(cc_bool v) {
-	Options_SetBool(OPT_INDEV_CREATIVE, v);
-	/* MP: creative is SERVER-dictated per session/map (SURV_HELLO bit1) - the
-	    local option only ever applies in singleplayer. */
-	if (!Server.IsSinglePlayer) return;
 	SurvivalTest_Creative = v;
+	Options_SetBool(OPT_INDEV_CREATIVE, v);
 	/* Damage/break/HUD already read CreativeActive() live; flight is player
 	    state set at map load, so re-apply it now - turning creative off stops
 	    flying immediately instead of on the next map load. */

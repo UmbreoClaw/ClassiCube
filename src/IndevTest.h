@@ -19,12 +19,6 @@ extern struct IGameComponent IndevTest_Component;
 /*  faithful c0.30-s survival mode are completely unaffected. */
 extern cc_bool IndevTest_Enabled;
 
-/* MP mode flip: re-derives IndevTest_Enabled from the server-dictated mode and
-    (re)runs the map activation - SURV_HELLO arrives after the level, so the
-    normal map hook already ran with mode OFF. Called by SurvivalNet only, via
-    SurvivalTest_NetworkModeChanged (Indev first, then the survival core). */
-void IndevTest_NetworkModeChanged(void);
-
 /* Terrain tile the procedural fire animation is drawn into every tick */
 /*  (TextureFlamesFX port in Animations.c) - a spare tile in row 7, next to */
 /*  our crops (107-114) / farmland (115-116) / torch-top (117) patches. The */

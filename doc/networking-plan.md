@@ -77,11 +77,14 @@ pointer. `.mclevel` handling is fully covered — format §18, save lifecycle §
 - [x] **`src/SurvivalNet.c` foundation** — extension negotiated
       (`Server.SupportsSurvival`), receive dispatch gated + `SURV_HELLO`/
       `SURV_WORLDINFO` parse/log, `SurvivalNet_Send` wrapper. *(landed)*
-- [x] **`src/SurvivalNet.c`** mode‑flip — flip Indev mode from `SURV_HELLO` in MP
-      (options path kept in SP; `SurvivalTest_EffectiveGamemode`). *(landed)*
-- [x] **Gate the client's Indev sim OFF in MP** — `SurvivalNet_ServerDriven()`
+- [ ] **`src/SurvivalNet.c`** mode‑flip — flip Indev mode from `SURV_HELLO` in MP
+      (options path kept in SP; `SurvivalTest_EffectiveGamemode`).
+      *(implemented + verified in commit `ed604b6`, parked — cherry‑pick it
+      from the combined two‑repo session)*
+- [ ] **Gate the client's Indev sim OFF in MP** — `SurvivalNet_ServerDriven()`
       gates damage/mobs/drops/arrows/TNT/furnace/day‑night‑advance/spawner (+
-      random ticks/fire already run only under SP block physics). *(landed)*
+      random ticks/fire already run only under SP block physics).
+      *(same parked commit `ed604b6`)*
 - [ ] **Server runs the world sim** — day/night, random ticks, mob spawner — and
       relays block changes; day/night to stock clients via **`EnvColors`**. — §21
 - [ ] **Mob puppet** — `SURV_MOB_*` → `st_mobs[]`, render‑only, bespoke 16‑bit ids
@@ -287,11 +290,15 @@ The survival net layer hangs off the **MP** path only.
 
 ### 4.2 Recommended new client module: `src/SurvivalNet.c` (+ `.h`)
 
-> **STATUS (mode‑flip landed — supersedes "foundation landed").** On top of the
-> foundation (CPE ext in `src/Protocol.c`, `Server.SupportsSurvival`,
-> `SurvivalNet_Component`, `SurvivalNet_Send`), the client now implements the
-> **per‑map activation + sim handover** (matched byte‑for‑byte against the
-> MCGalaxy fork's `Network/SurvivalNet.cs`):
+> **STATUS (foundation in tree; mode‑flip implemented then PARKED).** The tree
+> carries the foundation (CPE ext in `src/Protocol.c`, `Server.SupportsSurvival`,
+> `SurvivalNet_Component`, `SurvivalNet_Send`, HELLO/WORLDINFO parse+log). The
+> full **per‑map activation + sim handover** was implemented and verified
+> byte‑for‑byte against the MCGalaxy fork's `Network/SurvivalNet.cs`, then
+> **reverted to be re‑landed from the combined two‑repo session** where it can
+> be integration‑tested against the live server — restore it with
+> `git cherry-pick ed604b6` (or `git checkout ed604b6 -- src/`). What ed604b6
+> contains:
 > - `SURV_HELLO` **applier**: stores mode/flags, flips
 >   `IndevTest_Enabled`/`SurvivalTest_Enabled`/`_Creative`/`_Enhanced` via
 >   `SurvivalTest_NetworkModeChanged()` (mode 0 deactivates — the server's live

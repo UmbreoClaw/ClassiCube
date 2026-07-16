@@ -25,7 +25,6 @@
 #include "InputHandler.h"
 #include "Protocol.h"
 #include "SurvivalTest.h"
-#include "SurvivalNet.h"
 #include "IndevTest.h"
 #include "IndevArmor.h"
 #include "IndevGen.h"
@@ -3709,10 +3708,6 @@ void SurvivalInvScreen_Show(void) {
 	/*  GuiInventory panel - just like survival (PlayerControllerCreative opened */
 	/*  the same GuiInventory; blocks come from the palette hotbar, not a picker). */
 	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
-	/* On a server-driven survival map the inventory is SERVER state, and the */
-	/*  server doesn't stream it yet (its phase 4) - the local survival screen */
-	/*  would show stale/fake slots. Behave like plain classic until then. */
-	if (SurvivalNet_ServerDriven()) { InventoryScreen_Show(); return; }
 	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
 	/*  fixed hotbar - so opening the inventory does nothing at all. The storage/ */
 	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */
@@ -3808,20 +3803,11 @@ static void GameOverScreen_ContextRecreated(void* screen) {
 
 	s->gen.minWidth   = 200 * scale; s->gen.minHeight  = 20 * scale;
 	s->load.minWidth  = 200 * scale; s->load.minHeight = 20 * scale;
-	if (SurvivalNet_ServerDriven()) {
-		/* MP: the server owns death/respawn - local world actions make no
-		    sense while connected, so the one button is a respawn intent. */
-		ButtonWidget_SetConst(&s->gen, "Respawn", &s->btnFont);
-	} else {
-		ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
-		ButtonWidget_SetConst(&s->load, "Load level..",          &s->btnFont);
-	}
+	ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
+	ButtonWidget_SetConst(&s->load, "Load level..",          &s->btnFont);
 }
 
 static void GameOverScreen_OnGen(void* screen, void* w) {
-	/* MP: ask the server to respawn us (SURV_RESPAWN); the screen stays up
-	    until the authoritative SURV_HEALTH revive removes it. */
-	if (SurvivalNet_ServerDriven()) { SurvivalNet_SendRespawn(); return; }
 	Gui_Remove((struct Screen*)&GameOverScreen);
 	GenLevelScreen_Show();
 }
@@ -3840,10 +3826,7 @@ static void GameOverScreen_Init(void* screen) {
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->message);
 	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
-	/* MP: single "Respawn" button (see ContextRecreated) - generating or
-	    loading a local level mid-connection makes no sense. */
-	if (!SurvivalNet_ServerDriven())
-		ButtonWidget_Add(s, &s->load, 400, GameOverScreen_OnLoad);
+	ButtonWidget_Add(s, &s->load, 400, GameOverScreen_OnLoad);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }
@@ -3877,12 +3860,6 @@ void GameOverScreen_Show(void) {
 	s->blocksWorld = false;
 	s->VTABLE      = &GameOverScreen_VTABLE;
 	Gui_Add((struct Screen*)s, GUI_PRIORITY_DISCONNECT);
-}
-
-/* MP: the server owns the death/respawn cycle - when a SURV_HEALTH revive
-    arrives the death screen must come down without any local respawn logic. */
-void GameOverScreen_Hide(void) {
-	Gui_Remove((struct Screen*)&GameOverScreen);
 }
 
 
