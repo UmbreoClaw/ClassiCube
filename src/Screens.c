@@ -3827,6 +3827,12 @@ static void GameOverScreen_Init(void* screen) {
 	TextWidget_Add(s, &s->message);
 	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
 	ButtonWidget_Add(s, &s->load, 400, GameOverScreen_OnLoad);
+	/* This screen does its own genuine ScaledResolution layout - fonts,
+	    button sizes AND offsets are all already x scale. The shared Indev
+	    menu flag (auto-set by ButtonWidget_Init) would rescale the layout
+	    offsets a second time and push both buttons below the screen. */
+	s->gen.flags  &= ~WIDGET_FLAG_INDEV_SCALE;
+	s->load.flags &= ~WIDGET_FLAG_INDEV_SCALE;
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }
@@ -3900,14 +3906,30 @@ static void LoadingScreen_CalcMaxVertices(struct LoadingScreen* s) {
 static void LoadingScreen_Layout(void* screen) {
 	struct LoadingScreen* s = (struct LoadingScreen*)screen;
 	int oldRows, y;
-	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -31);
-	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  17);
-	y = Display_ScaleY(34);
+	int is = Gui_GetIndevMenuScale();
 
-	s->progWidth  = Display_ScaleX(200);
-	s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth,  Window_UI.Width);
-	s->progHeight = Display_ScaleY(4);
-	s->progY      = Gui_CalcPos(ANCHOR_CENTRE, y, s->progHeight, Window_UI.Height);
+	if (is) {
+		/* genuine LoadingScreenRenderer.setLoadingProgress: text tops at
+		    h/2-20 and h/2+4 (so 8px-glyph centres at -16/+8 GUI px), and
+		    the progress bar is 100x2 GUI px at (w/2-50, h/2+16). Offsets
+		    are authored at 2x GUI px like the menus (flag path = *s/2). */
+		Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -32);
+		Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  16);
+
+		s->progWidth  = 100 * is;
+		s->progHeight =   2 * is;
+		s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth, Window_UI.Width);
+		s->progY      = Window_UI.Height / 2 + 16 * is;
+	} else {
+		Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -31);
+		Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  17);
+		y = Display_ScaleY(34);
+
+		s->progWidth  = Display_ScaleX(200);
+		s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth,  Window_UI.Width);
+		s->progHeight = Display_ScaleY(4);
+		s->progY      = Gui_CalcPos(ANCHOR_CENTRE, y, s->progHeight, Window_UI.Height);
+	}
 
 	oldRows = s->rows;
 	LoadingScreen_CalcMaxVertices(s);
@@ -3971,6 +3993,8 @@ static void LoadingScreen_Init(void* screen) {
 
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->message);
+	Widget_SetIndevScaled(&s->title);
+	Widget_SetIndevScaled(&s->message);
 
 	LoadingScreen_CalcMaxVertices(s);
 	Gfx_SetFog(false);
