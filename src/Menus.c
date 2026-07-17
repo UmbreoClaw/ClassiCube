@@ -409,7 +409,7 @@ static void ListScreen_Init(void* screen) {
 
 	ButtonWidget_Add(s, &s->left,  40, ListScreen_MoveBackwards);
 	ButtonWidget_Add(s, &s->right, 40, ListScreen_MoveForwards);
-	TextWidget_Add(s,   &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	ButtonWidget_Add(s, &s->done,  width, s->DoneClick);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(screen);
@@ -506,7 +506,7 @@ static void PauseScreenBase_ContextRecreated(struct PauseScreen* s, struct FontD
 }
 
 static void PauseScreenBase_AddWidgets(struct PauseScreen* s, int width) {
-	TextWidget_Add(s,   &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	Menu_AddButtons(s,  s->btns, width, s->descs, s->descsCount);
 	AddPrimaryButton(s, &s->back, PauseScreenBase_Game);
 }
@@ -739,7 +739,7 @@ static void OptionsGroupScreen_Init(void* screen) {
 	s->widgetsPerPage = 4;
 
 	Menu_AddButtons(s,  s->btns, 300, optsGroup_btns, 8);
-	TextWidget_Add(s,   &s->desc);
+	TextWidget_Add(s, &s->desc); Widget_SetIndevScaled(&s->desc);
 	AddPrimaryButton(s, &s->done, Menu_SwitchPause);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
@@ -1113,7 +1113,7 @@ static void GenLevelScreen_Make(struct GenLevelScreen* s, int i, int def) {
 	String_InitArray(tmp, tmpBuffer);
 	desc.VTABLE->GetDefault(&desc, &tmp);
 
-	TextWidget_Add(s, &s->labels[i]);
+	TextWidget_Add(s, &s->labels[i]); Widget_SetIndevScaled(&s->labels[i]);
 	s->labels[i].color = PackedCol_Make(224, 224, 224, 255);
 	
 	/* TODO placeholder */
@@ -1228,7 +1228,7 @@ static void GenLevelScreen_Init(void* screen) {
 	GenLevelScreen_Make(s, 2, World.Length);
 	GenLevelScreen_Make(s, 3, 0);
 
-	TextWidget_Add(s,   &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	ButtonWidget_Add(s, &s->flatgrass, 200, GenLevelScreen_Flatgrass);
 	ButtonWidget_Add(s, &s->vanilla,   200, GenLevelScreen_Notchy);
 	ButtonWidget_Add(s, &s->indev,     200, GenLevelScreen_Indev);
@@ -1352,7 +1352,7 @@ static void IndevGenScreen_Init(void* screen) {
 	s->numWidgets = 0;
 	s->maxWidgets = Array_Elems(s->__widgets);
 
-	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	for (i = 0; i < 4; i++) {
 		ButtonWidget_Add(s, &s->btns[i], 200, IndevGenScreen_Cycle);
 	}
@@ -1450,7 +1450,7 @@ static void ClassicGenScreen_Init(void* screen) {
 	s->numWidgets  = 0;
 	s->maxWidgets  = Array_Elems(s->__widgets);
 
-	TextWidget_Add(s,   &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	ButtonWidget_Add(s, &s->btns[0], 400, ClassicGenScreen_Small);
 	ButtonWidget_Add(s, &s->btns[1], 400, ClassicGenScreen_Medium);
 	ButtonWidget_Add(s, &s->btns[2], 400, ClassicGenScreen_Huge);
@@ -1708,7 +1708,7 @@ static void SaveLevelScreen_Init(void* screen) {
 	TextInputWidget_Add(s, &s->input, 400, &World.Name, &desc);	
 	Menu_SelectWidget((struct Screen*)s, 3); /* s->input */
 
-	TextWidget_Add(s, &s->desc);
+	TextWidget_Add(s, &s->desc); Widget_SetIndevScaled(&s->desc);
 	s->input.onscreenPlaceholder = "Map name";
 	s->input.base.OnTextChanged  = SaveLevelScreen_OnInputTextChanged;
 
@@ -2265,8 +2265,8 @@ static void KeyBindsScreen_Init(void* screen) {
 		s->buttons[i].meta.val = i;
 	}
 
-	TextWidget_Add(s,   &s->title);
-	TextWidget_Add(s,   &s->msg);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
+	TextWidget_Add(s, &s->msg); Widget_SetIndevScaled(&s->msg);
 	AddPrimaryButton(s, &s->back, Gui.ClassicMenu ? Menu_SwitchClassicOptions : Menu_SwitchOptions);
 
 	if (s->leftPage || s->rightPage) {
@@ -2769,7 +2769,7 @@ static void TexIdsOverlay_Init(void* screen) {
 	s->maxWidgets  = Array_Elems(s->__widgets);
 	s->maxVertices = TEXIDS_MAX_VERTICES;
 
-	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 	Event_Register_(&TextureEvents.AtlasChanged, s, TexIdsOverlay_OnAtlasChanged);
 }
 
@@ -3134,7 +3134,7 @@ static void NostalgiaMenuScreen_Init(void* screen) {
 	ButtonWidget_Add(s, &s->btnA, 400, NostalgiaMenuScreen_Appearance);
 	ButtonWidget_Add(s, &s->btnF, 400, NostalgiaMenuScreen_Functionality);
 	ButtonWidget_Add(s, &s->done, 400, NostalgiaMenuScreen_SwitchBack);
-	TextWidget_Add(s,   &s->title);
+	TextWidget_Add(s, &s->title); Widget_SetIndevScaled(&s->title);
 
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 }

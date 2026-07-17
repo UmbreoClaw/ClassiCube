@@ -229,6 +229,9 @@ struct WidgetVTABLE {
 /* Represents an individual 2D gui component. */
 struct Widget { Widget_Body };
 void Widget_SetLocation(void* widget, cc_uint8 horAnchor, cc_uint8 verAnchor, int xOffset, int yOffset);
+/* Marks a widget's offsets as following the genuine Indev menu scale
+    (WIDGET_FLAG_INDEV_SCALE) - no-op visually unless the scale is active. */
+void Widget_SetIndevScaled(void* widget);
 /* Calculates where this widget should be on-screen based on its attributes. */
 /* These attributes are width/height, horAnchor/verAnchor, xOffset/yOffset */
 void Widget_CalcPosition(void* widget);

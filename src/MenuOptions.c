@@ -1383,7 +1383,7 @@ static void NostalgiaFunctionalityScreen_InitWidgets(struct MenuOptionsScreen* s
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchNostalgia);
 	s->DoRecreateExtra = NostalgiaScreen_RecreateExtra;
 
-	TextWidget_Add(s, &nostalgia_desc);
+	TextWidget_Add(s, &nostalgia_desc); Widget_SetIndevScaled(&nostalgia_desc);
 	Widget_SetLocation(&nostalgia_desc, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
 
 	NostalgiaScreen_UpdateVersionDisabled();

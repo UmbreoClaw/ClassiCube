@@ -5577,3 +5577,17 @@ c0.30/plain creative unaffected (factor is 0 outside Indev+toggle).
 Known minor: unflagged menu TextWidget labels (options descriptions) keep DPI
 offsets - cosmetic misalignment only on dense options screens; buttons and
 titles read correctly.
+
+### Follow-up: gen-level + input/label widgets on the Indev menu scale
+User: what about the generate-level screens? Covered the remaining widget
+types the button pass missed:
+- TextInputWidget (seed/dimension boxes - a menu-only class; chat input is a
+  separate widget) now sizes at the genuine scale ((width/2) x scale, 20-GUI-px
+  box) and auto-flags its offsets in TextInputWidget_Add/Create.
+- All menu TextWidget labels/titles in Menus.c + MenuOptions.c are flagged via
+  Widget_SetIndevScaled (new tiny export) so their offsets track the scale -
+  this also closes the "labels keep DPI offsets" cosmetic note from the
+  previous commit. HUD/chat TextWidgets are untouched (flag is opt-in).
+Rig-verified: the Indev Generate-new-level screen (GuiNewLevel port) renders
+at the Indev step - title above the four cyclers, genuine button proportions,
+correct alignment; the classic gen screen's inputs/labels follow too.

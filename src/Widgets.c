@@ -1802,11 +1802,19 @@ static const struct WidgetVTABLE TextInputWidget_VTABLE = {
 	TextInputWidget_BuildMesh,   TextInputWidget_Render2, TextInputWidget_MaxVertices
 };
 void TextInputWidget_Create(struct TextInputWidget* w, int width, const cc_string* text, struct MenuInputDesc* desc) {
+	int s = Gui_GetIndevMenuScale();
 	InputWidget_Reset(&w->base);
 	w->base.VTABLE = &TextInputWidget_VTABLE;
 
-	w->minWidth  = Display_ScaleX(width);
-	w->minHeight = Display_ScaleY(30);
+	if (s) {
+		/* menu-only widget: follow the genuine Indev menu scale like the
+		    buttons (authored at 2x classic GUI px; genuine box ~20 GUI px) */
+		w->minWidth  = (width / 2) * s;
+		w->minHeight = 20 * s;
+	} else {
+		w->minWidth  = Display_ScaleX(width);
+		w->minHeight = Display_ScaleY(30);
+	}
 	w->desc      = *desc;
 
 	w->base.convertPercents = false;
@@ -1827,6 +1835,7 @@ void TextInputWidget_Create(struct TextInputWidget* w, int width, const cc_strin
 
 void TextInputWidget_Add(void* screen, struct TextInputWidget* w, int width, const cc_string* text, struct MenuInputDesc* d) {
 	TextInputWidget_Create(w, width, text, d);
+	Widget_SetIndevScaled(w); /* menu-only widget - offsets track the scale */
 	AddWidget(screen, w);
 }
 

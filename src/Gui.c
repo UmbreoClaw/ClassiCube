@@ -483,6 +483,10 @@ void TextAtlas_AddInt(struct TextAtlas* atlas, int value, struct VertexTextured*
 /*########################################################################################################################*
 *-------------------------------------------------------Widget base-------------------------------------------------------*
 *#########################################################################################################################*/
+void Widget_SetIndevScaled(void* widget) {
+	((struct Widget*)widget)->flags |= WIDGET_FLAG_INDEV_SCALE;
+}
+
 void Widget_SetLocation(void* widget, cc_uint8 horAnchor, cc_uint8 verAnchor, int xOffset, int yOffset) {
 	struct Widget* w = (struct Widget*)widget;
 	int s;
