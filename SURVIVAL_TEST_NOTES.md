@@ -5549,3 +5549,31 @@ water block held exactly 1 water block after 200 ticks (the classic flood
 would have filled ~49 cells instantly). Rig lesson: stale ClassiCube/Xvfb
 processes + X locks from killed runs must be pkill'd + /tmp/.X*-lock cleaned
 before each pass, or attaches target dead pids.
+
+## SESSION LOG - Indev-scaled menu screens (gui-indevscale toggle)
+
+User: match the remaining GUI scales to the Indev sizing the HUD/Game Over
+screen already use, switched by the same toggle. The gap was the MENU system
+(pause/options/gen/load/save/hotkeys): menus scaled by raw display DPI
+(Display_ScaleX/Y) while the HUD and Game Over screen used the genuine
+ScaledResolution step (GetWindowScale's Indev branch, gui-indevscale option).
+
+Fix, centralized at the three funnels every menu goes through:
+- Gui_GetIndevMenuScale() (Gui.c): the shared factor - same formula as the
+  survival HUD/GameOverScreen (hotbar scale x display scale), 0 when not
+  Indev / toggle off / touch UI.
+- Gui_MakeTitleFont/Gui_MakeBodyFont: the genuine 8-GUI-px menu font x scale
+  (menus previously used a fixed 16pt).
+- ButtonWidget_Init: genuine 200x20 GUI px x scale (ClassiCube authors menu
+  widths at 2x classic GUI px, so genuine = minWidth/2), and sets a new
+  WIDGET_FLAG_INDEV_SCALE so Widget_SetLocation scales THOSE widgets' offsets
+  by scale/2 - row spacing stays proportional to the resized buttons. HUD/
+  chat/hotbar widgets don't carry the flag, so their layout is untouched.
+- GuO_SetIndevScale now calls Gui_RefreshAll() so flipping the toggle rebuilds
+  open screens at the new scale immediately.
+Rig-verified: pause menu screenshot at the Indev step - chunky genuine-
+proportioned buttons, 8px font, correct spacing, Quit/Back anchored fine.
+c0.30/plain creative unaffected (factor is 0 outside Indev+toggle).
+Known minor: unflagged menu TextWidget labels (options descriptions) keep DPI
+offsets - cosmetic misalignment only on dense options screens; buttons and
+titles read correctly.

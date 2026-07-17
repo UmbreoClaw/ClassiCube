@@ -910,7 +910,9 @@ static cc_bool GuO_GetIndevScale(void) { return Gui.IndevGuiScale; }
 static void    GuO_SetIndevScale(cc_bool v) {
 	Gui.IndevGuiScale = v;
 	Options_SetBool(OPT_INDEV_GUI_SCALE, v);
-	Gui_LayoutAll();
+	/* menu fonts/button sizes are baked at screen build time - a full
+	    refresh rebuilds every open screen at the new scale immediately */
+	Gui_RefreshAll();
 }
 
 static void GuO_GetHotbar(cc_string* v) { String_AppendFloat(v, Gui.RawHotbarScale, 1); }

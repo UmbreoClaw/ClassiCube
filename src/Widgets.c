@@ -254,13 +254,22 @@ static const struct WidgetVTABLE ButtonWidget_VTABLE = {
 };
 
 void ButtonWidget_Init(struct ButtonWidget* w, int minWidth, Widget_LeftClick onClick) {
+	int s = Gui_GetIndevMenuScale();
 	Widget_Reset(w);
 	w->VTABLE    = &ButtonWidget_VTABLE;
 	w->color     = PACKEDCOL_WHITE;
 	w->optName   = NULL;
 	w->flags     = WIDGET_FLAG_SELECTABLE;
-	w->minWidth  = Display_ScaleX(minWidth);
-	w->minHeight = Display_ScaleY(40);
+	if (s) {
+		/* genuine Indev buttons are 200x20 GUI px; ClassiCube authors menu
+		    widths at 2x classic GUI px, so genuine px = minWidth / 2 */
+		w->flags    |= WIDGET_FLAG_INDEV_SCALE;
+		w->minWidth  = (minWidth / 2) * s;
+		w->minHeight = 20 * s;
+	} else {
+		w->minWidth  = Display_ScaleX(minWidth);
+		w->minHeight = Display_ScaleY(40);
+	}
 	w->MenuClick = onClick;
 }
 

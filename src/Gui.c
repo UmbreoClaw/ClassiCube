@@ -78,8 +78,26 @@ float Gui_GetCrosshairScale(void) {
 }
 
 
-void Gui_MakeTitleFont(struct FontDesc* font) { Font_Make(font, 16, FONT_FLAGS_BOLD); }
-void Gui_MakeBodyFont(struct FontDesc* font)  { Font_Make(font, 16, FONT_FLAGS_NONE); }
+int Gui_GetIndevMenuScale(void) {
+	int scale;
+	if (!IndevTest_Enabled || !Gui.IndevGuiScale) return 0;
+	if (Gui_TouchUI)                              return 0;
+	/* the same formula the survival HUD and Game Over screen use */
+	scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	return scale < 1 ? 1 : scale;
+}
+
+void Gui_MakeTitleFont(struct FontDesc* font) {
+	int s = Gui_GetIndevMenuScale();
+	/* genuine Indev menus draw everything in the 8-GUI-px font */
+	if (s) { Font_Make(font, 8 * s, FONT_FLAGS_BOLD); return; }
+	Font_Make(font, 16, FONT_FLAGS_BOLD);
+}
+void Gui_MakeBodyFont(struct FontDesc* font) {
+	int s = Gui_GetIndevMenuScale();
+	if (s) { Font_Make(font, 8 * s, FONT_FLAGS_NONE); return; }
+	Font_Make(font, 16, FONT_FLAGS_NONE);
+}
 
 int Gui_CalcPos(cc_uint8 anchor, int offset, int size, int axisLen) {
 	if (anchor == ANCHOR_MIN) return offset;
@@ -467,9 +485,19 @@ void TextAtlas_AddInt(struct TextAtlas* atlas, int value, struct VertexTextured*
 *#########################################################################################################################*/
 void Widget_SetLocation(void* widget, cc_uint8 horAnchor, cc_uint8 verAnchor, int xOffset, int yOffset) {
 	struct Widget* w = (struct Widget*)widget;
+	int s;
 	w->horAnchor = horAnchor; w->verAnchor = verAnchor;
-	w->xOffset = Display_ScaleX(xOffset);
-	w->yOffset = Display_ScaleY(yOffset);
+
+	/* Indev-scaled menu widgets: the ClassiCube menu grid is authored at 2x
+	    classic GUI px, so offsets map to genuine GUI px * scale via s/2 -
+	    keeping row spacing proportional to the resized buttons. */
+	if ((w->flags & WIDGET_FLAG_INDEV_SCALE) && (s = Gui_GetIndevMenuScale())) {
+		w->xOffset = (xOffset * s) / 2;
+		w->yOffset = (yOffset * s) / 2;
+	} else {
+		w->xOffset = Display_ScaleX(xOffset);
+		w->yOffset = Display_ScaleY(yOffset);
+	}
 	if (w->VTABLE) Widget_Layout(w);
 }
 
