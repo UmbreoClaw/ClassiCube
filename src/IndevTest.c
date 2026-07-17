@@ -407,6 +407,10 @@ cc_bool IndevTest_CanHarvest(int heldId, BlockID block) {
 	int level;
 	if (snd != SOUND_STONE && snd != SOUND_METAL) return true;
 
+	/* BlockGears is Material.circuits despite its stone sounds - the
+	    material gate (rock/iron only) never applies, so ANYTHING harvests */
+	if (block == 55 /* INDEV_BLOCK_GEARS (defined below) */) return true;
+
 	d = IndevItems_Find(heldId);
 	if (!d || d->kind != ITEM_KIND_PICKAXE) return false;
 	level = d->param;
@@ -716,12 +720,16 @@ int IndevTest_BlockDataMeta(BlockID b) {
 
 /* Position-aware Data-nibble forms: fire keeps its age 0-15 in a per-map
     side store rather than deriving it from the block id. */
+static int  Indev_SaplingStage(int index);
+static void Indev_SetSaplingStage(int index, int stage);
 int IndevTest_BlockDataMetaAt(int index, BlockID b) {
-	if (IndevFire_IsFire(b)) return IndevFire_Age(index);
+	if (IndevFire_IsFire(b))  return IndevFire_Age(index);
+	if (b == BLOCK_SAPLING)   return Indev_SaplingStage(index);
 	return IndevTest_BlockDataMeta(b);
 }
 BlockID IndevTest_ApplyDataMetaAt(int index, BlockID b, int meta) {
-	if (IndevFire_IsFire(b)) { IndevFire_SetAge(index, meta); return b; }
+	if (IndevFire_IsFire(b))  { IndevFire_SetAge(index, meta);      return b; }
+	if (b == BLOCK_SAPLING)   { Indev_SetSaplingStage(index, meta); return b; }
 	return IndevTest_ApplyDataMeta(b, meta);
 }
 
@@ -1702,6 +1710,154 @@ static void Indev_TickSource(int index, BlockID block) {
 	if (World_Contains(x, y, z + 1) && World_GetBlock(x, y, z + 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z + 1, fluid);
 }
 
+/* --- genuine plant ticks (BlockFlower/BlockMushroom/BlockSapling) --- */
+
+/* Sapling growth stage (genuine metadata 0-15) - a lazily sized per-map side
+    store, the same pattern as IndevFire's age nibble. */
+static cc_uint8* indev_saplingStage;
+static int       indev_saplingVol;
+static void Sapling_EnsureStages(void) {
+	if (indev_saplingVol == World.Volume && indev_saplingStage) return;
+	Mem_Free(indev_saplingStage);
+	indev_saplingVol   = World.Volume;
+	indev_saplingStage = World.Volume ? (cc_uint8*)Mem_TryAllocCleared(World.Volume, 1) : NULL;
+}
+static int Indev_SaplingStage(int index) {
+	if (!indev_saplingStage || index < 0 || index >= indev_saplingVol) return 0;
+	return indev_saplingStage[index];
+}
+static void Indev_SetSaplingStage(int index, int stage) {
+	Sapling_EnsureStages();
+	if (!indev_saplingStage || index < 0 || index >= indev_saplingVol) return;
+	indev_saplingStage[index] = (cc_uint8)(stage & 15);
+}
+
+/* BlockFlower.canThisPlantGrowOnThisBlockID: grass, dirt or farmland */
+static cc_bool Indev_PlantSoilOk(BlockID below) {
+	return below == BLOCK_GRASS || below == BLOCK_DIRT ||
+	       below == INDEV_BLOCK_FARMLAND || below == INDEV_BLOCK_FARMLAND_WET;
+}
+
+/* checkFlowerChange: dropBlockAsItem(self) THEN remove - the popped plant
+    drops itself with the genuine block-drop scatter (floor + rand*0.7 + 0.15) */
+static void Indev_PopPlant(int x, int y, int z, BlockID block) {
+	Vec3 pos;
+	pos.x = x + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+	pos.y = y + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+	pos.z = z + Random_Float(&indev_teRng) * 0.7f + 0.15f;
+	SurvivalTest_SpawnDropWorld(pos, block, 1);
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+}
+
+/* BlockFlower.canBlockStay: light >= 8, or light >= 4 with open sky above,
+    on grass/dirt/farmland. Returns whether the plant popped. */
+static cc_bool Indev_FlowerStayCheck(int index, BlockID block) {
+	int x, y, z, light;
+	BlockID below;
+	World_Unpack(index, x, y, z);
+
+	light = IndevTest_LightLevel(x, y, z);
+	below = y > 0 ? World.Blocks[index - World.OneY] : BLOCK_AIR;
+	if ((light >= 8 || (light >= 4 && Lighting.IsLit(x, y, z))) &&
+		Indev_PlantSoilOk(below)) return false;
+
+	Indev_PopPlant(x, y, z, block);
+	return true;
+}
+
+static void Indev_TickFlower(int index, BlockID block) {
+	Indev_FlowerStayCheck(index, block);
+}
+
+/* BlockMushroom.canBlockStay: light <= 13 and ANY opaque cube below */
+static void Indev_TickMushroom(int index, BlockID block) {
+	int x, y, z;
+	BlockID below;
+	World_Unpack(index, x, y, z);
+
+	below = y > 0 ? World.Blocks[index - World.OneY] : BLOCK_AIR;
+	if (IndevTest_LightLevel(x, y, z) <= 13 && Blocks.FullOpaque[below]) return;
+	Indev_PopPlant(x, y, z, block);
+}
+
+/* World.growTrees runtime port: trunk rand(3)+4, clearance envelope, grass/
+    dirt below (converted to dirt), diamond canopy with corner trimming.
+    (The generator keeps its own bit-exact copy on the gen RNG streams;
+    runtime growth draws from the world-side indev_teRng instead.) */
+static cc_bool Indev_GrowTree(int x, int y, int z) {
+	int trunkH = Random_Next(&indev_teRng, 3) + 4;
+	int xx, yy, zz, clearance, dy, radius, dxa, dza;
+	BlockID below;
+
+	if (y <= 0 || y + trunkH + 1 > World.Height) return false;
+
+	for (yy = y; yy <= y + 1 + trunkH; yy++) {
+		clearance = 1;
+		if (yy == y) clearance = 0;
+		if (yy >= y + 1 + trunkH - 2) clearance = 2;
+
+		for (xx = x - clearance; xx <= x + clearance; xx++) {
+			for (zz = z - clearance; zz <= z + clearance; zz++) {
+				if (!World_Contains(xx, yy, zz))               return false;
+				if (World_GetBlock(xx, yy, zz) != BLOCK_AIR)   return false;
+			}
+		}
+	}
+
+	below = World_GetBlock(x, y - 1, z);
+	if (below != BLOCK_GRASS && below != BLOCK_DIRT) return false;
+	if (y >= World.Height - trunkH - 1)              return false;
+	Game_UpdateBlock(x, y - 1, z, BLOCK_DIRT);
+
+	for (yy = y - 3 + trunkH; yy <= y + trunkH; yy++) {
+		dy     = yy - (y + trunkH);
+		radius = 1 - dy / 2;
+
+		for (xx = x - radius; xx <= x + radius; xx++) {
+			dxa = xx - x; if (dxa < 0) dxa = -dxa;
+			for (zz = z - radius; zz <= z + radius; zz++) {
+				dza = zz - z; if (dza < 0) dza = -dza;
+				if (dxa == radius && dza == radius &&
+					(Random_Next(&indev_teRng, 2) == 0 || dy == 0)) continue;
+				if (!World_Contains(xx, yy, zz)) continue;
+				if (!Blocks.FullOpaque[World_GetBlock(xx, yy, zz)]) {
+					Game_UpdateBlock(xx, yy, zz, BLOCK_LEAVES);
+				}
+			}
+		}
+	}
+
+	for (yy = 0; yy < trunkH; yy++) {
+		if (!Blocks.FullOpaque[World_GetBlock(x, y + yy, z)]) {
+			Game_UpdateBlock(x, y + yy, z, BLOCK_LOG);
+		}
+	}
+	return true;
+}
+
+/* BlockSapling.updateTick: the flower stay check first (super), then with
+    light(x, y+1, z) >= 9 and a 1-in-5 roll the metadata stage climbs 0-15;
+    only the 16th successful roll attempts the tree, restoring the sapling
+    if growTrees fails. (Genuine removes/restores via setTileNoUpdate - the
+    engine equivalent raises a couple of extra neighbour updates, harmless.) */
+static void Indev_TickSapling(int index, BlockID block) {
+	int x, y, z, stage;
+	World_Unpack(index, x, y, z);
+
+	if (Indev_FlowerStayCheck(index, block)) return;
+	if (IndevTest_LightLevel(x, y + 1, z) < 9)     return;
+	if (Random_Next(&indev_teRng, 5) != 0)         return;
+
+	stage = Indev_SaplingStage(index);
+	if (stage < 15) { Indev_SetSaplingStage(index, stage + 1); return; }
+
+	Indev_SetSaplingStage(index, 0);
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+	if (!Indev_GrowTree(x, y, z)) {
+		Game_UpdateBlock(x, y, z, BLOCK_SAPLING);
+	}
+}
+
 static void Indev_RegisterFarmTicks(void) {
 	int k;
 	Physics.OnRandomTick[INDEV_BLOCK_FARMLAND]     = Indev_TickFarmland;
@@ -1711,6 +1867,13 @@ static void Indev_RegisterFarmTicks(void) {
 	}
 	Physics.OnRandomTick[INDEV_BLOCK_WATER_SOURCE] = Indev_TickSource;
 	Physics.OnRandomTick[INDEV_BLOCK_LAVA_SOURCE]  = Indev_TickSource;
+	/* genuine BlockFlower/BlockMushroom/BlockSapling ticks replace the
+	    classic handlers on Indev maps (c0.30 keeps the classic ones) */
+	Physics.OnRandomTick[BLOCK_SAPLING]      = Indev_TickSapling;
+	Physics.OnRandomTick[BLOCK_DANDELION]    = Indev_TickFlower;
+	Physics.OnRandomTick[BLOCK_ROSE]         = Indev_TickFlower;
+	Physics.OnRandomTick[BLOCK_BROWN_SHROOM] = Indev_TickMushroom;
+	Physics.OnRandomTick[BLOCK_RED_SHROOM]   = Indev_TickMushroom;
 }
 
 /* World.tick's random block update loop, at the genuine rate: updateLCG

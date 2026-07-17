@@ -260,18 +260,38 @@ static void Physics_DoFalling(int index, BlockID block) {
 	BlockID other;
 	int x, y, z;
 
-	/* Find lowest block can fall into */
+	/* Find lowest block can fall into. Indev BlockSand.tryToFall also falls
+	    THROUGH fire (extinguishing it en route). */
 	while (index >= World.OneY) {
 		index -= World.OneY;
 		other  = World.Blocks[index];
 
-		if (other == BLOCK_AIR || (other >= BLOCK_WATER && other <= BLOCK_STILL_LAVA))
+		if (other == BLOCK_AIR || (other >= BLOCK_WATER && other <= BLOCK_STILL_LAVA)) {
 			found = index;
-		else
+		} else if (IndevTest_Enabled && other == INDEV_BLOCK_FIRE) {
+			found = index;
+			World_Unpack(index, x, y, z);
+			Game_UpdateBlock(x, y, z, BLOCK_AIR);
+		} else {
 			break;
+		}
 	}
 
 	if (found == -1) return;
+
+	/* Genuine tryToFall: past the world bottom (getBlockId clamps y<0 to the
+	    y=0 layer - air on a floating map) the faller is DESTROYED, not rested
+	    on an invisible floor. Only reachable on Indev floating maps. */
+	if (IndevTest_Enabled && found < World.OneY) {
+		World_Unpack(found, x, y, z);
+		if (World_GetPhysicsBlock(x, -1, z) == BLOCK_AIR) {
+			World_Unpack(start, x, y, z);
+			Game_UpdateBlock(x, y, z, BLOCK_AIR);
+			Physics_ActivateNeighbours(x, y, z, start);
+			return;
+		}
+	}
+
 	World_Unpack(found, x, y, z);
 	Game_UpdateBlock(x, y, z, block);
 

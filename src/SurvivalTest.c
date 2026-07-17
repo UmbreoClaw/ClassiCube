@@ -552,7 +552,11 @@ static int SurvivalTest_FindFreeDropSlot(void) {
 /*  velocity: xd/zd = rand*0.2-0.1 and yd = 0.2 blocks/tick, i.e. each */
 /*  horizontal axis independently uniform in +/-2 blocks/sec and a fixed 4 */
 /*  blocks/sec vertical hop. */
+static struct DropItem* SurvivalTest_SpawnDropAtEx(Vec3 pos, cc_uint16 block, int count);
 static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
+	SurvivalTest_SpawnDropAtEx(pos, block, count);
+}
+static struct DropItem* SurvivalTest_SpawnDropAtEx(Vec3 pos, cc_uint16 block, int count) {
 	struct DropItem* d;
 	int slot = SurvivalTest_FindFreeDropSlot(); /* always succeeds - evicts the oldest when full */
 
@@ -577,6 +581,7 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 	d->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
 	d->health      = 5;    /* EntityItem.health */
 	d->active      = true;
+	return d;
 }
 
 /* Public wrapper so the Indev layer (chest scatter on break) can spawn */
@@ -2753,9 +2758,10 @@ static void Mob_Die(struct Mob* m, cc_bool playerCredit) {
 			int n = Random_Next(&st_mobRng, 3), k;
 			for (k = 0; k < n; k++) {
 				Vec3 pos;
-				pos.x = Math_Floor(m->Base.Position.x) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-				pos.y = Math_Floor(m->Base.Position.y) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
-				pos.z = Math_Floor(m->Base.Position.z) + Random_Float(&st_dropRng) * 0.7f + 0.15f;
+				/* Entity.dropItemWithOffset -> entityDropItem(id, 1, 0):
+				    spawned AT the mob's position - the randomness is all in
+				    the EntityItem ctor velocity SpawnDropAt already applies */
+				pos = m->Base.Position;
 				SurvivalTest_SpawnDropAt(pos, (cc_uint16)indevDeathDrop[m->type], 1);
 			}
 		}
@@ -2919,10 +2925,17 @@ static cc_bool Mob_Hurt(struct Mob* m, struct Entity* attacker, int damage, cc_b
 		{ cc_string mdl = String_FromReadonly("sheep_nofur"); Entity_SetModel(&m->Base, &mdl); Mob_ApplySize(m); }
 		woolCount = 1 + Random_Next(&st_mobRng, 3);
 
-		coords.x = Math_Floor(e->Position.x);
-		coords.y = Math_Floor(e->Position.y);
-		coords.z = Math_Floor(e->Position.z);
-		for (i = 0; i < woolCount; i++) { SurvivalTest_SpawnDrop(coords, BLOCK_GRAY); }
+		/* EntitySheep: entityDropItem(clothGray, 1, +1.0F) per wool, with
+		    extra motion jitter on top of the EntityItem ctor velocity */
+		for (i = 0; i < woolCount; i++) {
+			struct DropItem* wd;
+			Vec3 wpos = e->Position; wpos.y += 1.0f;
+			wd = SurvivalTest_SpawnDropAtEx(wpos, BLOCK_GRAY, 1);
+			if (!wd) continue;
+			wd->velocity.y += Random_Float(&st_mobRng) * 0.05f * 20.0f;
+			wd->velocity.x += (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.1f * 20.0f;
+			wd->velocity.z += (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.1f * 20.0f;
+		}
 	} else if (m->type == MOB_TYPE_SHEEP && m->hasFur &&
 		Entities.CurPlayer && attacker == &Entities.CurPlayer->Base) {
 		m->hasFur = false;
@@ -3020,7 +3033,10 @@ static float Indev_ExplosionResistance(BlockID b) {
 	case BLOCK_STONE: case BLOCK_COBBLE: case BLOCK_GOLD: case BLOCK_IRON:
 	case BLOCK_DOUBLE_SLAB: case BLOCK_SLAB: case BLOCK_BRICK:
 	case BLOCK_MOSSY_ROCKS: case BLOCK_OBSIDIAN: /* obsidian is NOT special in Indev */
+	case 57: /* diamond block: setResistance(10) -> 30 -> effective 6.0 */
 		return 6.0f;
+	case 55: /* gears: setHardness(0.5) alone -> 2.5 -> effective 0.5 */
+		return 0.5f;
 	case BLOCK_WOOD: return 3.0f;
 	case BLOCK_GOLD_ORE: case BLOCK_IRON_ORE: case BLOCK_COAL_ORE:
 	case 56 /* diamond ore */: return 3.0f;
@@ -4558,7 +4574,9 @@ static PackedCol Mob_GetColor(struct Entity* e) {
 	/*  is scaled by (sin(tickCount)*0.5+0.5)*hurt*0.5 + 0.25 + hurt*0.25. */
 	/*  At full health that's a steady 0.25x... note the ORIGINAL is this dim */
 	/*  too - creepers genuinely render darker than other mobs. */
-	if (mobTypeInfo[m->type].isCreeper) {
+	if (mobTypeInfo[m->type].isCreeper && !IndevTest_Enabled) {
+		/* c0.30 only: Indev's EntityCreeper has no getBrightness override -
+		    it renders at normal brightness (its fuse blink is an overlay) */
 		float hurt  = (20 - m->health) / 20.0f;
 		float pulse = (Math_SinF((float)m->ticksAlive) * 0.5f + 0.5f) * hurt * 0.5f
 		            + 0.25f + hurt * 0.25f;
@@ -4787,6 +4805,12 @@ static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
 					if (light > Random_Next(&st_mobRng, 8)) continue;
 				} else {
 					if (light <= 8) continue;
+					/* EntityCreature.getCanSpawnHere also demands
+					    getBlockPathWeight >= 0: animals weigh 10 over grass,
+					    else lightBrightness - 0.5 - so non-grass ground
+					    needs brightness >= 0.5 (light >= 12) */
+					if (World_GetBlock(cx, cy - 1, cz) != BLOCK_GRASS &&
+						IndevTest_BrightnessOfLight(light) < 0.5f) continue;
 				}
 
 				candidate.x = cx + 0.5f;

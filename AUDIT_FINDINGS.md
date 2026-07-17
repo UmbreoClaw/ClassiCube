@@ -428,3 +428,91 @@ with remainder, food heals, attack damage tables (sword 4+2*tier etc., c0.30
 flat 4), knockback vectors, drowning/air both modes, lava/fire damage cadence,
 invuln windows both modes (c0.30 delta-damage, Indev miss-entirely), player
 movement (stock engine classic physics, no overrides).
+
+---
+
+## Domain 7: Fidelity sweep round 2 (blocks + mob AI)
+
+### #28 Genuine plant ticks: sapling staging, flower/mushroom stay + self-drop [FIXED]
+BlockSapling.updateTick: light(x,y+1,z) >= 9 AND nextInt(5)==0 per tick climbs
+metadata 0-15 (16 successful rolls), THEN tries growTrees, restoring the
+sapling on failure; lives on grass/dirt/farmland like all BlockFlower plants.
+BlockFlower.canBlockStay: light >= 8 OR (light >= 4 && sky-visible), and pops
+by DROPPING ITSELF first (dropBlockAsItem). BlockMushroom.canBlockStay: light
+<= 13 + ANY opaque cube below. Our classic handlers grew saplings instantly on
+lit grass only, popped flowers whenever un-sunlit (torch-lit flowers died!),
+kept mushrooms only on stone/cobble, and never dropped anything. Fixed with
+Indev-only handlers (Indev_TickSapling/Flower/Mushroom) registered over the
+classic ones per Indev map: genuine light thresholds via the flooded-light
+query, farmland soil, self-drops with the genuine 0.7+0.15 scatter, a per-map
+sapling-stage side store (round-tripped through the .mclevel Data nibble like
+fire age), and a runtime port of World.growTrees (trunk rand(3)+4, clearance
+envelope, grass/dirt->dirt below, corner-trimmed diamond canopy). Residual
+gap: genuine also re-checks on neighbour change; engine plants are random-tick
+only, so a soil-removed plant pops on its next tick instead of instantly.
+c0.30 keeps the classic handlers. IndevTest.c.
+
+### #29 Gears: any-item harvest + 0.5 explosion resistance [FIXED]
+BlockGears is Material.circuits (never gated by the rock/iron harvest rule)
+despite stone sounds - our sound-proxy demanded a pickaxe. setHardness(0.5)
+-> effective explosion resistance 0.5; our resistance switch had no case (0).
+IndevTest_CanHarvest early-return + resistance case added.
+
+### #30 Diamond block explosion resistance 6.0 [FIXED]
+setHardness(5).setResistance(10) -> resistance 30 -> effective 6.0 (the same
+group as stone/obsidian). Was falling to the 0 default. (Harvest gating and
+dig speed were fixed in #23.) SurvivalTest.c Indev_ExplosionResistance.
+
+### #31 Sand/gravel: fall through fire + void destruction [FIXED]
+BlockSand.tryToFall passes through air/fire/water/lava, EXTINGUISHING fire en
+route, and a faller that runs past the world bottom is destroyed (the y<0
+branch - reachable on floating maps via the getBlockId clamp). Ours stopped on
+fire and rested on the invisible floor. Physics_DoFalling now clears fire
+cells as it passes (Indev only) and deletes the faller at the bottom of a
+floating map instead of resting it. BlockPhysics.c.
+
+### #32 Indev fluids are classic infinite-flood, not finite BlockFlowing [QUEUED - HIGH]
+Genuine BlockFlowing: finite fluid - spreading REMOVES a donor cell from the
+connected body (World.floodFill/fluidFlowCheck volume conservation), at most
+one random-direction spread per update, stagnation rolls (nextInt(3)==0 keeps
+trying, else lava petrifies to stone / water evaporates), water converts
+adjacent lava to stone + extinguishes fire, still+opposite fluid -> stone
+(BlockStationary.onNeighborBlockChange). Ours: the engine's classic infinite
+duplication flood (only the 25-tick lava rate and ignition were Indev-ized).
+This is the single largest remaining behavioral divergence; it needs a
+dedicated Indev fluid handler port (BlockFlowing.update + the floodFill donor
+walk). Queued for its own session - touching fluids mid-sweep risks the whole
+water table.
+
+### #33 Animal spawns skip the getBlockPathWeight gate [FIXED]
+EntityAnimal.getCanSpawnHere ALSO requires getBlockPathWeight >= 0: weight 10
+over grass, else lightBrightness - 0.5 - so animals need grass below OR
+brightness >= 0.5 (light >= 12). Ours allowed pigs/sheep on any opaque block
+at light 9-11. Gate added to Mob_IndevSpawnPass (monsters unaffected).
+
+### #34 c0.30 creeper dim pulse leaked into Indev [FIXED]
+Indev's EntityCreeper has no getBrightness override - it renders at normal
+mob brightness (fuse blink is a render overlay, still a notes TODO). Our
+Mob_GetColor applied the c0.30 damage-dim pulse in both modes; now gated
+!IndevTest_Enabled.
+
+### #35 Indev death/shear drops spawned block-scattered instead of at the mob [FIXED]
+Entity.entityDropItem spawns AT posX/Y/Z (randomness is velocity-only);
+sheep shear spawns at +1.0 Y with extra motion jitter on top. Ours used the
+block-mining scatter (floor + rand*0.7 + 0.15) and floored shear coords.
+Death drops now spawn at the mob position; shear wool at +1.0 Y with the
+genuine extra jitter (SurvivalTest_SpawnDropAtEx exposes the drop for the
+velocity add-on).
+
+### Sweep round 2 verified-exact list (no action)
+Hardness table (x20 conversions, bedrock sentinel, flowing-lava-0, cloth 16),
+all other explosion resistances (obsidian 6.0 via setResistance, flowing lava
+1.2 ctor quirk), the full drop table (leaves 1/10 sapling, gravel 1/10 flint,
+stone->cobble, no clay in in-20100223), TNT (fuse 80, radius 4, chain 10+r20,
+0.3 drop chance, ray-march constants), the entire IndevFire constant set, slab
+combining, sponge, mob stat table (health/size/speed/damage/score), wander AI
+thresholds, Indev creature AI (256 acquire, 1/20 re-path, 200-sample wander),
+creeper fuse/radius both modes, skeleton fire rates both modes, spider
+brightness<0.5 aggro + lunge, sheep shear/graze rules, zombie+skeleton
+daylight burning formula, spawner caps/light gates/distances/1000-pass init,
+death-drop contents, despawn/hurt/knockback/push.

@@ -5518,3 +5518,19 @@ running; drops/HUD queued.
 Process note: an errant conditional in a python edit truncated
 AUDIT_FINDINGS.md to 0 bytes mid-session (open('w') before a failed write);
 restored via git checkout. Notes edits are append-only heredocs from now on.
+
+## SESSION LOG - Fidelity sweep round 2 (blocks + mob AI)
+
+Second audit batch returned; all claims re-verified against the Java before
+fixing. Fixed: genuine plant ticks (#28 - sapling 16-stage metadata growth with
+a runtime World.growTrees port + side store round-tripped through .mclevel,
+flower/mushroom genuine stay rules + self-drops; torch-lit flowers no longer
+die), gears any-item harvest + 0.5 resistance (#29), diamond block 6.0
+resistance (#30), sand/gravel falling through fire + void destruction on
+floating maps (#31), animal spawn path-weight gate (#33), Indev creeper no
+longer dimmed by the c0.30 damage pulse (#34), death/shear drops at the mob
+position with genuine velocities (#35). QUEUED HIGH: #32 finite BlockFlowing
+fluids (the classic infinite flood is the biggest remaining divergence -
+dedicated session). Rig smoke test: 75s live fresh-gen Indev world with the
+new plant handlers ticking, no crash (two earlier "crashes" were the flaky
+Xvfb dying again - X11-display failures, not code).
