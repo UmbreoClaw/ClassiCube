@@ -5658,3 +5658,22 @@ became the white horizon-fog gradient, over which the additive sun.png glow
 saturates much further out. Fix in Formats.c: cast `(cc_int16)` like the
 SurroundingGround/WaterHeight tags already do. Saved files were always
 byte-correct; genuine Indev reads them fine.
+
+## 2026-07-17: leaves shadows (user report) - lighting re-audit
+
+Genuine Indev `Block.java:496` registers leaves with `setLightOpacity(1)`;
+the heightmap top-scan stops at ANY nonzero opacity, so canopies shadow the
+ground (World.java:138, Light.java updateLists). Flood attenuation through
+a leaf is max(1, opacity)=1 - identical to air - so the shadow comes ONLY
+from losing the direct sky injection. c0.30's `isLightBlocker()` is
+`isOpaque()`, which LeavesBaseBlock overrides to false: NO leaf shadows in
+Survival Test, so the fix is Indev-gated (IndevBlocks_Define).
+
+Fix: `Blocks.BlocksLight[BLOCK_LEAVES] = true` in Indev mode, plus clear
+LIGHT_FLAG_SHADES_FROM_BELOW on leaves/water so ClassicLighting's
+heightmap sits AT the top blocker cell (genuine heightMap = blockerY+1 =
+first fully-lit cell). The blocker cell itself is now flood-lit, never a
+direct seed: top leaf = 14, water surface = 15-3 = 12 (was seeded 15 and
+only paid opacity deeper down). Verified opacity table against Block.java
+static init: water 3 (ours: -1 spread -2 entry = 3 total), lava 255
+(BlocksLight default true), farmland/step 255, everything else nonopaque 0.

@@ -803,6 +803,21 @@ static void IndevBlocks_Define(void) {
 	/* mushroomBrown.setLightValue(2/16) - the faint brown mushroom glow */
 	Blocks.Brightness[BLOCK_BROWN_SHROOM] = 1 << FANCY_LIGHTING_LAMP_SHIFT;
 
+	/* Block.java:496 - leaves are setLightOpacity(1), and ANY nonzero
+	    opacity ends the heightmap top-scan, so tree canopies shadow the
+	    ground below them. The flood already passes through leaves at the
+	    minimum -1 per cell, which IS opacity 1's attenuation. (c0.30's
+	    isLightBlocker() is isOpaque(), false for leaves - no shadow there,
+	    hence Indev-only.) Clearing SHADES_FROM_BELOW parks the heightmap
+	    AT the top blocker cell: genuine heightMap = blockerY + 1 = first
+	    fully-lit cell, so the blocker itself is flood-lit, never a direct
+	    sky seed - a leaf gets 15-1=14, a water surface 15-3=12 (water was
+	    previously seeded at 15 and only paid its opacity going deeper). */
+	Blocks.BlocksLight[BLOCK_LEAVES]       = true;
+	Blocks.LightOffset[BLOCK_LEAVES]      &= ~(1 << LIGHT_FLAG_SHADES_FROM_BELOW);
+	Blocks.LightOffset[BLOCK_WATER]       &= ~(1 << LIGHT_FLAG_SHADES_FROM_BELOW);
+	Blocks.LightOffset[BLOCK_STILL_WATER] &= ~(1 << LIGHT_FLAG_SHADES_FROM_BELOW);
+
 	/* Hardness from Block.java registration: workbench/chest setHardness(2.5F), */
 	/*  furnace 3.5F, torch 0.0F - our units are 20 per hardness-second. */
 	IndevBlock_Define(INDEV_BLOCK_WORKBENCH,   "Workbench",  96, 97,  98,  4, SOUND_WOOD,  50);
