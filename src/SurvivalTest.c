@@ -4575,16 +4575,34 @@ static cc_bool Mob_SpawnBlockedBy(BlockID b) {
 }
 
 /* Duplicates the private Entity_GetColor (lighting at the entity's eye */
-/*  position) since mobs aren't real Entities.List[] entries, plus a brief */
-/*  red hit-flash while hurtTicks counts down from 10 (Mob.hurtTime), */
-/*  blended into the lit colour rather than drawn as a separate pass. */
-/* Set while RenderMobs is drawing the additive white hit-flash pass, so the */
-/*  model VTABLE colour below turns flat translucent white for that pass. */
-static cc_bool st_mobFlashPass;
+/*  position) since mobs aren't real Entities.List[] entries. The hit-flash */
+/*  overlays are separate render passes (see RenderMobs), NOT colour blends: */
+/*  c0.30 flashes additive white, Indev overlays translucent red - neither */
+/*  ground truth tints the base model itself. */
+/* Set while RenderMobs is drawing a hit-flash overlay pass, so the model */
+/*  VTABLE colour below returns that pass's flat colour instead. */
+static cc_bool   st_mobFlashPass;
+static PackedCol st_mobFlashCol;
+
+/* 4x4 solid white, substituted for the skin during the Indev hurt-overlay
+    pass - reproduces genuine RenderLiving's glDisable(GL_TEXTURE_2D) flat
+    draw without leaving the engine's textured model pipeline. */
+static GfxResourceID st_mobWhiteTex;
+static GfxResourceID Mob_WhiteTex(void) {
+	static BitmapCol pixels[4 * 4];
+	struct Bitmap bmp;
+	int i;
+	if (st_mobWhiteTex) return st_mobWhiteTex;
+
+	for (i = 0; i < 4 * 4; i++) pixels[i] = BITMAPCOLOR_WHITE;
+	Bitmap_Init(bmp, 4, 4, pixels);
+	st_mobWhiteTex = Gfx_CreateTexture(&bmp, 0, false);
+	return st_mobWhiteTex;
+}
 
 static PackedCol Mob_GetColor(struct Entity* e) {
 	struct Mob* m = (struct Mob*)e; /* Base is the first field of struct Mob */
-	if (st_mobFlashPass) return PackedCol_Make(255, 255, 255, 191);
+	if (st_mobFlashPass) return st_mobFlashCol;
 	Vec3 eyePos = Entity_GetEyePosition(e);
 	IVec3 pos;
 	PackedCol col;
@@ -4605,14 +4623,6 @@ static PackedCol Mob_GetColor(struct Entity* e) {
 		col = PackedCol_Scale(col, min(pulse, 1.0f));
 	}
 
-	if (m->hurtTicks > 0) {
-		float f  = m->hurtTicks / 10.0f;
-		int   r  = PackedCol_R(col), g = PackedCol_G(col), b = PackedCol_B(col);
-		r = (int)(r + (255 - r) * f);
-		g = (int)(g * (1.0f - f));
-		b = (int)(b * (1.0f - f));
-		col = PackedCol_Make((cc_uint8)r, (cc_uint8)g, (cc_uint8)b, PackedCol_A(col));
-	}
 	return SurvivalTest_AmbientTint(col);
 }
 
@@ -5059,16 +5069,48 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 
 		Model_Render(e->Model, e);
 
-		/* Mob.render: while invulnerableTime is within 10 ticks of a fresh */
-		/*  hit, the model is drawn a SECOND time additively in translucent */
-		/*  white (glColor4f(1,1,1,0.75) + SRC_ALPHA/ONE) - the hit flash. */
-		if (m->invincTicks > MOB_INVINC_TICKS - 10 && m->health > 0) {
+		/* c0.30 Mob.render: while invulnerableTime is within 10 ticks of a */
+		/*  fresh hit, the model is drawn a SECOND time additively in */
+		/*  translucent white (glColor4f(1,1,1,0.75) + SRC_ALPHA/ONE) - the */
+		/*  hit flash. Indev's RenderLiving has NO such pass - its flash is */
+		/*  the red overlay below instead. */
+		if (!IndevTest_Enabled && m->invincTicks > MOB_INVINC_TICKS - 10 && m->health > 0) {
+			st_mobFlashCol  = PackedCol_Make(255, 255, 255, 191);
 			st_mobFlashPass = true;
 			Gfx_SetAlphaBlendingAdditive(true);
 			Gfx_SetDepthWrite(false);
 			Model_Render(e->Model, e);
 			Gfx_SetDepthWrite(true);
 			Gfx_SetAlphaBlendingAdditive(false);
+			st_mobFlashPass = false;
+		}
+
+		/* Indev RenderLiving: while hurtTime or deathTime is live, the */
+		/*  model is redrawn UNTEXTURED with glColor4f(brightness, 0, 0, 0.4) */
+		/*  and plain alpha blending - a red overlay whose red channel is the */
+		/*  mob's light brightness (getEntityBrightness), so a mob in a cave */
+		/*  flashes DARK red, never fullbright. Constant 0.4 alpha for the */
+		/*  whole 10-tick window - genuine has no fade-out. */
+		if (IndevTest_Enabled && (m->hurtTicks > 0 || m->health <= 0)) {
+			GfxResourceID oldTex;
+			cc_bool oldNonHuman;
+			Vec3 eyePos = Entity_GetEyePosition(e);
+			IVec3 lp;
+			float bright;
+			IVec3_Floor(&lp, &eyePos);
+			bright = IndevTest_BrightnessOfLight(IndevTest_LightLevel(lp.x, lp.y, lp.z));
+
+			st_mobFlashCol  = PackedCol_Make((cc_uint8)(bright * 255.0f), 0, 0, 102);
+			st_mobFlashPass = true;
+			oldTex      = e->TextureId;    e->TextureId    = Mob_WhiteTex();
+			oldNonHuman = e->NonHumanSkin; e->NonHumanSkin = true;
+			Gfx_SetAlphaBlending(true);
+			Gfx_SetDepthWrite(false);
+			Model_Render(e->Model, e);
+			Gfx_SetDepthWrite(true);
+			Gfx_SetAlphaBlending(false);
+			e->TextureId    = oldTex;
+			e->NonHumanSkin = oldNonHuman;
 			st_mobFlashPass = false;
 		}
 	}
@@ -7615,6 +7657,7 @@ static void SurvivalTest_ResetState(void) {
 /* The item vertex buffer is a GPU resource and must be dropped/recreated */
 /*  whenever the graphics context is lost (it is rebuilt lazily on render). */
 static void SurvivalTest_OnContextLost(void* obj) {
+	Gfx_DeleteTexture(&st_mobWhiteTex);
 	Gfx_DeleteDynamicVb(&st_itemVB);
 	Gfx_DeleteDynamicVb(&st_itemDropVB);
 	Gfx_DeleteDynamicVb(&st_glowVB);

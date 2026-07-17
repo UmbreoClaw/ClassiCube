@@ -5677,3 +5677,27 @@ direct seed: top leaf = 14, water surface = 15-3 = 12 (was seeded 15 and
 only paid opacity deeper down). Verified opacity table against Block.java
 static init: water 3 (ours: -1 spread -2 entry = 3 total), lava 255
 (BlocksLight default true), farmland/step 255, everything else nonopaque 0.
+
+## 2026-07-17: mob hurt flash fullbright red (user report)
+
+Neither ground truth tints the model itself. Our Mob_GetColor blended the
+lit colour toward pure (255,0,0) scaled by hurtTicks/10 - fullbright red,
+fading out, in BOTH modes. Genuine:
+
+- c0.30 Mob.render: NO red at all. Hurt feedback = the sin(t^4*pi)*14 body
+  roll (already ported) + the additive white pass (glColor4f(1,1,1,0.75),
+  SRC_ALPHA/ONE, textured) while invulnerableTime is within 10 of a fresh
+  hit. That pass is now gated !IndevTest_Enabled.
+- Indev RenderLiving.java:67-82: while hurtTime > 0 OR deathTime > 0, the
+  model is redrawn UNTEXTURED with glColor4f(brightness, 0, 0, 0.4F) and
+  SRC_ALPHA/ONE_MINUS_SRC_ALPHA - the red channel is getEntityBrightness
+  (the genuine lightBrightnessTable curve), so mobs flash DARK red in caves
+  and never fullbright; alpha is a constant 0.4 with no fade, and the
+  overlay stays on through the 20-tick death fall.
+
+Port: removed the colour blend; the Indev overlay is a second Model_Render
+pass with a 4x4 white substitute skin (e->TextureId + NonHumanSkin swap)
+standing in for glDisable(GL_TEXTURE_2D), flat colour from
+IndevTest_BrightnessOfLight(IndevTest_LightLevel(eye)) in the red channel,
+alpha 102. White tex freed on context loss. (Genuine also red-flashes the
+PLAYER via RenderPlayer in third person - ours is mob-only for now.)
