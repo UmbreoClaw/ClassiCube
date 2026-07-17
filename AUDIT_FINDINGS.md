@@ -471,7 +471,7 @@ fire and rested on the invisible floor. Physics_DoFalling now clears fire
 cells as it passes (Indev only) and deletes the faller at the bottom of a
 floating map instead of resting it. BlockPhysics.c.
 
-### #32 Indev fluids are classic infinite-flood, not finite BlockFlowing [QUEUED - HIGH]
+### #32 Indev fluids are classic infinite-flood, not finite BlockFlowing [FIXED]
 Genuine BlockFlowing: finite fluid - spreading REMOVES a donor cell from the
 connected body (World.floodFill/fluidFlowCheck volume conservation), at most
 one random-direction spread per update, stagnation rolls (nextInt(3)==0 keeps
@@ -479,10 +479,30 @@ trying, else lava petrifies to stone / water evaporates), water converts
 adjacent lava to stone + extinguishes fire, still+opposite fluid -> stone
 (BlockStationary.onNeighborBlockChange). Ours: the engine's classic infinite
 duplication flood (only the 25-tick lava rate and ignition were Indev-ized).
-This is the single largest remaining behavioral divergence; it needs a
-dedicated Indev fluid handler port (BlockFlowing.update + the floodFill donor
-walk). Queued for its own session - touching fluids mid-sweep risks the whole
-water table.
+FIXED same session: full port in IndevTest.c - Fluid_FloodFill +
+Fluid_FlowCheck (the per-layer scanline walks with the genuine 30000-generation
+stamp counter and the x+z<<10 packing), BlockFlowing.update verbatim (downhill
+liquidSpread2 with donor removal + the donor sanity test, one shuffled
+horizontal spread per update, 1/3+1/3 stagnation with evaporate/petrify, water
+extinguish/petrify contacts, lava fireSpread via IndevFire_LavaFlowInto,
+settle-to-still), BlockStationary wake/petrify on activation, a scheduled-
+update queue at the genuine tickRates (water 5 / lava 25) run from
+Physics_Tick, setTickOnLoad scheduling of moving cells at map load, and
+canFlow = non-solid non-liquid target + the 5x5x5 sponge veto. BONUS
+discovered in the port: fluidFlowCheck is where the SOURCE blocks 52/53 hook
+in - a body touching one returns -9999 (infinite supply, no donor) - so
+springs now work through the genuine mechanism, and BlockSource.onBlockAdded
+now fills its sides on placement too. Classic/c0.30 keep the engine flood
+(handlers registered per Indev map only).
+RIG-VERIFIED: sealed 7x7 basin, one flowing water block, 200 live ticks ->
+still exactly 1 water block (classic flood = ~49 instantly); no crash; map
+load with the fluid scan clean. Deviations documented in-code: still-
+conversion raises neighbour notifies (genuine setTileNoUpdate doesn't; the
+still-wake handler ignores them unless flow is possible, so bodies converge),
+still-wake petrify scans the 6 neighbours (engine activations don't carry the
+changed block id), the schedule queue dedupes and caps at 4096 entries.
+Residual to rig-test next pass: source-spring growth + lava stagnation
+petrify (code paths shared with the verified flow-check/update).
 
 ### #33 Animal spawns skip the getBlockPathWeight gate [FIXED]
 EntityAnimal.getCanSpawnHere ALSO requires getBlockPathWeight >= 0: weight 10
@@ -516,3 +536,15 @@ creeper fuse/radius both modes, skeleton fire rates both modes, spider
 brightness<0.5 aggro + lunge, sheep shear/graze rules, zombie+skeleton
 daylight burning formula, spawner caps/light gates/distances/1000-pass init,
 death-drop contents, despawn/hurt/knockback/push.
+
+### #36 Genuine runtime ids for visible-metadata blocks [QUEUED - future refactor]
+User decision: someday collapse the multi-id workaround (crops 85-92, farmland
+83/84, chest/furnace facing 71-82, wall torches 94-97) into genuine single ids
++ a per-position metadata store, like fire age / sapling stage already use.
+Storage is trivial (the side-store pattern exists); the real work is renderer
+surgery - ClassiCube resolves texture/model/draw-mode purely from block id in
+the hot meshing path, so visible metadata needs a position-aware texture hook
+in Builder.c plus mesh invalidation on metadata-only changes, and MP would then
+need SURV_BLOCKMETA for every visual state change (multi-id streams over plain
+SetBlock today - that advantage disappears). Save format is ALREADY genuine
+either way. Do this only when something depends on runtime id genuineness.

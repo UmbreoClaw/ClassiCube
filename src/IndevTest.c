@@ -1710,6 +1710,462 @@ static void Indev_TickSource(int index, BlockID block) {
 	if (World_Contains(x, y, z + 1) && World_GetBlock(x, y, z + 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z + 1, fluid);
 }
 
+/* ==== genuine finite fluids - BlockFlowing / BlockStationary port ====
+   The classic engine floods fluid infinitely (every neighbour + down, forever).
+   Genuine in-20100223 fluid is FINITE:
+   - a moving cell spreads DOWN first, else to at most ONE random horizontal
+     neighbour per update - and each spread over a full body pulls its volume
+     from a DONOR cell (World.fluidFlowCheck picks the farthest/highest cell of
+     the connected body and removes it), conserving volume;
+   - a body touching a SOURCE block (waterSource 52 / lavaSource 53) reports
+     infinite supply (-9999) and never donates - that is what makes springs;
+   - a cell with somewhere to go that fails to spread STAGNATES: 1/3 roll each
+     update, then 1/3 to retry as a plain spread, else lava petrifies to stone
+     and water evaporates;
+   - water extinguishes adjacent fire and petrifies adjacent lava; lava ignites
+     flammable neighbours (BlockFire.fireSpread); a settled cell turns STILL;
+   - still fluid wakes back to moving on neighbour changes (BlockStationary),
+     petrifying when the opposite fluid arrives;
+   - updates ride the scheduled-update list: tickRate 5 (water) / 25 (lava).
+   Registered per Indev map only - classic/c0.30 keep the engine flood. */
+
+#define FLUID_SCHED_MAX 4096
+static struct { int index; cc_uint16 delay; cc_uint8 water; } indev_fluidSched[FLUID_SCHED_MAX];
+static int      indev_fluidSchedCount;
+static RNGState indev_fluidRng;
+static int      indev_liquidOrder[4] = { 0, 1, 2, 3 }; /* BlockFlowing.liquidIntArray */
+
+/* flood-fill scratch, lazily sized; stamps use the genuine x + (z << 10)
+    layer packing so the scanline walks port verbatim (maps cap at 512) */
+static cc_uint16* fluid_stamps;
+static int        fluid_stampsLen;
+static cc_uint16  fluid_counter;
+static int*       fluid_stackA;
+static int*       fluid_stackB;
+static int        fluid_stackCap;
+
+static cc_bool Fluid_EnsureScratch(void) {
+	int stamps = 1024 * World.Length;
+	int cap    = World.Width * World.Length + 64;
+	if (fluid_stamps && fluid_stampsLen == stamps && fluid_stackCap == cap) return true;
+	Mem_Free(fluid_stamps); Mem_Free(fluid_stackA); Mem_Free(fluid_stackB);
+	fluid_stampsLen = stamps; fluid_stackCap = cap; fluid_counter = 0;
+	fluid_stamps = (cc_uint16*)Mem_TryAllocCleared(stamps, 2);
+	fluid_stackA = (int*)Mem_TryAlloc(cap, 4);
+	fluid_stackB = (int*)Mem_TryAlloc(cap, 4);
+	if (fluid_stamps && fluid_stackA && fluid_stackB) return true;
+	Mem_Free(fluid_stamps); Mem_Free(fluid_stackA); Mem_Free(fluid_stackB);
+	fluid_stamps = NULL; fluid_stackA = NULL; fluid_stackB = NULL; fluid_stampsLen = 0;
+	return false;
+}
+static void Fluid_BumpCounter(void) {
+	/* the genuine 30000-generation stamp reset */
+	if (++fluid_counter == 30000) {
+		Mem_Set(fluid_stamps, 0, fluid_stampsLen * 2);
+		fluid_counter = 1;
+	}
+}
+
+static cc_bool Fluid_IsWaterMat(BlockID b) {
+	return b == BLOCK_WATER || b == BLOCK_STILL_WATER || b == INDEV_BLOCK_WATER_SOURCE;
+}
+static cc_bool Fluid_IsLavaMat(BlockID b) {
+	return b == BLOCK_LAVA || b == BLOCK_STILL_LAVA || b == INDEV_BLOCK_LAVA_SOURCE;
+}
+
+/* BlockFluid.canFlow: target material must be neither liquid nor solid (air,
+    plants, torches, fire, gears - flowing over them destroys them), and water
+    additionally refuses within 2 blocks of a sponge. */
+static cc_bool Fluid_CanFlowInto(cc_bool water, int x, int y, int z) {
+	BlockID b;
+	int sx, sy, sz;
+	if (!World_Contains(x, y, z)) return false;
+	b = World_GetBlock(x, y, z);
+	if (b != BLOCK_AIR && Blocks.Collide[b] != COLLIDE_NONE) return false;
+
+	if (water) {
+		for (sx = x - 2; sx <= x + 2; sx++)
+			for (sy = y - 2; sy <= y + 2; sy++)
+				for (sz = z - 2; sz <= z + 2; sz++) {
+					if (!World_Contains(sx, sy, sz)) continue;
+					if (World_GetBlock(sx, sy, sz) == BLOCK_SPONGE) return false;
+				}
+	}
+	return true;
+}
+
+#define FLUID_PACK2(x, z)  ((x) + ((z) << 10))
+#define FLUID_BODY(b)      ((b) == moving || (b) == still)
+
+/* World.floodFill(x, y, z, moving, still): scanline-floods the connected
+    fluid body on ONE layer. 0 = found adjacent air (body can still absorb),
+    1 = fully closed, 2 = touches the map border. */
+static int Fluid_FloodFill(int x, int y, int z, BlockID moving, BlockID still) {
+	int top = 0, p2, runB;
+	cc_bool spanN, spanS, match;
+	BlockID b;
+	if (!World_Contains(x, y, z))  return 0;
+	if (!Fluid_EnsureScratch())    return 2; /* alloc failure: act border-ish (no equalize) */
+	Fluid_BumpCounter();
+
+	fluid_stackA[top++] = FLUID_PACK2(x, z);
+
+	while (top > 0) {
+		p2 = fluid_stackA[--top];
+		if (fluid_stamps[p2] == fluid_counter) continue;
+		x = p2 % 1024; z = p2 / 1024;
+		if (x == 0 || x == World.Width - 1 || y == 0 || y == World.Height - 1 ||
+			z == 0 || z == World.Length - 1) return 2;
+
+		/* walk to the west end of this run */
+		while (x > 0 && fluid_stamps[p2 - 1] != fluid_counter &&
+			   FLUID_BODY(World_GetBlock(x - 1, y, z))) { x--; p2--; }
+		if (x > 0 && World_GetBlock(x - 1, y, z) == BLOCK_AIR) return 0;
+
+		spanN = false; spanS = false;
+		for (; x < World.Width && fluid_stamps[p2] != fluid_counter &&
+			   FLUID_BODY(World_GetBlock(x, y, z)); x++, p2++) {
+			if (x == 0 || x == World.Width - 1) return 2;
+
+			if (z > 0) {
+				b = World_GetBlock(x, y, z - 1);
+				if (b == BLOCK_AIR) return 0;
+				match = fluid_stamps[p2 - 1024] != fluid_counter && FLUID_BODY(b);
+				if (match && !spanN) {
+					if (top < fluid_stackCap) fluid_stackA[top++] = p2 - 1024;
+				}
+				spanN = match;
+			}
+			if (z < World.Length - 1) {
+				b = World_GetBlock(x, y, z + 1);
+				if (b == BLOCK_AIR) return 0;
+				match = fluid_stamps[p2 + 1024] != fluid_counter && FLUID_BODY(b);
+				if (match && !spanS) {
+					if (top < fluid_stackCap) fluid_stackA[top++] = p2 + 1024;
+				}
+				spanS = match;
+			}
+			fluid_stamps[p2] = fluid_counter;
+		}
+		if (x < World.Width && World_GetBlock(x, y, z) == BLOCK_AIR) return 0;
+	}
+	return 1;
+}
+
+/* World.fluidFlowCheck(x, y, z, moving, still): walks the connected body
+    upward from layer y looking for a donor cell to pull volume from.
+    Returns the packed ((y << 10 | z) << 10 | x) of the farthest cell on the
+    highest layer, -9999 when the body touches a SOURCE block (infinite
+    supply), or -1 out of bounds. */
+static int Fluid_FlowCheck(int x, int y, int z, BlockID moving, BlockID still) {
+	int ox = x, oz = z, top = 0, upTop, best, donor, p2, dz2, d;
+	cc_bool sourced, spanN, spanS, spanUp, match;
+	BlockID source, b;
+	int* tmp;
+	if (!World_Contains(x, y, z)) return -1;
+	if (!Fluid_EnsureScratch())   return -1;
+
+	source = moving == BLOCK_WATER ? INDEV_BLOCK_WATER_SOURCE : INDEV_BLOCK_LAVA_SOURCE;
+	donor  = ((y << 10 | z) << 10) | x;
+	sourced = false;
+	fluid_stackA[top++] = FLUID_PACK2(x, z);
+
+	for (; y < World.Height; y++) {
+		best  = -1;
+		upTop = 0;
+		Fluid_BumpCounter();
+
+		while (top > 0) {
+			p2 = fluid_stackA[--top];
+			if (fluid_stamps[p2] == fluid_counter) continue;
+			x = p2 % 1024; z = p2 / 1024;
+			dz2 = (z - oz) * (z - oz);
+
+			while (x > 0 && fluid_stamps[p2 - 1] != fluid_counter &&
+				   FLUID_BODY(World_GetBlock(x - 1, y, z))) { x--; p2--; }
+			if (x > 0 && World_GetBlock(x - 1, y, z) == source) sourced = true;
+
+			spanN = false; spanS = false; spanUp = false;
+			for (; x < World.Width && fluid_stamps[p2] != fluid_counter &&
+				   FLUID_BODY(World_GetBlock(x, y, z)); x++, p2++) {
+				if (z > 0) {
+					b = World_GetBlock(x, y, z - 1);
+					if (b == source) sourced = true;
+					match = fluid_stamps[p2 - 1024] != fluid_counter && FLUID_BODY(b);
+					if (match && !spanN) {
+						if (top < fluid_stackCap) fluid_stackA[top++] = p2 - 1024;
+					}
+					spanN = match;
+				}
+				if (z < World.Length - 1) {
+					b = World_GetBlock(x, y, z + 1);
+					if (b == source) sourced = true;
+					match = fluid_stamps[p2 + 1024] != fluid_counter && FLUID_BODY(b);
+					if (match && !spanS) {
+						if (top < fluid_stackCap) fluid_stackA[top++] = p2 + 1024;
+					}
+					spanS = match;
+				}
+				if (y < World.Height - 1) {
+					b = World_GetBlock(x, y + 1, z);
+					match = FLUID_BODY(b);
+					if (match && !spanUp) {
+						if (upTop < fluid_stackCap) fluid_stackB[upTop++] = p2;
+					}
+					spanUp = match;
+				}
+
+				d = (x - ox) * (x - ox) + dz2;
+				if (d > best) {
+					best  = d;
+					donor = ((y << 10 | z) << 10) | x;
+				}
+				fluid_stamps[p2] = fluid_counter;
+			}
+			if (x < World.Width && World_GetBlock(x, y, z) == source) sourced = true;
+		}
+
+		if (upTop == 0) break;
+		tmp = fluid_stackA; fluid_stackA = fluid_stackB; fluid_stackB = tmp;
+		top = upTop;
+	}
+
+	return sourced ? -9999 : donor;
+}
+
+static void Indev_FluidSchedule(int index, cc_bool water) {
+	int i;
+	cc_uint16 delay = water ? 5 : 25; /* BlockFlowing.tickRate */
+	for (i = 0; i < indev_fluidSchedCount; i++) {
+		if (indev_fluidSched[i].index == index) return; /* already queued */
+	}
+	if (indev_fluidSchedCount >= FLUID_SCHED_MAX) return; /* overflow: drop (self-heals) */
+	indev_fluidSched[indev_fluidSchedCount].index = index;
+	indev_fluidSched[indev_fluidSchedCount].delay = delay;
+	indev_fluidSched[indev_fluidSchedCount].water = water;
+	indev_fluidSchedCount++;
+}
+
+/* BlockFlowing.liquidSpread: the plain (stagnation-retry) spread */
+static cc_bool Fluid_Spread(BlockID moving, cc_bool water, int tx, int ty, int tz) {
+	if (!Fluid_CanFlowInto(water, tx, ty, tz)) return false;
+	Game_UpdateBlock(tx, ty, tz, moving);
+	Indev_FluidSchedule(World_Pack(tx, ty, tz), water);
+	return true;
+}
+
+/* BlockFlowing.liquidSpread2: spread + donor removal (volume conservation) */
+static cc_bool Fluid_Spread2(int x, int y, int z, BlockID moving, BlockID still,
+							 cc_bool water, int tx, int ty, int tz) {
+	int r, dx, dy, dz;
+	if (!Fluid_CanFlowInto(water, tx, ty, tz)) return false;
+
+	r = Fluid_FlowCheck(x, y, z, moving, still);
+	if (r != -9999) {
+		if (r < 0) return false;
+		dx = r & 1023; r >>= 10;
+		dz = r & 1023; r >>= 10;
+		dy = r & 1023;
+		/* the genuine donor sanity test, ported verbatim: refuse when the
+		    donor sits at/below the target level in the interior and the
+		    target can't keep falling */
+		if ((dy > ty || !Fluid_CanFlowInto(water, tx, ty - 1, tz)) && dy <= ty &&
+			dx != 0 && dx != World.Width - 1 && dz != 0 && dz != World.Length - 1) {
+			return false;
+		}
+		Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
+	}
+
+	Game_UpdateBlock(tx, ty, tz, moving);
+	Indev_FluidSchedule(World_Pack(tx, ty, tz), water);
+	return true;
+}
+
+/* water side effects: extinguish adjacent fire, petrify adjacent lava */
+static cc_bool Fluid_WaterContact(int x, int y, int z) {
+	BlockID b;
+	if (!World_Contains(x, y, z)) return false;
+	b = World_GetBlock(x, y, z);
+	if (b == INDEV_BLOCK_FIRE) { Game_UpdateBlock(x, y, z, BLOCK_AIR);   return true; }
+	if (b == BLOCK_LAVA || b == BLOCK_STILL_LAVA) {
+		Game_UpdateBlock(x, y, z, BLOCK_STONE);
+		return true;
+	}
+	return false;
+}
+
+/* BlockFlowing.update - the whole genuine driver */
+static void Indev_FluidUpdate(int index, BlockID block) {
+	int x, y, z, i, j, t, r, dx, dy, dz;
+	cc_bool water = block == BLOCK_WATER;
+	BlockID moving = water ? BLOCK_WATER : BLOCK_LAVA;
+	BlockID still  = water ? BLOCK_STILL_WATER : BLOCK_STILL_LAVA;
+	cc_bool spread = false, canSide;
+	BlockID below;
+	World_Unpack(index, x, y, z);
+
+	canSide = Fluid_CanFlowInto(water, x - 1, y, z) || Fluid_CanFlowInto(water, x + 1, y, z) ||
+	          Fluid_CanFlowInto(water, x, y, z - 1) || Fluid_CanFlowInto(water, x, y, z + 1);
+
+	below = y > 0 ? World_GetBlock(x, y - 1, z) : BLOCK_AIR;
+	if (canSide && y > 0 &&
+		(water ? Fluid_IsWaterMat(below) : Fluid_IsLavaMat(below))) {
+		/* sitting on our own fluid with somewhere to go: equalize through
+		    the body below when it is closed */
+		if (Fluid_FloodFill(x, y - 1, z, moving, still) == 1) {
+			r = Fluid_FlowCheck(x, y, z, moving, still);
+			if (r != -9999) {
+				if (r < 0) return;
+				dx = r & 1023; r >>= 10;
+				dz = r & 1023; r >>= 10;
+				dy = r & 1023;
+				Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
+			}
+			return;
+		}
+	}
+
+	spread = Fluid_Spread2(x, y, z, moving, still, water, x, y - 1, z);
+
+	/* one random horizontal direction per update (the genuine partial
+	    Fisher-Yates over liquidIntArray) */
+	for (i = 0; i < 4; i++) {
+		j = Random_Next(&indev_fluidRng, 4 - i) + i;
+		t = indev_liquidOrder[i]; indev_liquidOrder[i] = indev_liquidOrder[j]; indev_liquidOrder[j] = t;
+		if (indev_liquidOrder[i] == 0 && !spread) spread = Fluid_Spread2(x, y, z, moving, still, water, x - 1, y, z);
+		if (indev_liquidOrder[i] == 1 && !spread) spread = Fluid_Spread2(x, y, z, moving, still, water, x + 1, y, z);
+		if (indev_liquidOrder[i] == 2 && !spread) spread = Fluid_Spread2(x, y, z, moving, still, water, x, y, z - 1);
+		if (indev_liquidOrder[i] == 3 && !spread) spread = Fluid_Spread2(x, y, z, moving, still, water, x, y, z + 1);
+	}
+
+	if (!spread && canSide) {
+		/* stagnation: 1/3 roll, then 1/3 plain-spread retry, else water
+		    evaporates / lava petrifies */
+		if (Random_Next(&indev_fluidRng, 3) == 0) {
+			if (Random_Next(&indev_fluidRng, 3) == 0) {
+				spread = false;
+				for (i = 0; i < 4; i++) {
+					j = Random_Next(&indev_fluidRng, 4 - i) + i;
+					t = indev_liquidOrder[i]; indev_liquidOrder[i] = indev_liquidOrder[j]; indev_liquidOrder[j] = t;
+					if (indev_liquidOrder[i] == 0 && !spread) spread = Fluid_Spread(moving, water, x - 1, y, z);
+					if (indev_liquidOrder[i] == 1 && !spread) spread = Fluid_Spread(moving, water, x + 1, y, z);
+					if (indev_liquidOrder[i] == 2 && !spread) spread = Fluid_Spread(moving, water, x, y, z - 1);
+					if (indev_liquidOrder[i] == 3 && !spread) spread = Fluid_Spread(moving, water, x, y, z + 1);
+				}
+			} else if (!water) {
+				Game_UpdateBlock(x, y, z, BLOCK_STONE);
+			} else {
+				Game_UpdateBlock(x, y, z, BLOCK_AIR);
+			}
+		}
+		return;
+	}
+
+	if (water) {
+		spread |= Fluid_WaterContact(x - 1, y, z);
+		spread |= Fluid_WaterContact(x + 1, y, z);
+		spread |= Fluid_WaterContact(x, y, z - 1);
+		spread |= Fluid_WaterContact(x, y, z + 1);
+	} else {
+		spread |= IndevFire_LavaFlowInto(x - 1, y, z);
+		spread |= IndevFire_LavaFlowInto(x + 1, y, z);
+		spread |= IndevFire_LavaFlowInto(x, y, z - 1);
+		spread |= IndevFire_LavaFlowInto(x, y, z + 1);
+	}
+
+	if (!spread) {
+		/* settled: become still (genuine setTileNoUpdate - our update raises
+		    neighbour notifies too; the still-wake handler ignores them unless
+		    flow is actually possible, so the body converges) */
+		Game_UpdateBlock(x, y, z, still);
+	} else {
+		Indev_FluidSchedule(index, water);
+	}
+}
+
+/* processes the scheduled fluid updates (World.tick's scheduledUpdates) */
+void IndevTest_TickFluids(void) {
+	int i, index;
+	BlockID b;
+	if (!IndevTest_Enabled || !World.Blocks) return;
+
+	for (i = 0; i < indev_fluidSchedCount; ) {
+		if (indev_fluidSched[i].delay > 0) { indev_fluidSched[i].delay--; i++; continue; }
+		index = indev_fluidSched[i].index;
+		/* swap-remove BEFORE running (the update may reschedule this cell) */
+		indev_fluidSched[i] = indev_fluidSched[--indev_fluidSchedCount];
+
+		b = World.Blocks[index];
+		if (b == BLOCK_WATER || b == BLOCK_LAVA) Indev_FluidUpdate(index, b);
+	}
+}
+
+/* onBlockAdded: a placed/spawned moving fluid schedules its first update */
+static void IndevFluid_PlaceMoving(int index, BlockID block) {
+	Indev_FluidSchedule(index, block == BLOCK_WATER);
+}
+/* genuine BlockFlowing.onNeighborBlockChange is EMPTY - moving fluid ignores
+    neighbour changes entirely (only scheduled + random ticks drive it) */
+static void IndevFluid_Noop(int index, BlockID block) { }
+
+/* BlockStationary.onNeighborBlockChange: wake to moving when flow is possible
+    (or fire encourages, for lava), petrify on contact with the opposite fluid.
+    Engine activations don't carry the changed neighbour's id, so the petrify
+    check scans the 6 neighbours instead - same trigger in practice. */
+static void IndevFluid_ActivateStill(int index, BlockID block) {
+	int x, y, z;
+	cc_bool water = block == BLOCK_STILL_WATER;
+	cc_bool wake;
+	static const int NX[6] = { -1, 1, 0, 0, 0, 0 };
+	static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
+	static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
+	int n;
+	BlockID nb;
+	World_Unpack(index, x, y, z);
+
+	for (n = 0; n < 6; n++) {
+		int nx = x + NX[n], ny = y + NY[n], nz = z + NZ[n];
+		if (!World_Contains(nx, ny, nz)) continue;
+		nb = World_GetBlock(nx, ny, nz);
+		if (water ? Fluid_IsLavaMat(nb) : Fluid_IsWaterMat(nb)) {
+			Game_UpdateBlock(x, y, z, BLOCK_STONE);
+			return;
+		}
+	}
+
+	wake = Fluid_CanFlowInto(water, x, y - 1, z) ||
+	       Fluid_CanFlowInto(water, x - 1, y, z) || Fluid_CanFlowInto(water, x + 1, y, z) ||
+	       Fluid_CanFlowInto(water, x, y, z - 1) || Fluid_CanFlowInto(water, x, y, z + 1);
+	if (!wake && !water) {
+		for (n = 0; n < 6; n++) {
+			int nx = x + NX[n], ny = y + NY[n], nz = z + NZ[n];
+			if (!World_Contains(nx, ny, nz)) continue;
+			if (IndevFire_CanCatch(World_GetBlock(nx, ny, nz))) { wake = true; break; }
+		}
+	}
+	if (!wake) return;
+
+	Game_UpdateBlock(x, y, z, water ? BLOCK_WATER : BLOCK_LAVA);
+	Indev_FluidSchedule(index, water);
+}
+
+/* random ticks hit moving fluid too (World.tick random pass calls updateTick;
+    BlockStationary's is empty) */
+static void IndevFluid_RandomMoving(int index, BlockID block) {
+	Indev_FluidUpdate(index, block);
+}
+
+/* setTickOnLoad: schedule every moving-fluid cell when a map arrives */
+void IndevTest_FluidsOnMapLoaded(void) {
+	int i;
+	indev_fluidSchedCount = 0;
+	if (!World.Blocks) return;
+	for (i = 0; i < World.Volume; i++) {
+		if (World.Blocks[i] == BLOCK_WATER) Indev_FluidSchedule(i, true);
+		else if (World.Blocks[i] == BLOCK_LAVA) Indev_FluidSchedule(i, false);
+	}
+}
+
 /* --- genuine plant ticks (BlockFlower/BlockMushroom/BlockSapling) --- */
 
 /* Sapling growth stage (genuine metadata 0-15) - a lazily sized per-map side
@@ -1867,6 +2323,23 @@ static void Indev_RegisterFarmTicks(void) {
 	}
 	Physics.OnRandomTick[INDEV_BLOCK_WATER_SOURCE] = Indev_TickSource;
 	Physics.OnRandomTick[INDEV_BLOCK_LAVA_SOURCE]  = Indev_TickSource;
+	/* BlockSource.onBlockAdded fills the 4 sides immediately too */
+	Physics.OnPlace[INDEV_BLOCK_WATER_SOURCE]      = Indev_TickSource;
+	Physics.OnPlace[INDEV_BLOCK_LAVA_SOURCE]       = Indev_TickSource;
+	/* genuine finite fluids replace the classic infinite flood on Indev
+	    maps: moving fluid = scheduled/random updates only, still fluid wakes
+	    on activation, and the classic Place/Activate flood hooks are dead */
+	Physics.OnPlace[BLOCK_WATER]          = IndevFluid_PlaceMoving;
+	Physics.OnPlace[BLOCK_LAVA]           = IndevFluid_PlaceMoving;
+	Physics.OnActivate[BLOCK_WATER]       = IndevFluid_Noop;
+	Physics.OnActivate[BLOCK_LAVA]        = IndevFluid_Noop;
+	Physics.OnActivate[BLOCK_STILL_WATER] = IndevFluid_ActivateStill;
+	Physics.OnActivate[BLOCK_STILL_LAVA]  = IndevFluid_ActivateStill;
+	Physics.OnRandomTick[BLOCK_WATER]       = IndevFluid_RandomMoving;
+	Physics.OnRandomTick[BLOCK_LAVA]        = IndevFluid_RandomMoving;
+	Physics.OnRandomTick[BLOCK_STILL_WATER] = IndevFluid_Noop;
+	Physics.OnRandomTick[BLOCK_STILL_LAVA]  = IndevFluid_Noop;
+
 	/* genuine BlockFlower/BlockMushroom/BlockSapling ticks replace the
 	    classic handlers on Indev maps (c0.30 keeps the classic ones) */
 	Physics.OnRandomTick[BLOCK_SAPLING]      = Indev_TickSapling;
@@ -2648,6 +3121,7 @@ static void OnNewMapLoaded(void) {
 	IndevBlocks_Define();
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
 	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
+	IndevTest_FluidsOnMapLoaded(); /* setTickOnLoad: schedule moving fluid */
 
 	/* Genuine getBlockId clamps y<0 to y=0, so floating maps (air at y=0) are
 	    bottomless - you fall through into the void instead of landing on the

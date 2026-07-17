@@ -664,6 +664,7 @@ void Physics_Tick(void) {
 	    and creative keep the engine loop untouched. */
 	if (IndevTest_Enabled) {
 		IndevFire_Tick(); /* the scheduled-update list runs before random ticks */
+		IndevTest_TickFluids();
 		IndevTest_TickRandomBlocks();
 	} else if (SurvivalTest_Enabled) {
 		/* c0.30 survival: the genuine volume/200 Level.tick rate */

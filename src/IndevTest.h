@@ -189,6 +189,10 @@ float IndevTest_BrightnessOfLight(int light);
     per game tick via the genuine LCG. Replaces the engine's much sparser
     3-per-chunk loop while Indev mode is on (see Physics_Tick). */
 void IndevTest_TickRandomBlocks(void);
+/* Scheduled fluid updates (genuine World scheduledUpdates, tickRate 5/25). */
+void IndevTest_TickFluids(void);
+/* setTickOnLoad for fluids: schedules every moving-fluid cell of a new map. */
+void IndevTest_FluidsOnMapLoaded(void);
 /* World.randomDisplayUpdates: 1000 random cells in the 33^3 cube around
     the player each tick, running the visual-only randomDisplayTick of
     what it lands on (fire crackle + largesmoke, torch/furnace smoke and

@@ -5534,3 +5534,18 @@ fluids (the classic infinite flood is the biggest remaining divergence -
 dedicated session). Rig smoke test: 75s live fresh-gen Indev world with the
 new plant handlers ticking, no crash (two earlier "crashes" were the flaky
 Xvfb dying again - X11-display failures, not code).
+
+## SESSION LOG - Genuine finite fluids (BlockFlowing/BlockStationary port, #32)
+
+User asked for the queued HIGH fluids finding with the remaining budget. Done:
+the full finite-fluid port now lives in IndevTest.c (see AUDIT_FINDINGS #32 for
+the complete mechanics). Key discovery while decoding fluidFlowCheck: the
+genuine SOURCE blocks (52/53) integrate there - a fluid body touching one
+reports infinite supply and never donates, which is what makes springs work.
+Our sources previously only had the updateTick side-fill approximation; they
+now also fill on placement (onBlockAdded) and feed bodies through the genuine
+donor mechanism. Verified live in the rig: a sealed 7x7 basin with ONE flowing
+water block held exactly 1 water block after 200 ticks (the classic flood
+would have filled ~49 cells instantly). Rig lesson: stale ClassiCube/Xvfb
+processes + X locks from killed runs must be pkill'd + /tmp/.X*-lock cleaned
+before each pass, or attaches target dead pids.
