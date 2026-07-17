@@ -345,3 +345,34 @@ random-tick dispatch, crops growth math, farmland moisture, paintings
     CROPS/FARMLAND: stay at 85-92 / 83-84 (engine has no runtime block metadata,
     so 8 crop stages can't share one id; no free 8-run at 59). Save format is
     already genuine 59/60+metadata, so this is invisible outside the runtime ids.
+
+---
+
+## Domain 5: Engine robustness (lighting)
+
+### #22 Light query before heightmap allocation -> NULL deref [FIXED]
+STATUS: fixed. SEVERITY: crash (intermittent, first-boot).
+While rig-verifying the genuine flooded-sky lighting, fresh --singleplayer boots
+occasionally aborted with NULL_POINTER_DEREF in ClassicLighting_GetLightHeight+57
+(the `classic_heightmap[hIndex]` read). Reached from an Indev light query
+(IndevTest_LightLevel -> Lighting.IsLit / FancyLighting_IndevLight -> GetLight
+Height) racing the lighting AllocState around the post-load MobSpawner darkness
+check. Normal flow allocs lighting during the World_SetNewMap MapLoaded event,
+before IndevGen_ApplyPostLoad's initial spawn, so it's a broken-init edge (e.g.
+missing-resources first boot) rather than the common path - but a real crash.
+
+FIX (src/Lighting.c): guard ClassicLighting_GetLightHeight - `if (!classic_
+heightmap) return -10;` (the empty-all-sky-column sentinel). Genuine-faithful:
+Indev has light computed by gen time, so "not computed yet" = FULL DAYLIGHT, not
+accidental black - surface spawns behave and monsters don't flood a lit map.
+This is the single gameplay entry every light-height query funnels through in
+BOTH modes (FancyLighting's IsLit delegates to the classic one), so the one
+guard covers BlockPhysics grass, IndevTest grass/leaf/farm ticks, and Survival
+mob spawning. The direct classic_heightmap[] derefs that remain are the _Fast
+render variants (Color_*_Fast / IsLit_Fast), called only from the chunk builder
+- structurally post-AllocState, not gameplay-reachable pre-alloc.
+
+VERIFIED (gdb, live world): forcing classic_heightmap = NULL, GetLightHeight ->
+-10, IsLit -> 1 (daylight), IndevTest_LightLevel -> 15, all without a deref;
+restoring the pointer resumes normal values (29). Fresh clean generate loads
+128x64x128 fancy, surface light 15, no crash.

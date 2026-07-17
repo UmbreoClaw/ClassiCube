@@ -5487,3 +5487,18 @@ c0.30-s and plain creative ClassiCube are byte-identical to before.
   (NULL deref in ClassicLighting_GetLightHeight). Guarded reads already clamp
   coords; the FancyLighting_IndevLight path early-outs on !chunkLightingData.
   Not introduced here, but flagged for the full-fidelity audit (task #42).
+
+### Follow-up: gen-time lighting NULL guard (audit finding #22)
+The intermittent first-boot crash flagged after the sky-lighting work is fixed.
+Traced it: not the common path (lighting IS allocated during World_SetNewMap's
+MapLoaded event, before ApplyPostLoad's initial MobSpawner passes), but a light
+query CAN reach ClassicLighting_GetLightHeight while classic_heightmap is NULL on
+a broken-init boot, and that read segfaults. The rig2/rig3 "crashes" while chasing
+it turned out to be a long-lived Xvfb :99 dying ("Failed to open X11 display",
+empty backtrace) - a red herring; a fresh Xvfb boots clean. The real one was the
+early NULL_POINTER_DEREF in GetLightHeight+57.
+Fix: one guard at the deref site (Lighting.c) returning the -10 all-sky sentinel
+= full daylight (genuine: light is computed by gen time, so uncomputed defaults
+to lit, never accidental black). Covers every gameplay caller in both lighting
+modes; the _Fast render variants are builder-only (post-alloc). gdb-verified by
+forcing the NULL and confirming safe returns, plus a clean fresh generate.
