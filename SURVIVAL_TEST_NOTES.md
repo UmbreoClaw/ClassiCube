@@ -5622,3 +5622,25 @@ This completes the systematic fidelity sweep (task #42 of the original list):
 all five planned domains + the audio domain audited, 20 fixes landed across
 the rounds, remaining queue = difficulty option (#27), click asset (#45),
 fluids rig follow-ups, and the MP/server-session work.
+
+## 2026-07-17: Indev menu-scale regressions (user reports)
+
+Two regressions from the `gui-indevscale` menu work, both fixed in `75265e6`:
+
+1. **Game Over buttons missing** ("im missing my buttons :sob:"): the new
+   auto-set `WIDGET_FLAG_INDEV_SCALE` in `ButtonWidget_Init` made
+   `Widget_SetLocation` rescale offsets by scale/2 — but `GameOverScreen`
+   already bakes its own genuine survival GUI scale into its offsets
+   (`Game.Height/4 + 72*scale`), so the two buttons were double-scaled off
+   the bottom of the screen while the unflagged title/score text stayed
+   put. Fix: `GameOverScreen_Init` clears the flag on its buttons; the
+   screen keeps its own genuine ScaledResolution layout.
+
+2. **"Soiling.." progress bar too small**: the loading/generating screen's
+   text followed the Indev 8px*scale font but the bar stayed at fixed
+   `Display_Scale(200x4)`. Ported the genuine geometry from Indev's
+   `LoadingScreenRenderer.setLoadingProgress`: bar is 100x2 GUI px at
+   `(w/2-50, h/2+16)`, title top at `h/2-20`, message top at `h/2+4` —
+   now all multiplied by `Gui_GetIndevMenuScale()`. The title/message
+   widgets take the INDEV_SCALE flag path (offsets authored 2x: -32/+16).
+   Gated on the toggle + Indev mode; c0.30/vanilla paths byte-identical.
