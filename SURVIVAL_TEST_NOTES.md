@@ -5644,3 +5644,17 @@ Two regressions from the `gui-indevscale` menu work, both fixed in `75265e6`:
    now all multiplied by `Gui_GetIndevMenuScale()`. The title/message
    widgets take the INDEV_SCALE flag path (offsets authored 2x: -32/+16).
    Gated on the toggle + Indev mode; c0.30/vanilla paths byte-identical.
+
+## 2026-07-17: washed-out sky after .mclevel save+load (user report)
+
+Symptom: after saving and reloading a world, the sky turns milky white and
+the additive sun quad blooms enormously. Root cause: Floating maps store
+`cloudHeight = -16` (clouds below the islands; `LevelGenerator.java:358`),
+and genuine `LevelLoader` round-trips it as a SIGNED short. Our saver wrote
+the correct two's-complement bytes, but the loader read them UNSIGNED
+(`NbtTag_U16` -> 65520), so `EnvRenderer`'s sky ceiling
+(`max(World.Height+2, CloudsHeight)+6`) jumped to ~y=65526 - the whole view
+became the white horizon-fog gradient, over which the additive sun.png glow
+saturates much further out. Fix in Formats.c: cast `(cc_int16)` like the
+SurroundingGround/WaterHeight tags already do. Saved files were always
+byte-correct; genuine Indev reads them fine.

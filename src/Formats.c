@@ -1432,7 +1432,11 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 	} else if (IsTag(tag, "CloudColor")) {
 		Env.CloudsCol = MCLevel_ParseColor(tag);
 	} else if (IsTag(tag, "CloudHeight")) {
-		Env.CloudsHeight = NbtTag_U16(tag);
+		/* SIGNED short (genuine LevelLoader getShort): Floating maps store
+		    cloudHeight -16 - reading that unsigned (65520) shoves the sky
+		    ceiling to max(height, clouds)+6 ~ y=65526, leaving only the fog
+		    gradient visible (washed-out white sky after save+load) */
+		Env.CloudsHeight = (cc_int16)NbtTag_U16(tag);
 	} else if (IsTag(tag, "SurroundingGroundType")) {
 		Env.SidesBlock  = NbtTag_U8(tag);
 		/* TODO need to explore this fully */
