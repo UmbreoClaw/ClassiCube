@@ -5701,3 +5701,19 @@ standing in for glDisable(GL_TEXTURE_2D), flat colour from
 IndevTest_BrightnessOfLight(IndevTest_LightLevel(eye)) in the red channel,
 alpha 102. White tex freed on context loss. (Genuine also red-flashes the
 PLAYER via RenderPlayer in third person - ours is mob-only for now.)
+
+## 2026-07-17: world time persisting across worlds (user report)
+
+Genuine Indev constructs a brand-new World object per level: worldTime
+defaults to 0 for generated worlds, and LevelLoader's getShort("TimeOfDay")
+also yields 0 when the tag is missing. Our indev_worldTime is a static only
+ever written by the loader tag or /time, so the clock leaked from world to
+world. Fix: the IndevTest component's OnNewMap hook (fires on
+World_NewMap - generation start, map-load Game_Reset, and MP map start,
+all BEFORE the .mclevel Environment tags are parsed) now resets
+worldTime=0, skyBrightness=15 (World.java field default), and the eased
+skylight (-1 -> first tick snaps to target, mirroring LevelLoader:83's
+immediate skylightSubtracted sync).
+
+Also ported LevelLoader:69-75's SkyBrightness load clamp: getByte is
+SIGNED (negative -> 0) and values > 16 are legacy percentages (* 15/100).

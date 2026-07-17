@@ -1451,7 +1451,12 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 	} else if (IsTag(tag, "TimeOfDay")) {
 		IndevTest_SetWorldTime(NbtTag_I16(tag));
 	} else if (IsTag(tag, "SkyBrightness")) {
-		IndevTest_SetSkyBrightness(NbtTag_U8(tag));
+		/* genuine LevelLoader: getByte is SIGNED (negative -> 0), and
+		    values above 16 are legacy percentages (* 15 / 100) */
+		int b = (cc_int8)NbtTag_U8(tag);
+		if (b < 0)  b = 0;
+		if (b > 16) b = b * 15 / 100;
+		IndevTest_SetSkyBrightness(b);
 	}
 }
 

@@ -3314,6 +3314,16 @@ static void OnNewMap(void) {
 	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
 	indev_openTE = -1; indev_openTE2 = -1;
 	indev_surKnown = false; /* each map records its own surroundings */
+
+	/* Every genuine level is a brand-new World object: worldTime starts 0
+	    and skyBrightness 15 (World.java field defaults), with the loader's
+	    Environment tags overwriting them during load (a missing TimeOfDay
+	    tag reads as 0 there too). These are statics here, so without this
+	    the previous world's clock leaked into newly generated worlds. */
+	indev_worldTime    = 0;
+	indev_skyBright    = 15;
+	indev_lastSkyLight = -1;
+
 	IndevFire_Reset();
 }
 
