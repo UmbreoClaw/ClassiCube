@@ -98,6 +98,22 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
    `IndevBlocks_Define` in `src/IndevTest.c`), those ids render as CPE
    defaults. The client does NOT locally define blocks on server maps.
 
+   **Architecture decision (user-approved): metadata is the MODEL, the
+   multi-id table is the VIEW/WIRE ENCODING.** Store level data server-side
+   as genuine `id + metadata nibble` (identical to the `.mclevel` format and
+   the genuine sim logic). Translate on the wire only: outbound SetBlock maps
+   `(id, meta)` -> the view id (crop stage 3 -> 88, chest facing -> 71-74,
+   etc. — the client's `IndevTest_BlockToIndev`/`_FromIndev` pair is the
+   authoritative bijection, port it); inbound SetBlock from any client maps
+   the view id back to `(id, meta)` before your sim logic runs. Result:
+   EVERY CPE client (stock ClassiCube included) watches crops grow and
+   furnaces light over plain SetBlock + BlockDefinitions — no sub-protocol
+   needed for visible state; pick sensible per-stage fallback ids for
+   pre-CPE clients. `SURV_BLOCKMETA` (0x40) is then only ever needed for
+   INVISIBLE metadata (sapling growth stage, fire age) if you want fork
+   clients to export byte-perfect local `.mclevel` saves of server worlds —
+   optional polish, not required for rendering or gameplay.
+
 ## 4. What to build next (recommended order)
 
 1. **Death dwell + `SURV_RESPAWN` round-trip** (small, completes phase 2

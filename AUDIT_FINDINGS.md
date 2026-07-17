@@ -548,3 +548,15 @@ in Builder.c plus mesh invalidation on metadata-only changes, and MP would then
 need SURV_BLOCKMETA for every visual state change (multi-id streams over plain
 SetBlock today - that advantage disappears). Save format is ALREADY genuine
 either way. Do this only when something depends on runtime id genuineness.
+
+### #36 addendum: MP resolves the runtime-id question (user design)
+Decision: on servers, genuine `id + metadata` is the DATA MODEL (storage, sim,
+saves) and the multi-id table is the VIEW/WIRE ENCODING - the server translates
+(id, meta) <-> view id at the packet boundary using the IndevTest_BlockToIndev
+bijection. Stock CPE clients then see every visible state change over plain
+SetBlock + BlockDefinitions, classic clients get per-stage fallbacks, and the
+CLIENT runtime ids never need to change - so the #36 refactor is only ever
+needed if something starts depending on single-player runtime-id genuineness.
+SURV_BLOCKMETA stays reserved for invisible nibbles (sapling stage, fire age)
+to make fork-client local saves of server worlds byte-perfect. Recorded in
+doc/server-session-handoff.md SS3.5 for the server session.
