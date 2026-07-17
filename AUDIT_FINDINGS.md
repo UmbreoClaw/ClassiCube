@@ -590,3 +590,59 @@ walk cadence, player sounds, music delays; and drops/arrows/HUD formulas)
 died to session limits before reporting, twice. Relaunch the two prompts
 (recorded in the session transcript) when the limit resets; the user-facing
 bugs from the batch are already resolved above.
+
+---
+
+## Domain 8 continued: full audio sweep + drops/arrows/HUD (final sweep round)
+
+### #39 Metal blocks demoted to stone sounds (Indev) [FIXED]
+Gold/iron/diamond blocks + gears use soundMetalFootstep ("stone" samples at
+pitch 1.5) in Block.java; ours had them SOUND_STONE (pitch 1.0). The engine's
+SOUND_METAL is exactly the genuine transform (stone samples, dig rate 120 =
+1.5*0.8), so all four now use SOUND_METAL. Gears' any-item harvest exemption
+is id-based and unaffected.
+
+### #40 c0.30 sound-type table corrections [FIXED]
+Per Tile$SoundType + Block.java: DIRT is grass (was engine gravel), SAND is
+gravel for FOOTSTEPS too (dig was already fixed), sapling/flowers/mushrooms
+are SoundType.none (silent break), sponge/TNT are cloth = grass samples at
+pitch 1.2 (Sounds_PlayScaled remaps SOUND_CLOTH->grass*1.2 in c0.30), and the
+metal pitch base is 2.0 (c0.30 dig/step rates now 160/200). All c0.30-only;
+Indev keeps its verified table.
+
+### #41 Indev plays sounds EXACTLY; randomization is c0.30-only [FIXED]
+Indev SoundManager.playSound uses the given volume/pitch verbatim; the
+per-play rolls (getPitch /(rand*0.2+0.9), getVolume /(rand*0.4+1)) are c0.30's
+Tile$SoundType. Our roll was gated on SurvivalTest_Enabled (both modes) - now
+c0.30-only. Also Indev walk steps now play at the genuine soundVolume * 0.15
+(was the engine's /2), and c0.30 block PLACING is silent (the place sound is
+Indev's ItemBlock.onItemUse; c0.30's only sound sites are break + walk).
+
+### #42 Indev music gap 600-1200 s [FIXED]
+SoundManager: rand(12000) + 12000 ticks after track end. Default min delay now
+600 s in Indev (c0.30 keeps its genuine 300 + rand(900)); user-set values win.
+
+### #43 Indev fall-damage landing thud [FIXED]
+EntityLiving.fall plays the block-under's step sound at volume*0.5, pitch*0.75
+on damaging landings. Added Audio_PlayFallSound (step board, rate 75, half
+volume) for player and mob falls, Indev only.
+
+### #44 Drops/arrows/HUD micro-fixes [FIXED]
+(a) air-bubble row now flush atop the hearts (1px gap, was 2) - the unfixed
+half of the earlier hearts alignment; (b) drop lava fizz-bounce/push-out now
+run AFTER the tick's gravity like genuine (kick was netting 0.16/tick, now
+0.2); (c) Indev pickup fly-in eases to eye-0.5 (EntityPickupFX) while c0.30
+keeps y-1.0 (TakeEntityAnim); (d) skeleton arrows get the EntityArrow ctor
+offsets (-0.1 Y, 0.16 sideways) the player bow already applied.
+
+### #45 Indev GUI button click sound [QUEUED - needs asset]
+GuiScreen plays "random.click" at 0.25 volume on button press; our soundboard
+has no click group. Needs the click sample sourced/embedded before wiring.
+
+### Final sweep verified-exact list (audio + drops/HUD)
+Rest of the Indev block sound table, break/place transforms, mining-hit #38,
+bow/drr/pop/fuse/explode/splash/all-three-fizz/ignite/fire-ambient constants,
+hurt pitch, absent eating/container sounds (genuine), liquid ambient dead code,
+c0.30 music timer, 16-block range; EntityItem physics/pickup/render constants,
+EntityArrow both-mode ports line-by-line, all HUD layout/flash/armor/bubble/
+jitter formulas, held-block transforms, c0.30 arrows counter.

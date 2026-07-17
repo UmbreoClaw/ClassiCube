@@ -935,9 +935,13 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 			distance = d->pickupTime / DROP_PICKUP_ANIM_SECS;
 			if (distance > 1.0f) distance = 1.0f;
 			distance = distance * distance;
-			d->position.x = d->pickupFrom.x + ( pe->Position.x          - d->pickupFrom.x) * distance;
-			d->position.y = d->pickupFrom.y + ((pe->Position.y + 0.62f) - d->pickupFrom.y) * distance;
-			d->position.z = d->pickupFrom.z + ( pe->Position.z          - d->pickupFrom.z) * distance;
+			/* Indev EntityPickupFX eases to eye - 0.5; c0.30 TakeEntityAnim
+			    to player.y - 1.0 (feet + 0.62) */
+			float targetY = IndevTest_Enabled ? Entity_GetEyePosition(pe).y - 0.5f
+			                                  : pe->Position.y + 0.62f;
+			d->position.x = d->pickupFrom.x + ( pe->Position.x - d->pickupFrom.x) * distance;
+			d->position.y = d->pickupFrom.y + ( targetY        - d->pickupFrom.y) * distance;
+			d->position.z = d->pickupFrom.z + ( pe->Position.z - d->pickupFrom.z) * distance;
 			if (d->pickupTime >= DROP_PICKUP_ANIM_SECS) d->active = false;
 			continue;
 		}
@@ -946,12 +950,16 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 		if (d->age >= DROP_LIFETIME_SECS) { d->active = false; continue; }
 
 		/* Indev EntityItem: fire/lava contact + the lava fizz-bounce + the
-		    push-out-of-solid-blocks nudge (c0.30 items have none of these) */
+		    push-out-of-solid-blocks nudge (c0.30 items have none of these).
+		    ORDER matters: genuine subtracts gravity FIRST (motionY -= 0.04)
+		    and the lava kick then OVERWRITES motionY = 0.2 - so the kick and
+		    push-out run after the physics step, not before it. */
+		if (IndevTest_Enabled && Drop_BoxBurning(d)) {
+			d->health--;
+			if (d->health <= 0) { d->active = false; continue; }
+		}
+		SurvivalTest_DropPhysics(d, delta);
 		if (IndevTest_Enabled) {
-			if (Drop_BoxBurning(d)) {
-				d->health--;
-				if (d->health <= 0) { d->active = false; continue; }
-			}
 			{
 				int cx = Math_Floor(d->position.x);
 				int cy = Math_Floor(d->position.y + DROP_ITEM_HALF);
@@ -967,7 +975,6 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 			}
 			Drop_PushOutOfBlocks(d);
 		}
-		SurvivalTest_DropPhysics(d, delta);
 
 		/* Entity.onEntityUpdate: items splash when they land in water too */
 		if (IndevTest_Enabled) {
@@ -2853,9 +2860,16 @@ static void Mob_IndevShootArrow(struct Mob* m, struct Entity* te) {
 	struct Entity* e = &m->Base;
 	Vec3 from = Entity_GetEyePosition(e);
 	Vec3 aim;
-	float hor;
+	float hor, yawRad;
 	int slot = (int)(m - st_mobs);
 
+	/* EntityArrow's constructor offsets apply to every arrow (0.1 down,
+	    0.16 sideways along the yaw) BEFORE the skeleton's ++posY - the same
+	    adjustment the player bow makes */
+	yawRad  = e->Yaw * MATH_DEG2RAD;
+	from.x += Math_CosF(yawRad) * 0.16f;
+	from.y -= 0.1f;
+	from.z += Math_SinF(yawRad) * 0.16f;
 	from.y += 1.0f; /* shootArrow: ++arrow.posY above the (eye-anchored) spawn */
 	aim.x = te->Position.x - e->Position.x;
 	aim.z = te->Position.z - e->Position.z;
@@ -4473,6 +4487,14 @@ static void SurvivalTest_TickOneMob(struct Mob* m, float delta) {
 				/* Mob.causeFallDamage: (int)Math.ceil(distance - 3) */
 				int damage = Math_Ceil(dist - FALL_SAFE_BLOCKS);
 				Mob_Hurt(m, NULL, damage, false);
+				/* EntityLiving.fall landing thud, mobs too (Indev only) */
+				if (IndevTest_Enabled && damage > 0) {
+					int bx = Math_Floor(e->Position.x);
+					int by = Math_Floor(e->Position.y - 0.2f);
+					int bz = Math_Floor(e->Position.z);
+					if (World_Contains(bx, by, bz))
+						Audio_PlayFallSound(Blocks.StepSounds[World_GetBlock(bx, by, bz)]);
+				}
 			}
 		}
 		m->falling = false;
@@ -7235,6 +7257,15 @@ static void SurvivalTest_UpdateFall(struct Entity* e, struct LocalPlayer* p, cc_
 				/*  means even a 3.1-block fall deals its first HP. */
 				int damage = Math_Ceil(dist - FALL_SAFE_BLOCKS);
 				SurvivalTest_Hurt(damage);
+				/* EntityLiving.fall: the damaging landing plays the block-
+				    under's step sound at half volume, 3/4 pitch (Indev only) */
+				if (IndevTest_Enabled && damage > 0) {
+					int bx = Math_Floor(e->next.pos.x);
+					int by = Math_Floor(e->next.pos.y - 0.2f);
+					int bz = Math_Floor(e->next.pos.z);
+					if (World_Contains(bx, by, bz))
+						Audio_PlayFallSound(Blocks.StepSounds[World_GetBlock(bx, by, bz)]);
+				}
 			}
 		}
 		st_falling = false;
@@ -7626,6 +7657,24 @@ static void SurvivalTest_Init(void) {
 	/*  no glass shatter sound. Overridden here so creative stays stock. */
 	Blocks.DigSounds[BLOCK_SAND]  = SOUND_GRAVEL;
 	Blocks.DigSounds[BLOCK_GLASS] = SOUND_METAL;
+	if (!IndevTest_Enabled) {
+		/* c0.30 Tile$SoundType table: DIRT is grass (not the gravel the
+		    engine defaults to), SAND is gravel for FOOTSTEPS too, the
+		    plants are SoundType.none (silent break), and sponge/TNT are
+		    cloth (grass samples pitched 1.2 - see Sounds_PlayScaled). */
+		Blocks.DigSounds[BLOCK_DIRT]  = SOUND_GRASS;
+		Blocks.StepSounds[BLOCK_DIRT] = SOUND_GRASS;
+		Blocks.StepSounds[BLOCK_SAND] = SOUND_GRAVEL;
+		Blocks.DigSounds[BLOCK_SAPLING]     = SOUND_NONE;
+		Blocks.DigSounds[BLOCK_DANDELION]    = SOUND_NONE;
+		Blocks.DigSounds[BLOCK_ROSE]         = SOUND_NONE;
+		Blocks.DigSounds[BLOCK_BROWN_SHROOM] = SOUND_NONE;
+		Blocks.DigSounds[BLOCK_RED_SHROOM]   = SOUND_NONE;
+		Blocks.DigSounds[BLOCK_SPONGE]  = SOUND_CLOTH;
+		Blocks.StepSounds[BLOCK_SPONGE] = SOUND_CLOTH;
+		Blocks.DigSounds[BLOCK_TNT]     = SOUND_CLOTH;
+		Blocks.StepSounds[BLOCK_TNT]    = SOUND_CLOTH;
+	}
 	ScheduledTask_Add(GAME_DEF_TICKS, SurvivalTest_Tick);
 	Event_Register_(&UserEvents.BlockChanged, NULL, SurvivalTest_BlockChanged);
 	Event_Register_(&GfxEvents.ContextLost,   NULL, SurvivalTest_OnContextLost);

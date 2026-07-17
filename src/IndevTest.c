@@ -901,14 +901,14 @@ static void IndevBlocks_Define(void) {
 	    soundMetalFootstep -> STONE (Indev has no metal footstep). Tile 122 is
 	    the (teal) diamond block fetched from the beta jar's terrain.png (120 is
 	    the 2nd Indev fire animation instance, so it can't be used here). */
-	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 122, 122, 122, 122, SOUND_STONE, 100);
+	IndevBlock_Define(INDEV_BLOCK_DIAMOND, "Diamond Block", 122, 122, 122, 122, SOUND_METAL, 100);
 	/* Gears/cog (55): non-solid, walk-through decorative (Material.circuits),
 	    hardness 0.5F (=10), drops itself, tile 123 (embedded genuine tex 62).
 	    Genuine bounds: NO collision (getCollisionBoundingBoxFromPool -> null) and
 	    DEFAULT full-cube pick bounds (BlockGears sets no bounds). DRAW_SPRITE routes
 	    it through Builder_DrawGears, which ports the genuine renderType 5 geometry:
 	    a gear quad flush on each ADJACENT SOLID WALL (nothing if no wall adjacent). */
-	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 123, 123, 123, 123, SOUND_STONE, 10);
+	IndevBlock_Define(INDEV_BLOCK_GEARS, "Gears", 123, 123, 123, 123, SOUND_METAL, 10);
 	Blocks.Collide[INDEV_BLOCK_GEARS]         = COLLIDE_NONE;
 	Blocks.ExtendedCollide[INDEV_BLOCK_GEARS] = COLLIDE_NONE;
 	Blocks.Draw[INDEV_BLOCK_GEARS]            = DRAW_SPRITE;
@@ -999,15 +999,16 @@ static void IndevBlocks_Define(void) {
 	      break override is "step.gravel" (GRAVEL), not sand.
 	    - glass: soundGlassFootstep = StepSoundGlass("stone") - footstep is
 	      "step.stone" (STONE), not metal; the break stays "random.glass".
-	    - gold/iron blocks: soundMetalFootstep = StepSound("stone", ,1.5) -
-	      Indev has no distinct metal footstep, they walk/break as STONE
-	      (only the pitch differs, which the engine's sample bakes in). */
+	    - gold/iron blocks: soundMetalFootstep = StepSound("stone", 1, 1.5) -
+	      the stone SAMPLES at a raised pitch. That is exactly what the
+	      engine's SOUND_METAL does (stone samples, dig rate 120 = the genuine
+	      break pitch 1.5*0.8 = 1.2), so metal blocks use SOUND_METAL. */
 	Blocks.DigSounds[BLOCK_SAND]   = SOUND_GRAVEL; /* footstep stays SAND */
 	Blocks.StepSounds[BLOCK_GLASS] = SOUND_STONE;  /* footstep step.stone */
 	Blocks.DigSounds[BLOCK_GLASS]  = SOUND_GLASS;  /* break random.glass (set
 	    explicitly - the engine block default resolves to metal at runtime) */
-	Blocks.StepSounds[BLOCK_GOLD] = SOUND_STONE; Blocks.DigSounds[BLOCK_GOLD] = SOUND_STONE;
-	Blocks.StepSounds[BLOCK_IRON] = SOUND_STONE; Blocks.DigSounds[BLOCK_IRON] = SOUND_STONE;
+	Blocks.StepSounds[BLOCK_GOLD] = SOUND_METAL; Blocks.DigSounds[BLOCK_GOLD] = SOUND_METAL;
+	Blocks.StepSounds[BLOCK_IRON] = SOUND_METAL; Blocks.DigSounds[BLOCK_IRON] = SOUND_METAL;
 
 	/* Crop stages 0-7: tiles 107-114 drawn as the genuine "#" row pattern */
 	/*  (Builder_DrawCrops), walk-through, instant break, not placeable */

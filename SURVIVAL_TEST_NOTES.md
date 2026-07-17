@@ -5606,3 +5606,19 @@ REPORTED bugs were verified by hand in the main loop instead:
   only) and stays that way.
 The full audio + drops/HUD sweeps remain queued for after the quota reset
 (prompts preserved; findings #37/#38 already cover the user-visible items).
+
+## SESSION LOG - Final sweep round: audio + drops/HUD (findings #39-#45)
+
+Both relaunched audits completed. Audio: metal blocks now sound metallic
+(#39), the c0.30 sound-type table corrected (dirt=grass, silent plants,
+cloth=pitched grass, metal pitch 2.0, silent placing, per-play randomization
+c0.30-only, Indev steps at genuine 0.15 volume) (#40/#41), Indev music gap
+600-1200s (#42), fall landing thud added (#43). Drops/HUD: four micro-fixes
+(#44: bubbles flush, lava-kick order, Indev fly-in target, skeleton arrow ctor
+offsets). Queued: GUI click sound needs the random.click asset (#45). The
+audits also verified the entire remaining sound/drops/arrow/HUD constant space
+as exact - see the Domain 8 verified list. 60s rig smoke test clean.
+This completes the systematic fidelity sweep (task #42 of the original list):
+all five planned domains + the audio domain audited, 20 fixes landed across
+the rounds, remaining queue = difficulty option (#27), click asset (#45),
+fluids rig follow-ups, and the MP/server-session work.

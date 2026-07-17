@@ -55,6 +55,9 @@ void Audio_PlayStepSoundAt(cc_uint8 type, float volScale);
 /* Plays the genuine Indev while-mining hit: the block's step sound at
     quarter volume and half pitch (PlayerControllerSP.sendBlockRemoving). */
 void Audio_PlayDigHitSound(cc_uint8 type);
+/* Plays the genuine Indev damaging-fall landing thud: the block-under's step
+    sound at half volume, 3/4 pitch (EntityLiving.fall). */
+void Audio_PlayFallSound(cc_uint8 type);
 #define AUDIO_MAX_BUFFERS 4
 
 cc_bool AudioBackend_Init(void);

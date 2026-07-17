@@ -13,6 +13,7 @@
 #include "Utils.h"
 #include "Options.h"
 #include "SurvivalTest.h"
+#include "IndevTest.h"
 #include "Deflate.h"
 #ifdef CC_BUILD_MOBILE
 /* TODO: Refactor maybe to not rely on checking WinInfo.Handle != NULL */
@@ -55,6 +56,7 @@ void Audio_PlayDigSound(cc_uint8 type)  { }
 void Audio_PlayStepSound(cc_uint8 type) { }
 void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) { }
 void Audio_PlayDigHitSound(cc_uint8 type) { }
+void Audio_PlayFallSound(cc_uint8 type) { }
 void Audio_PlayMobSound(int type, float volume, float pitch, float dist) { }
 
 void Sounds_LoadDefault(void) { }
@@ -240,20 +242,38 @@ static void Sounds_PlayScaled(cc_uint8 type, struct Soundboard* board, float vol
 
 	/* https://minecraft.wiki/w/Block_of_Gold#Sounds */
 	/* https://minecraft.wiki/w/Grass#Sounds */
+	{
+	cc_bool c030 = SurvivalTest_Enabled && !IndevTest_Enabled;
+	int clothScale = 100;
+
+	/* c0.30 Tile$SoundType.cloth = ("grass" samples, 0.7, pitch 1.2) - wool,
+	    sponge and TNT play pitched-up grass, not the later cloth samples */
+	if (c030 && type == SOUND_CLOTH) { type = SOUND_GRASS; clothScale = 120; }
+
 	if (board == &digBoard) {
-		if (type == SOUND_METAL) data.rate = 120;
+		/* c0.30 metal pitch base is 2.0 (Tile$SoundType metal("stone",1,2));
+		    Indev's soundMetalFootstep is ("stone", 1.0, 1.5) -> break 1.2 */
+		if (type == SOUND_METAL) data.rate = c030 ? 160 : 120;
 		else data.rate = 80;
 	} else {
-		data.volume /= 2;
-		if (type == SOUND_METAL) data.rate = 140;
+		if (IndevTest_Enabled) {
+			/* Indev Entity.move plays steps at soundVolume * 0.15 (the break
+			    is (v+1)/2 = full volume) - much quieter than c0.30's half */
+			data.volume = (int)(Audio_SoundsVolume * volScale * 0.15f);
+		} else {
+			data.volume /= 2;
+		}
+		if (type == SOUND_METAL) data.rate = c030 ? 200 : 140;
 	}
+	data.rate = data.rate * clothScale / 100;
 
-	/* Survival Test randomizes every play: StepSound.getPitch divides the base
-	    by (rand*0.2 + 0.9) (~91%-111%) and getVolume by (rand*0.4 + 1)
-	    (~71%-100%, its constant *0.5 being absorbed by our own volume scale). */
-	if (SurvivalTest_Enabled) {
+	/* c0.30 randomizes every play: StepSound.getPitch divides the base by
+	    (rand*0.2 + 0.9) and getVolume by (rand*0.4 + 1). Indev's SoundManager
+	    plays the EXACT volume/pitch it is given - no per-play rolls. */
+	if (c030) {
 		data.rate   = (int)(data.rate   / (Random_Float(&sounds_rnd) * 0.2f + 0.9f));
 		data.volume = (int)(data.volume / (Random_Float(&sounds_rnd) * 0.4f + 1.0f));
+	}
 	}
 
 	res = AudioPool_Play(&data);
@@ -270,6 +290,27 @@ static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
     caller passes the 1 - dist/range multiplier). */
 void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) {
 	Sounds_PlayScaled(type, &stepBoard, volScale);
+}
+
+/* EntityLiving.fall: a damaging landing plays the block-under's step sound
+    at soundVolume * 0.5 and soundPitch * (12/16) - the landing thud. */
+void Audio_PlayFallSound(cc_uint8 type) {
+	const struct Sound* snd;
+	struct AudioData data;
+	cc_result res;
+
+	if (type == SOUND_NONE || !Audio_SoundsVolume) return;
+	snd = Soundboard_PickRandom(&stepBoard, type);
+	if (!snd) return;
+
+	data.chunk      = snd->chunk;
+	data.channels   = snd->channels;
+	data.sampleRate = snd->sampleRate;
+	data.rate       = 75;                                 /* soundPitch * 0.75F */
+	data.volume     = (int)(Audio_SoundsVolume * 0.5f);   /* soundVolume * 0.5F */
+
+	res = AudioPool_Play(&data);
+	if (res) Sounds_Fail(res);
 }
 
 /* The while-mining block hit (PlayerControllerSP.sendBlockRemoving): the
@@ -300,8 +341,10 @@ static void Audio_PlayBlockSound(void* obj, IVec3 coords, BlockID old, BlockID n
 	} else {
 		/* use StepSounds instead when placing, as don't want */
 		/*  to play glass break sound when placing glass. */
-		/* Genuine classic plays this too (its place path reuses the block's */
-		/*  step sound at (volume+1)/2, pitch*0.8) - so no ClassicMode gate. */
+		/* The place sound is an INDEV addition (ItemBlock.onItemUse) - c0.30's
+		    only block-sound sites are the break (GameMode.java:58) and walk
+		    steps (Entity.java:313), so placing is silent there. */
+		if (SurvivalTest_Enabled && !IndevTest_Enabled) return;
 		Audio_PlayDigSound(Blocks.StepSounds[now]);
 	}
 }
@@ -631,8 +674,11 @@ static void Music_Init(void) {
 	/* Survival Test's genuine gap between calm tracks is 300 + rand(900) */
 	/*  seconds (Minecraft.tick's lastBGM roll) - only the DEFAULTS change, a */
 	/*  user-configured delay still wins. */
+	/* c0.30: 300 + rand(900) s (Minecraft.tick lastBGM). Indev: the track-end
+	    timer is rand(12000) + 12000 ticks = 600-1200 s (SoundManager.java). */
 	music_minDelay = Options_GetInt(OPT_MIN_MUSIC_DELAY, 0, 3600,
-						SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF ? 300  : 120) * MILLIS_PER_SEC;
+						SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV ? 600 :
+						SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF   ? 300 : 120) * MILLIS_PER_SEC;
 	music_maxDelay = Options_GetInt(OPT_MAX_MUSIC_DELAY, 0, 3600, SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_OFF ? 1200 : 420) * MILLIS_PER_SEC;
 	music_waitable = Waitable_Create("Music sleep");
 

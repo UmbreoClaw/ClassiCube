@@ -737,10 +737,10 @@ static int HUDScreen_BuildBubblesMesh(struct HUDScreen* s, struct VertexTextured
 	if (full  < 0)  full  = 0;
 	if (total > 10) total = 10;
 
-	/* Sit one bubble-height above the heart row (which is itself above the */
-	/*  hotbar), matching the original's height-32-9 vs hearts at height-32. */
+	/* Bubbles sit flush atop the heart row: genuine height-32-9 vs hearts */
+	/*  at height-32 - the same 1px gap the hearts keep above the hotbar. */
 	x = s->hotbar.x;
-	y = s->hotbar.y - size - (int)(2.0f * scale) - size;
+	y = s->hotbar.y - size - (int)(1.0f * scale) - size;
 
 	tex.ID = Gui.IconsTex;
 	for (i = 0; i < total; i++) {
