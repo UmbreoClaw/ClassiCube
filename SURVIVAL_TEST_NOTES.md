@@ -5591,3 +5591,18 @@ types the button pass missed:
 Rig-verified: the Indev Generate-new-level screen (GuiNewLevel port) renders
 at the Indev step - title above the four cyclers, genuine button proportions,
 correct alignment; the classic gen screen's inputs/labels follow too.
+
+## SESSION LOG - Audio bugs (creeper hurt sound genuine; mining thunk added)
+
+The batch-3 audit agents died to the session limit twice, so the two USER-
+REPORTED bugs were verified by hand in the main loop instead:
+- Creeper "Steve hurt sound": GENUINE. in-20100223 EntityLiving defaults hurt/
+  death to "random.hurt" with null ambient; only pig/sheep override. Our mob
+  sound mapping already matches exactly (finding #37, no action).
+- Silent mining: REAL BUG (#38, fixed). Genuine Indev plays the block's step
+  sound every 4th dig tick at quarter volume/half pitch (sendBlockRemoving);
+  our TickBreaking played nothing. New Audio_PlayDigHitSound + the %4 cadence
+  in the Indev breaking branch. c0.30 mining is genuinely silent (particles
+  only) and stays that way.
+The full audio + drops/HUD sweeps remain queued for after the quota reset
+(prompts preserved; findings #37/#38 already cover the user-visible items).

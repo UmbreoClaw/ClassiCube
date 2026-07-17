@@ -54,6 +54,7 @@ static void Sounds_Start(void) {
 void Audio_PlayDigSound(cc_uint8 type)  { }
 void Audio_PlayStepSound(cc_uint8 type) { }
 void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) { }
+void Audio_PlayDigHitSound(cc_uint8 type) { }
 void Audio_PlayMobSound(int type, float volume, float pitch, float dist) { }
 
 void Sounds_LoadDefault(void) { }
@@ -269,6 +270,28 @@ static void Sounds_Play(cc_uint8 type, struct Soundboard* board) {
     caller passes the 1 - dist/range multiplier). */
 void Audio_PlayStepSoundAt(cc_uint8 type, float volScale) {
 	Sounds_PlayScaled(type, &stepBoard, volScale);
+}
+
+/* The while-mining block hit (PlayerControllerSP.sendBlockRemoving): the
+    block's STEP sound at (soundVolume + 1) / 8 volume and HALF pitch - the
+    low dig "thunk" heard every 4th digging tick in genuine Indev. */
+void Audio_PlayDigHitSound(cc_uint8 type) {
+	const struct Sound* snd;
+	struct AudioData data;
+	cc_result res;
+
+	if (type == SOUND_NONE || !Audio_SoundsVolume) return;
+	snd = Soundboard_PickRandom(&stepBoard, type);
+	if (!snd) return;
+
+	data.chunk      = snd->chunk;
+	data.channels   = snd->channels;
+	data.sampleRate = snd->sampleRate;
+	data.rate       = 50;                                  /* soundPitch * 0.5F */
+	data.volume     = (int)(Audio_SoundsVolume * 0.25f);   /* (volume + 1) / 8 */
+
+	res = AudioPool_Play(&data);
+	if (res) Sounds_Fail(res);
 }
 
 static void Audio_PlayBlockSound(void* obj, IVec3 coords, BlockID old, BlockID now) {

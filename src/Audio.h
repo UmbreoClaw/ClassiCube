@@ -52,6 +52,9 @@ void Audio_PlayDigSound(cc_uint8 type);
 void Audio_PlayStepSound(cc_uint8 type);
 /* Plays a step sound scaled by a 0..1 volume multiplier (mob footstep distance falloff). */
 void Audio_PlayStepSoundAt(cc_uint8 type, float volScale);
+/* Plays the genuine Indev while-mining hit: the block's step sound at
+    quarter volume and half pitch (PlayerControllerSP.sendBlockRemoving). */
+void Audio_PlayDigHitSound(cc_uint8 type);
 #define AUDIO_MAX_BUFFERS 4
 
 cc_bool AudioBackend_Init(void);

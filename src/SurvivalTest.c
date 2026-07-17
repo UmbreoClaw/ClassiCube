@@ -6976,8 +6976,16 @@ static void SurvivalTest_TickBreaking(void) {
 		}
 
 		/* Indev: curBlockDamage += blockStrength per tick, break at 1.0. */
-		/* c0.30: integer hits, break at hardness + 1. */
+		/* c0.30: integer hits, break at hardness + 1 (and NO hit sound -
+		    genuine SurvivalGameMode.hitBlock only spawns particles). */
 		if (IndevTest_Enabled) {
+			/* sendBlockRemoving: every 4th digging tick plays the block's
+			    step sound at quarter volume, half pitch (the mining thunk).
+			    st_breakHits is unused by the Indev damage path, so it serves
+			    as the genuine blockDestroySoundCounter here. */
+			if ((st_breakHits++ % 4) == 0) {
+				Audio_PlayDigHitSound(Blocks.StepSounds[block]);
+			}
 			st_breakDamage += Indev_BlockStrength(block);
 			if (st_breakDamage < 1.0f) return;
 		} else {

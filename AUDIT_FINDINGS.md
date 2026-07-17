@@ -560,3 +560,33 @@ needed if something starts depending on single-player runtime-id genuineness.
 SURV_BLOCKMETA stays reserved for invisible nibbles (sapling stage, fire age)
 to make fork-client local saves of server worlds byte-perfect. Recorded in
 doc/server-session-handoff.md SS3.5 for the server session.
+
+---
+
+## Domain 8: Audio (user reports, verified by hand after audit agents hit limits)
+
+### #37 Creeper plays the "Steve" hurt sound [VERIFIED GENUINE - no action]
+User report investigated: in genuine in-20100223, EntityLiving's defaults are
+getHurtSound = getDeathSound = "random.hurt" and getLivingSound = null, and
+ONLY EntityPig (mob.pig / mob.pigdeath) and EntitySheep (mob.sheep) override
+them. Zombies, skeletons, CREEPERS and spiders have no sound overrides - the
+famous mob voices came in Alpha. Our mapping (SurvivalTest.c:3007-3010 hurt/
+death, :4333-4334 ambient pig/sheep only) is already byte-genuine, so the
+creeper using the player hurt sound is faithful behaviour, kept as-is.
+
+### #38 Missing while-mining hit sound (Indev) [FIXED]
+User report confirmed: PlayerControllerSP.sendBlockRemoving:70-80 plays the
+target block's STEP sound every 4th digging tick at (soundVolume + 1) / 8
+volume and soundPitch * 0.5 - the low mining "thunk". Our TickBreaking had no
+sound at all, so timed mining (most obvious on wood's long dig) was silent.
+Added Audio_PlayDigHitSound (step board, rate 50, quarter volume) called on
+the genuine %4 cadence in the Indev branch of SurvivalTest_TickBreaking.
+c0.30 intentionally stays silent while mining - genuine SurvivalGameMode.
+hitBlock spawns particles only, no sound.
+
+### Remaining audio + drops/HUD audit [QUEUED - relaunch after quota reset]
+The two audit agents (full audio sweep: block sound table, break transforms,
+walk cadence, player sounds, music delays; and drops/arrows/HUD formulas)
+died to session limits before reporting, twice. Relaunch the two prompts
+(recorded in the session transcript) when the limit resets; the user-facing
+bugs from the batch are already resolved above.
