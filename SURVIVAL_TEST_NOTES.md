@@ -5502,3 +5502,19 @@ Fix: one guard at the deref site (Lighting.c) returning the -10 all-sky sentinel
 to lit, never accidental black). Covers every gameplay caller in both lighting
 modes; the _Fast render variants are builder-only (post-alloc). gdb-verified by
 forcing the NULL and confirming safe returns, plus a clean fresh generate.
+
+## SESSION LOG - Fidelity sweep round 1 (items/crafting + player combat)
+
+First two domain audits of the systematic sweep (task #42) returned; every
+claimed divergence was re-verified against the decompiled Java before fixing.
+Fixed: diamond block recipes + pickaxe effective/harvest rules (finding #23 -
+and corrected #21's wrong "no diamond recipes" claim), player fire ignition
+ramp fireResistance=20 (#24), soup returns bowl (#25), fire block excluded
+from furnace fuel (#26). Queued: difficulty setting (#27 - current behaviour
+== genuine default Normal). The audits also positively verified ~20 subsystems
+as byte-exact (see AUDIT_FINDINGS Domain 6 list). Blocks + mob audits still
+running; drops/HUD queued.
+
+Process note: an errant conditional in a python edit truncated
+AUDIT_FINDINGS.md to 0 bytes mid-session (open('w') before a failed write);
+restored via git checkout. Notes edits are append-only heredocs from now on.

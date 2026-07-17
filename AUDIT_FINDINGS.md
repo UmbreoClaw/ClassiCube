@@ -376,3 +376,55 @@ VERIFIED (gdb, live world): forcing classic_heightmap = NULL, GetLightHeight ->
 -10, IsLit -> 1 (daylight), IndevTest_LightLevel -> 15, all without a deref;
 restoring the pointer resumes normal values (29). Fresh clean generate loads
 128x64x128 fancy, surface light 15, no crash.
+
+---
+
+## Domain 6: Fidelity sweep round 1 (items/crafting + player combat)
+
+### #23 Diamond block: missing genuine recipes + pickaxe rules [FIXED]
+RecipesIngots.recipeItems is {gold, steel, DIAMOND} - 9 diamonds <-> diamond
+block both directions - so the earlier note (finding #21) claiming "no diamond
+block recipes in in-20100223" was WRONG (gears/sources part stands). Added the
+pair to indevRecipes[] (57 <-> 9x R_ITEM(8)). Also ItemPickaxe lists
+blockDiamond in blocksEffectiveAgainst and canHarvestBlock gates it at
+harvestLevel >= 2 exactly like oreDiamond - added 57 to pickaxeBlocks and a
+case 57 in IndevTest_CanHarvest (it previously dug at 1.0x and dropped for ANY
+pickaxe). IndevTest.c.
+
+### #24 Player fire ignition ramp (fireResistance = 20) [FIXED]
+Genuine Entity.move: fire contact deals 1/tick and INCREMENTS the fire counter
+from -fireResistance; only at 0 does the entity catch alight (fire = 300).
+EntityPlayer.fireResistance = 20, so the player needs 20 consecutive burning
+ticks to ignite; leaving fire un-ignited (and the water fizz) resets to
+-fireResistance. Ours ignited on the FIRST contact tick. Fixed with the signed
+counter + PLAYER_FIRE_RESIST 20 in SurvivalTest_Tick; mob insta-ignition kept
+(Entity default fireResistance = 1 - genuine). SurvivalTest.c.
+
+### #25 Mushroom soup doesn't return the bowl [FIXED]
+ItemSoup.onItemRightClick heals 10 then returns new ItemStack(bowlEmpty); ours
+consumed the soup outright (long-standing TODO at IndevTest.c:257). Eating soup
+now leaves Bowl (256+25) in the emptied slot. SurvivalTest_TryEat.
+
+### #26 Fire block burned as furnace fuel [FIXED]
+getItemBurnTime gives 300 only to Material.wood blocks; BlockFire is
+Material.fire. Our SOUND_WOOD proxy excluded only the torch, so the obtainable
+fire block (chain-armor ingredient) burned as fuel. Excluded INDEV_BLOCK_FIRE
+in Furnace_FuelTime. IndevTest.c.
+
+### #27 Difficulty setting absent [QUEUED]
+Genuine EntityPlayer scales mob/arrow damage by difficulty BEFORE the armor
+25ths (Peaceful 0, Easy dmg/3+1, Hard dmg*3/2; World default = 2 Normal) and
+heals 1 HP per 20 ticks on Peaceful (the ticksExisted % 20 << 2 == 0 precedence
+quirk reduces to t%20==0). We have no difficulty concept - current behaviour
+exactly matches the default Normal, so nothing is WRONG today; adding the
+option (+ the two rules at the SurvivalTest_Damage entry) is queued work.
+
+### Sweep round 1 verified-exact list (no action)
+Tool durabilities (32<<tier, golden-hoe 512 quirk), armor durability/reduction
+tables, stack sizes, the entire remaining recipe table (shapes, counts, mirror/
+offset matching), smelting (6 recipes, 200 ticks, fuel 300/100/1600, ignition-
+consumes-fuel), tool speed tiers + drop gating on canHarvestBlock, armor 25ths
+with remainder, food heals, attack damage tables (sword 4+2*tier etc., c0.30
+flat 4), knockback vectors, drowning/air both modes, lava/fire damage cadence,
+invuln windows both modes (c0.30 delta-damage, Indev miss-entirely), player
+movement (stock engine classic physics, no overrides).

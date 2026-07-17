@@ -345,13 +345,13 @@ cc_bool IndevTest_IsBow(int id) {
     1.5 against every block; hoes extend Item (not ItemTool) so they dig at 1.
     The per-class block lists below are the genuine ItemPickaxe/ItemAxe/
     ItemSpade arrays by id - notably brick/obsidian/furnace/workbench are in
-    NO list (genuine quirk), and Block.crate 54 IS the chest. Genuine also
-    lists blockDiamond (57) for pickaxes; the fork has no diamond block yet. */
+    NO list (genuine quirk), and Block.crate 54 IS the chest. */
 float IndevTest_StrVsBlock(int id, BlockID block) {
 	static const cc_uint8 pickaxeBlocks[] = {
 		BLOCK_COBBLE, BLOCK_DOUBLE_SLAB, BLOCK_SLAB, BLOCK_STONE,
 		BLOCK_MOSSY_ROCKS, BLOCK_IRON_ORE, BLOCK_IRON, BLOCK_COAL_ORE,
-		BLOCK_GOLD, BLOCK_GOLD_ORE, 56 /* INDEV_BLOCK_DIAMOND_ORE */, 0
+		BLOCK_GOLD, BLOCK_GOLD_ORE, 56 /* INDEV_BLOCK_DIAMOND_ORE */,
+		57 /* INDEV_BLOCK_DIAMOND (genuine blocksEffectiveAgainst) */, 0
 	};
 	static const cc_uint8 axeBlocks[] = {
 		BLOCK_WOOD, BLOCK_BOOKSHELF, BLOCK_LOG, 54 /* INDEV_BLOCK_CHEST */, 0
@@ -413,6 +413,7 @@ cc_bool IndevTest_CanHarvest(int heldId, BlockID block) {
 	switch (block) {
 	case BLOCK_OBSIDIAN:                return level == 3;
 	case 56 /* INDEV_BLOCK_DIAMOND_ORE (defined below) */: return level >= 2; /* genuine oreDiamond */
+	case 57 /* INDEV_BLOCK_DIAMOND */:  return level >= 2; /* genuine blockDiamond */
 	case BLOCK_GOLD_ORE: case BLOCK_GOLD: return level >= 2;
 	case BLOCK_IRON_ORE: case BLOCK_IRON: return level > 0;
 	default:                            return true;
@@ -456,13 +457,15 @@ static const struct IndevRecipe indevRecipes[] = {
 	/*  arrows x4 ("X"/"#"/"Y" = iron ingot / stick / feather) */
 	{ R_ITEM(5),     1, 3,3, { 0,R_ITEM(24),R_ITEM(31), R_ITEM(24),0,R_ITEM(31), 0,R_ITEM(24),R_ITEM(31) } },
 	{ R_ITEM(6),     4, 1,3, { R_ITEM(9), R_ITEM(24), R_ITEM(32) } },
-	/* RecipesIngots: 9 ingots <-> storage block, both directions. (The
-	    diamond pair is genuine too, but the classic block set has no diamond
-	    block id to map it onto, so that pair is omitted.) */
+	/* RecipesIngots: 9 ingots/gems <-> storage block, both directions -
+	    gold, steel AND diamond (the diamond block now lives at its genuine
+	    id 57, so the genuine third pair applies too) */
 	{ BLOCK_GOLD,    1, 3,3, { R_ITEM(10),R_ITEM(10),R_ITEM(10), R_ITEM(10),R_ITEM(10),R_ITEM(10), R_ITEM(10),R_ITEM(10),R_ITEM(10) } },
 	{ BLOCK_IRON,    1, 3,3, { R_ITEM(9),R_ITEM(9),R_ITEM(9), R_ITEM(9),R_ITEM(9),R_ITEM(9), R_ITEM(9),R_ITEM(9),R_ITEM(9) } },
+	{ 57,            1, 3,3, { R_ITEM(8),R_ITEM(8),R_ITEM(8), R_ITEM(8),R_ITEM(8),R_ITEM(8), R_ITEM(8),R_ITEM(8),R_ITEM(8) } },
 	{ R_ITEM(10),    9, 1,1, { BLOCK_GOLD } },
 	{ R_ITEM(9),     9, 1,1, { BLOCK_IRON } },
+	{ R_ITEM(8),     9, 1,1, { 57 } },
 	/* painting: ring of planks around gray cloth */
 	{ R_ITEM(65),    1, 3,3, { BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD, BLOCK_WOOD,BLOCK_GRAY,BLOCK_WOOD, BLOCK_WOOD,BLOCK_WOOD,BLOCK_WOOD } },
 };
@@ -1298,8 +1301,9 @@ static int Furnace_SmeltResult(int id) {
 static int Furnace_FuelTime(int id) {
 	if (id == 256 + 7)  return 1600; /* Coal */
 	if (id == 256 + 24) return 100;  /* Stick */
-	if (id > 0 && id < 256 && id != INDEV_BLOCK_TORCH &&
-		Blocks.DigSounds[id] == SOUND_WOOD) return 300;
+	if (id > 0 && id < 256 && id != INDEV_BLOCK_TORCH && id != INDEV_BLOCK_FIRE &&
+		Blocks.DigSounds[id] == SOUND_WOOD) return 300; /* Material.wood only -
+		torch (circuits) and fire (Material.fire) never burn as fuel */
 	return 0;
 }
 

@@ -73,6 +73,8 @@ cc_bool SurvivalTest_CreativeActive(void) {
 #define DROWN_DAMAGE       2
 /* Starting air supply in seconds (15s before drowning, as in Survival Test) */
 #define AIR_SUPPLY_SECS    15.0f
+/* EntityPlayer.fireResistance: burning ticks needed before catching alight */
+#define PLAYER_FIRE_RESIST 20
 /* Falls of more than this many blocks deal damage (~1 HP per excess block) */
 #define FALL_SAFE_BLOCKS   3.0f
 /* Y below which falling through the world's bottom (a floating-map void) is
@@ -6679,9 +6681,20 @@ cc_bool SurvivalTest_TryEat(void) {
 	/* Indev item foods first: porkchops/bread/apple heal their defs value */
 	if (IndevTest_Enabled) {
 		int heal = IndevTest_ItemFoodHeal(st_inv[slot].id);
+		cc_bool soup = st_inv[slot].id == 256 + 26; /* mushroom soup */
 		if (heal > 0) {
 			SurvivalTest_Heal(heal);
 			SurvivalTest_ConsumeSelected();
+			/* ItemSoup.onItemRightClick returns new ItemStack(bowlEmpty):
+			    the bowl stays behind in the eaten soup's slot (soups don't
+			    stack, so the slot is guaranteed free after the consume) */
+			if (soup && st_inv[slot].count <= 0) {
+				st_inv[slot].id     = 256 + 25; /* Bowl */
+				st_inv[slot].count  = 1;
+				st_inv[slot].damage = 0;
+				SurvivalTest_InvChanged();
+				SurvivalTest_SyncHotbar();
+			}
 			HeldBlockRenderer_ClickAnim(false);
 			return true;
 		}
@@ -7334,14 +7347,26 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 			Indev_EntitySplash(e->Position, e->Velocity, 0.6f);
 		st_playerWasInWater = inWater;
 
+		/* Entity.move tail: fire contact deals 1/tick and RAMPS the fire
+		    counter up from -fireResistance (EntityPlayer sets 20) - only
+		    after 20 consecutive burning ticks does it reach 0 and catch
+		    alight (fire = 300). Leaving fire un-ignited resets the ramp,
+		    and the water fizz resets to -fireResistance too - a brief
+		    brush with fire never sets the player alight (mobs DO insta-
+		    ignite: their fireResistance stays the Entity default 1). */
 		if (ST_InFire(e)) {
 			SurvivalTest_Hurt(1);
-			if (!inWater) st_playerFire = 300;
+			if (!inWater) {
+				st_playerFire++;
+				if (st_playerFire == 0) st_playerFire = 300;
+			}
+		} else if (st_playerFire <= 0) {
+			st_playerFire = -PLAYER_FIRE_RESIST;
 		}
 		if (inWater && st_playerFire > 0) {
 			Audio_PlayMobSound(MOBSND_FIZZ, 0.7f,
 				1.6f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.4f, 0.0f);
-			st_playerFire = 0;
+			st_playerFire = -PLAYER_FIRE_RESIST;
 		}
 		if (st_playerFire > 0) {
 			if (st_playerFire % 20 == 0) SurvivalTest_Hurt(1);
