@@ -2569,6 +2569,17 @@ struct Mob {
 	/*  it just stands still (gravity/hurt still apply) so it can be inspected. */
 	/*  Never set on naturally-spawned mobs. Not part of c0.30-s parity. */
 	cc_bool noAI;
+
+	/* MP puppet (phase 3, networking-plan 15.1/17.5): the server runs
+	    AI/physics/damage and streams SURV_MOB_*; these fields key the slot to
+	    the server's mob id and latch the most recent movement target, which
+	    the puppet tick consumes so prev->next interpolation works exactly as
+	    for local mobs. netState pins fire/fuse/graze between STATE messages. */
+	cc_uint16 netId;
+	cc_uint8  netState;
+	cc_bool   netHasMove;
+	Vec3      netPos;
+	float     netYaw, netPitch;
 };
 static struct Mob st_mobs[MOB_MAX];
 
@@ -4973,6 +4984,266 @@ static void SurvivalTest_TickMobs(float delta) {
 }
 
 
+/*########################################################################################################################*
+*----------------------------------------------MP mob puppet (phase 3)----------------------------------------------------*
+*#########################################################################################################################*/
+/* st_mobs as a network-driven view (networking-plan 15.1/17.5): the SERVER
+    runs AI/physics/damage/spawning and streams SURV_MOB_*; the client only
+    renders, interpolates and derives the cosmetic timers from state EDGES.
+    None of the local sim (Mob_Travel, BasicAI, Mob_Hurt, spawner) runs on a
+    puppet - TickOnePuppet below is the entire per-tick surface. */
+
+static int Mob_FindByNetId(int id) {
+	int i;
+	for (i = 0; i < MOB_MAX; i++) {
+		if (st_mobs[i].active && st_mobs[i].netId == (cc_uint16)id) return i;
+	}
+	return -1;
+}
+
+void SurvivalTest_NetMobSpawn(int id, int type, Vec3 pos, float yaw, float pitch, int health, int flags) {
+	struct Mob* m;
+	cc_string model;
+	int slot;
+	if (!SurvivalTest_Enabled || type < 0 || type >= MOB_TYPE_COUNT) return;
+
+	/* A re-sent live id is an authoritative refresh of that mob, not a leak */
+	slot = Mob_FindByNetId(id);
+	if (slot < 0) slot = SurvivalTest_FindFreeMobSlot();
+	if (slot < 0) return;
+
+	m = &st_mobs[slot];
+	Mem_Set(m, 0, sizeof(struct Mob));
+	Entity_Init(&m->Base);
+	m->Base.VTABLE = &mob_VTABLE;
+	m->fuseState   = -1;   /* EntityCreeper.creeperState idles at -1, not 0 */
+	m->wasInWater  = true; /* Entity.isFirstUpdate: never splash on the spawn tick */
+
+	m->type      = (cc_uint8)type;
+	m->hasHelmet = (flags & SURV_MOBFLAG_HELMET) != 0;
+	m->hasArmor  = (flags & SURV_MOBFLAG_ARMOR)  != 0;
+	m->hasFur    = (flags & SURV_MOBFLAG_FUR)    != 0;
+
+	/* Sheep.renderModel only draws the fur layer while hasFur - an already
+	    sheared sheep must arrive furless (same swap the local shear does). */
+	model = String_FromReadonly(
+		type == MOB_TYPE_SHEEP && !m->hasFur ? "sheep_nofur" : mobTypeInfo[type].model);
+	Entity_SetModel(&m->Base, &model);
+	Mob_ApplySize(m); /* genuine setSize - the model's collision box is off */
+
+	/* No isFree spawn rejection here: the server already validated the spawn
+	    and its word is final (rejecting would desync the mob population). */
+	m->Base.Position = pos;
+	m->Base.Yaw   = yaw;  m->Base.RotY = yaw; /* body faces the head's way at spawn */
+	m->Base.Pitch = pitch;
+	m->Base.prev.pos   = pos;   m->Base.next.pos   = pos;
+	m->Base.prev.yaw   = yaw;   m->Base.next.yaw   = yaw;
+	m->Base.prev.rotY  = yaw;   m->Base.next.rotY  = yaw;
+	m->Base.prev.pitch = pitch; m->Base.next.pitch = pitch;
+
+	m->targetSlot = -1;
+	m->nextStep   = 1;
+	m->health     = health;
+	m->airTicks   = MOB_AIR_TICKS;
+	m->netId      = (cc_uint16)id;
+	m->active     = true;
+}
+
+void SurvivalTest_NetMobMove(int id, Vec3 pos, float yaw, float pitch) {
+	int slot = Mob_FindByNetId(id);
+	struct Mob* m;
+	if (slot < 0) return; /* MOVE for an unknown id - its SPAWN will come */
+
+	/* Latch the target; the puppet tick consumes it so the prev->next
+	    interpolation window advances exactly like a local mob's. */
+	m = &st_mobs[slot];
+	m->netPos     = pos;
+	m->netYaw     = yaw;
+	m->netPitch   = pitch;
+	m->netHasMove = true;
+}
+
+void SurvivalTest_NetMobState(int id, int health, int flags) {
+	int slot = Mob_FindByNetId(id);
+	struct Mob* m;
+	cc_bool wasAlive;
+	if (slot < 0) return;
+	m = &st_mobs[slot];
+	wasAlive = m->health > 0;
+
+	/* Hurt presentation from the EDGE: red flash + the c0.30 white-flash
+	    window + the hurt/death voice, mirroring Mob_Hurt's landed-hit path. */
+	if ((health < m->health || (flags & SURV_MOBSTATE_HURT)) && wasAlive) {
+		m->lastHealth  = m->health;
+		m->invincTicks = MOB_INVINC_TICKS;
+		m->hurtTicks   = 10;
+		if (IndevTest_Enabled) {
+			int snd = MOBSND_HURT;
+			if (m->type == MOB_TYPE_SHEEP) snd = MOBSND_SHEEP;
+			if (m->type == MOB_TYPE_PIG)   snd = health <= 0 ? MOBSND_PIGDEATH : MOBSND_PIG;
+			Mob_PlaySound(m, snd, 1.0f, Mob_SndPitch());
+		}
+	}
+	m->health = health;
+
+	/* Creeper fuse arming plays the hiss on the rising edge (EntityCreeper
+	    setCreeperState path); the swell itself ramps in the puppet tick. */
+	if ((flags & SURV_MOBSTATE_FUSE) && !(m->netState & SURV_MOBSTATE_FUSE)) {
+		Mob_PlaySound(m, MOBSND_FUSE, 1.0f, 0.5f);
+	}
+
+	/* A visible shear: fur off + the furless model, drops are server state. */
+	if ((flags & SURV_MOBSTATE_NOFUR) && m->type == MOB_TYPE_SHEEP && m->hasFur) {
+		cc_string mdl = String_FromReadonly("sheep_nofur");
+		m->hasFur = false;
+		Entity_SetModel(&m->Base, &mdl);
+		Mob_ApplySize(m);
+	}
+
+	m->grazing = (flags & SURV_MOBSTATE_GRAZE) != 0;
+
+	if ((health <= 0 || (flags & SURV_MOBSTATE_DEAD)) && wasAlive) {
+		/* Death anim starts; the keel-over roll + removal run in the puppet
+		    tick. Explosions/drops/score are all server events, not ours. */
+		m->health     = 0;
+		m->deathTicks = 0;
+	}
+	m->netState = (cc_uint8)flags;
+}
+
+void SurvivalTest_NetMobDespawn(int id, int reason) {
+	int slot = Mob_FindByNetId(id);
+	if (slot < 0) return;
+	st_mobs[slot].active = false;
+}
+
+static void SurvivalTest_TickOnePuppet(struct Mob* m, float delta) {
+	struct Entity* e = &m->Base;
+	Vec3 oldPos;
+	cc_bool inWater;
+	if (!m->active) return;
+
+	/* Advance the interpolation window exactly like TickOneMob: last tick's
+	    resolved state (next) becomes this tick's starting point (prev). */
+	e->prev     = e->next;
+	e->Position = e->prev.pos;
+	e->Yaw      = e->prev.yaw;
+	e->Pitch    = e->prev.pitch;
+	e->RotY     = e->prev.rotY;
+
+	if (m->invincTicks > 0) m->invincTicks--;
+	if (m->hurtTicks   > 0) m->hurtTicks--;
+	if (m->attackTime  > 0) m->attackTime--;
+	m->ticksAlive++;
+
+	if (m->health <= 0) {
+		m->deathTicks++;
+		/* The server sends MOB_DESPAWN when the corpse window closes; free
+		    locally after twice that window as a lost-packet belt-and-braces. */
+		if (m->deathTicks > 40) { m->active = false; return; }
+	}
+
+	/* Creeper swell: the FUSE bit pins timeSinceIgnited ramping up (capped
+	    at the pre-blast 30) or decaying; render lerps fuseLast->fuseTicks. */
+	m->fuseLast = m->fuseTicks;
+	if (m->netState & SURV_MOBSTATE_FUSE) {
+		m->fuseState = 1;
+		if (m->fuseTicks < 30) m->fuseTicks++;
+	} else {
+		m->fuseState = -1;
+		if (m->fuseTicks > 0) m->fuseTicks--;
+	}
+
+	/* Fire overlay: STATE only arrives on change, so pin the burn counter
+	    while the server says alight rather than letting it lapse. */
+	m->fire = (m->netState & SURV_MOBSTATE_ONFIRE) ? 300 : 0;
+
+	/* Sheep graze head-dip easing (Sheep.graze/grazeO) - the server decides
+	    when grazing starts/stops; only the eased 0..1 dip is derived here. */
+	m->grazeO = m->graze;
+	m->graze += m->grazing ? 0.2f : -0.2f;
+	Math_Clamp(m->graze, 0.0f, 1.0f);
+
+	/* EntityLiving's ambient-voice roll is pure presentation, so it stays
+	    client-side (matching the local sim: only pig and sheep have voices). */
+	if (IndevTest_Enabled && m->health > 0 &&
+		Random_Next(&st_mobRng, 1000) < m->livingSnd++) {
+		m->livingSnd = -80;
+		if (m->type == MOB_TYPE_PIG)   Mob_PlaySound(m, MOBSND_PIG,   1.0f, Mob_SndPitch());
+		if (m->type == MOB_TYPE_SHEEP) Mob_PlaySound(m, MOBSND_SHEEP, 1.0f, Mob_SndPitch());
+	}
+
+	/* Apply the latched movement target, running the same presentation the
+	    local tick would: walk animation, body-yaw easing, step sounds. */
+	oldPos = e->Position;
+	if (m->netHasMove) {
+		e->Position   = m->netPos;
+		e->Yaw        = m->netYaw;
+		e->Pitch      = m->netPitch;
+		m->netHasMove = false;
+	}
+	AnimatedComp_Update(e, oldPos, e->Position, delta);
+	Mob_UpdateBodyYaw(m, oldPos);
+
+	if (IndevTest_Enabled) {
+		inWater = ST_InLiquid(e, false);
+		if (inWater && !m->wasInWater)
+			Indev_EntitySplash(e->Position, e->Velocity, e->Size.x);
+		m->wasInWater = inWater;
+	}
+
+	/* Step sounds - same walkDist cadence + hearing ranges as TickOneMob
+	    (trampling is skipped: farmland is the server's block state in MP). */
+	{
+		float sdx = e->Position.x - oldPos.x, sdz = e->Position.z - oldPos.z;
+		m->walkDist += Math_SqrtF(sdx * sdx + sdz * sdz) * 0.6f;
+		if (m->walkDist > (float)m->nextStep) {
+			struct LocalPlayer* sp = Entities.CurPlayer;
+			int bx = Math_Floor(e->Position.x);
+			int by = Math_Floor(e->Position.y - 0.2f);
+			int bz = Math_Floor(e->Position.z);
+			BlockID under = World_Contains(bx, by, bz) ? World_GetBlock(bx, by, bz) : BLOCK_AIR;
+
+			m->nextStep++;
+			if (under != BLOCK_AIR && sp) {
+				float range = IndevTest_Enabled ? 16.0f : 32.0f;
+				float ddy   = e->Position.y - sp->Base.Position.y;
+				float dist;
+				sdx  = e->Position.x - sp->Base.Position.x;
+				sdz  = e->Position.z - sp->Base.Position.z;
+				dist = Math_SqrtF(sdx * sdx + ddy * ddy + sdz * sdz);
+				if (dist < range)
+					Audio_PlayStepSoundAt(Blocks.StepSounds[under], 1.0f - dist / range);
+			}
+		}
+	}
+
+	/* Hurt wobble + death keel-over, identical to the local tick's block. */
+	{
+		float roll = 0.0f;
+		if (m->hurtTicks > 0) {
+			float ht = (float)m->hurtTicks / 10.0f;
+			roll = Math_SinF(ht * ht * ht * ht * MATH_PI) * 14.0f;
+		}
+		if (m->health <= 0) {
+			float deathT = (float)m->deathTicks;
+			roll += deathT * deathT * 2.0f;
+		}
+		e->next.rotZ = min(roll, 90.0f);
+	}
+
+	e->next.pos   = e->Position;
+	e->next.yaw   = e->Yaw;
+	e->next.pitch = e->Pitch;
+	e->next.rotY  = e->RotY;
+}
+
+static void SurvivalTest_TickPuppetMobs(float delta) {
+	int i;
+	for (i = 0; i < MOB_MAX; i++) { SurvivalTest_TickOnePuppet(&st_mobs[i], delta); }
+}
+
+
 /* Render.java's burning-entity pass: stacked camera-facing strips of the
     animated fire tile (see Animations.c's FireAnimation_Tick), each 1.4
     units tall and 10% narrower than the one below, scaled by width*1.4 and
@@ -5229,6 +5500,14 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/*  itself (InputHandler_DeleteBlock), but that path is skipped when we */
 	/*  attack a mob, so trigger the same swing here to match. */
 	HeldBlockRenderer_ClickAnim(true);
+
+	/* MP: the swing lands as an intent - the server resolves damage/knockback/
+	    aggro/shearing and streams the result back as MOB_STATE (tool wear is
+	    server state too; DamageHeldTool already no-ops when ServerDriven). */
+	if (SurvivalNet_ServerDriven()) {
+		SurvivalNet_SendAttack(0, best->netId);
+		return true;
+	}
 
 	/* c0.30 fist: flat 4 HP/hit. Indev (Minecraft.java:352): the held item's */
 	/*  getDamageVsEntity - bare fist 1, tools base+tier, swords 4 + tier*2. */
@@ -7606,6 +7885,10 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		SurvivalTest_TickArrows();
 		if (IndevTest_Enabled) SurvivalTest_TickPaintings();
 		SurvivalTest_TickTnt();
+	} else {
+		/* Phase 3: mobs stream in as puppets - only their presentation
+		    (interpolation, animation timers, sounds) ticks locally. */
+		SurvivalTest_TickPuppetMobs(delta);
 	}
 
 	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */

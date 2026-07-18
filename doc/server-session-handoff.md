@@ -158,16 +158,23 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
 
 ## 4. What to build next (recommended order)
 
-1. **Death dwell + `SURV_RESPAWN` round-trip** (small, completes phase 2
-   end-to-end against the real client).
-2. **Phase 3 mob streaming** (`0x10–0x13`) — the client has the full Indev mob
-   render/animation stack ready to puppet; it needs spawn/move/state/despawn
-   and will handle interpolation client-side. Positions: int16 fixed-point
-   (coord × 32), yaw/pitch as uint8 (deg × 256/360), per §25.
+1. ~~**Death dwell + `SURV_RESPAWN` round-trip**~~ ✅ done (combined session):
+   health held at 0, revive on intent or 30 s safety timeout, stray intents
+   rejected with an authoritative echo. Integration-tested live.
+2. ~~**Phase 3 mob streaming** (`0x10–0x13`)~~ ✅ done (combined session):
+   server-side `SurvivalMobs` sim (20 TPS scheduler; BasicAI wander/chase/melee,
+   creeper fuse+blast, fall damage, knockback, invuln windows, spawner/despawn
+   rolls, graduated player damage) streaming to the client's puppet appliers.
+   `SURV_ATTACK` validated + applied. V1 deviations (all documented in the
+   mcgalaxy session-notes): no Indev A* pathing yet, skeletons melee (arrows
+   need phase-5 wire), brightness = sky-exposure x day/night approximation,
+   explosions damage players but never blocks, no drops, mobs freeze on
+   empty maps and don't persist across server restarts.
 3. **Phase 4 inventory** (`0x20–0x25`, `0x50`) — the client's survival
    inventory UI re-enables in MP once you stream it; `SLOT_CLICK`/`RESULT_CLICK`
    /`CONT_CLOSE` senders are already written.
 4. **Phase 5 drops** (`0x30–0x32`) — `SURV_DROP_ITEM` intents already arrive.
+   Also unlocks: skeleton arrows, mob death drops, wool from shearing.
 
 Integration testing: the client session verified everything by build + code
 audit; the natural end-to-end check is your CLI server on `SurvivalMode=Indev`

@@ -135,18 +135,79 @@ static void SurvivalNet_HandleTime(cc_uint8* data) {
 	/* c0.30-s has no day/night cycle - ignore TIME in that mode. */
 }
 
+/* --- phase 3: mob streaming (0x10-0x13) --- */
+/* Positions are int16 fixed-point (coord*32), yaw/pitch uint8 (deg*256/360),
+   per networking-plan §25. All appliers are keyed by the server's 16-bit mob
+   id; st_mobs is the puppet pool (SurvivalTest_NetMob*, §15.1/§17.5). */
+
+static cc_int16 SurvivalNet_I16(cc_uint8* data) {
+	return (cc_int16)(((cc_uint16)data[0] << 8) | data[1]);
+}
+
+static Vec3 SurvivalNet_ReadPos(cc_uint8* data) {
+	Vec3 pos;
+	pos.x = SurvivalNet_I16(data)     / 32.0f;
+	pos.y = SurvivalNet_I16(data + 2) / 32.0f;
+	pos.z = SurvivalNet_I16(data + 4) / 32.0f;
+	return pos;
+}
+
+#define SurvivalNet_Angle(b) ((b) * 360.0f / 256.0f)
+
+static void SurvivalNet_HandleMobSpawn(cc_uint8* data) {
+	/* [id][mobId:u16][type][pos:3xi16][yaw][pitch][health][flags] */
+	int  mobId = ((int)data[1] << 8) | data[2];
+	int  type  = data[3];
+	Vec3 pos   = SurvivalNet_ReadPos(data + 4);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetMobSpawn(mobId, type, pos,
+		SurvivalNet_Angle(data[10]), SurvivalNet_Angle(data[11]),
+		data[12], data[13]);
+}
+
+static void SurvivalNet_HandleMobMove(cc_uint8* data) {
+	/* [id][mobId:u16][pos:3xi16][yaw][pitch] */
+	int  mobId = ((int)data[1] << 8) | data[2];
+	Vec3 pos   = SurvivalNet_ReadPos(data + 3);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetMobMove(mobId, pos,
+		SurvivalNet_Angle(data[9]), SurvivalNet_Angle(data[10]));
+}
+
+static void SurvivalNet_HandleMobState(cc_uint8* data) {
+	/* [id][mobId:u16][health][flags(b0 hurt,b1 fuse,b2 onFire,b3 graze,b4 dead,b5 noFur)] */
+	int mobId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetMobState(mobId, data[3], data[4]);
+}
+
+static void SurvivalNet_HandleMobDespawn(cc_uint8* data) {
+	/* [id][mobId:u16][reason] */
+	int mobId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetMobDespawn(mobId, data[3]);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
 
 	switch (data[0]) {
-	case SURV_HELLO:     SurvivalNet_HandleHello(data);     break;
-	case SURV_WORLDINFO: SurvivalNet_HandleWorldInfo(data); break;
-	case SURV_HEALTH:    SurvivalNet_HandleHealth(data);    break;
-	case SURV_TIME:      SurvivalNet_HandleTime(data);      break;
-	/* Remaining server->client messages (mobs 0x10-0x13, inventory 0x20-0x25,
-	   drops 0x30-0x32, blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h
-	   and land with the server's phases 3-5. */
+	case SURV_HELLO:       SurvivalNet_HandleHello(data);      break;
+	case SURV_WORLDINFO:   SurvivalNet_HandleWorldInfo(data);  break;
+	case SURV_HEALTH:      SurvivalNet_HandleHealth(data);     break;
+	case SURV_TIME:        SurvivalNet_HandleTime(data);       break;
+	case SURV_MOB_SPAWN:   SurvivalNet_HandleMobSpawn(data);   break;
+	case SURV_MOB_MOVE:    SurvivalNet_HandleMobMove(data);    break;
+	case SURV_MOB_STATE:   SurvivalNet_HandleMobState(data);   break;
+	case SURV_MOB_DESPAWN: SurvivalNet_HandleMobDespawn(data); break;
+	/* Remaining server->client messages (inventory 0x20-0x25, drops 0x30-0x32,
+	   blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h and land with
+	   the server's phases 4-5. */
 	default: break;
 	}
 }

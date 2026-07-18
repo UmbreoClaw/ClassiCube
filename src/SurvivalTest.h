@@ -42,6 +42,15 @@ void SurvivalTest_NetworkModeChanged(void);
     camera + Game Over on 0, revive when health rises while dead). MP only. */
 void SurvivalTest_ApplyNetHealth(int health, int score);
 
+/* MP mob puppet (phase 3) - SurvivalNet's SURV_MOB_* appliers. st_mobs becomes
+    a network-driven view: the server runs AI/physics/damage and streams state;
+    the client renders, interpolates, and derives cosmetic timers from edges.
+    flags: SPAWN = SURV_MOBFLAG_*, STATE = SURV_MOBSTATE_* (SurvivalNet.h). */
+void SurvivalTest_NetMobSpawn(int id, int type, Vec3 pos, float yaw, float pitch, int health, int flags);
+void SurvivalTest_NetMobMove(int id, Vec3 pos, float yaw, float pitch);
+void SurvivalTest_NetMobState(int id, int health, int flags);
+void SurvivalTest_NetMobDespawn(int id, int reason);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */

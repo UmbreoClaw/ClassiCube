@@ -5785,3 +5785,68 @@ Verified live against the fork server (main level SurvivalMode=Indev):
   lethal (an infinite death loop, stock MCGalaxy behaves the same). Test rig
   uses /map main fall 20. Real survival maps must place spawn on the ground
   (or the phase-1 generator must set it) - noted for the server session.
+
+## 2026-07-18: Phase 3 - mob streaming, both sides, live-tested
+
+### Client: st_mobs becomes a network puppet (networking-plan 15.1/17.5)
+- struct Mob grew netId (server u16 key), netState (last STATE flags for
+  fire/fuse/graze pinning) and a latched netPos/netYaw/netPitch move target.
+- SurvivalTest_NetMobSpawn/Move/State/Despawn appliers + a puppet tick that
+  runs ONLY presentation: prev=next interpolation advance, cosmetic timers
+  (hurtTicks/invincTicks/attackTime), fuse swell ramp (FUSE bit -> fuseTicks
+  toward 30, fuseLast interp), fire overlay pinned while ONFIRE, graze easing,
+  death keel-over + local corpse free at 40 ticks (DESPAWN belt-and-braces),
+  ambient pig/sheep voices, walk anim + body-yaw easing + step sounds against
+  the latched move, water-entry splash. No Mob_Travel/BasicAI/Mob_Hurt runs
+  on puppets - the appliers + tick are the entire surface.
+- MOB_STATE grew b5 noFur (visible mid-life shear; same bytes, no ext bump -
+  25 updated). SPAWN flags: b0 helmet, b1 armor, b2 fur.
+- TryAttackMob in MP: raycast picks the puppet, swing anim plays, and the hit
+  becomes SurvivalNet_SendAttack(0, netId) - no local Mob_Hurt/tool wear.
+
+### Server: SurvivalMobs.cs - the simulation (mcgalaxy)
+Port of this client's verified c0.30/Indev mob sim to C#: 20 TPS dedicated
+scheduler, per-level registries, BasicAI wander (7%/1%/4% impulse rolls, 80%
+liquid bob), BasicAttackAI chase (16-block player acquisition, 2x-range 1%
+give-up, genuine yaw/pitch facing math), c0.30 melee roll + creeper headbutt
+self-damage, Indev per-type attacks (creeper 3/7-block fuse -> 30-tick blast,
+spider light-flee + 2-6 block pounce, zombie 5 / default 2 melee), Mob.hurt
+dual-threshold invuln + knockback, Mob.travel physics (0.91/0.98 drag, 0.08
+gravity, 0.6 ground friction, water/lava 0.8/0.5 + paddle assist), axis-
+clipped AABB collision vs level blocks (no step assist - genuine c0.30 mobs
+jump instead), fall damage ceil(dist-3), drowning air ticks, lava/fire burn,
+sheep graze (grass->dirt via normal SetBlock + 1/5 fur regrow), c0.30
+initial population + capped topup spawner with min-of-two-uniforms Y bias,
+600-tick + 1/800 despawn roll, undead sunburn. Player side: graduated
+DamagePlayer with the same dual-threshold window (ticked at 20 TPS), lethal
+damage routed through HandleDeath so the death-screen dwell applies, score
+credit c0.30-only. /Survival spawn [type] + /Survival mobs test aids.
+
+V1 deviations (documented in mcgalaxy session-notes + handoff): no Indev A*
+pathing (c0.30 direct-steer in both modes), skeletons melee (arrows need the
+phase-5 wire), brightness approximated as sky-exposure x day/night (no server
+light engine), explosions damage players but never blocks, no drops, mobs
+freeze on empty maps, no persistence across restarts, cluster spawn trimmed
+to 1-3 (vs genuine up-to-9) to tame MP populations.
+
+### Live integration test (same rig as the phase-2 session)
+- /Survival spawn pig at the elevated level spawn: SPAWNed on the wire, fell
+  under SERVER physics with MOVE streaming (client showed y 48->32.06), took
+  the genuine 13-damage spawn fall (10 HP Indev pig), died, DESPAWNed. The
+  whole pipeline proved itself by accident before the first posed screenshot.
+- Ground-snapped test spawns: pig + sheep visibly wandering on the grass
+  (positions moving through fractional lerp values client-side), genuine
+  pig/sheep models + animation.
+- Attack round-trip: SendAttack out of reach -> server "rejected attack (out
+  of reach)"; in reach -> pig health 10->9->8->7 streamed back via STATE
+  (client-visible), knockback pushed it out of range and the remaining spam
+  was correctly rejected (13 rejections logged).
+- Zombie: chased and melee'd the player dead in the genuine ~1.5 s point-
+  blank cadence (4x5 HP, victim invuln absorbing the rest) -> "UserC was
+  slain by a zombie" + death-screen dwell held. Mob targets are dropped for
+  dead players (no corpse camping between revives).
+- Creeper: spawned point-blank, fused, exploded - player hearts 20 -> 5
+  (falloff damage), no corpse (fuse blast leaves none).
+- Natural spawner verified ticking (population 0 in daylight is correct for
+  monsters; animal spawn odds are conservative - raised Indev attempts to
+  match c0.30 area count before landing).
