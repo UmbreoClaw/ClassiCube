@@ -5717,3 +5717,18 @@ immediate skylightSubtracted sync).
 
 Also ported LevelLoader:69-75's SkyBrightness load clamp: getByte is
 SIGNED (negative -> 0) and values > 16 are legacy percentages (* 15/100).
+
+## 2026-07-18: crash placing first block over the void (user report + crash log)
+
+ACCESS_VIOLATION in the Indev sky maintenance: on floating maps an all-air
+column's heightmap is the -10 sentinel, and Indev_SkyBlockChanged's
+"cells that lost their sun" walk ran `for (yy = newH; yy > oldH; yy--)`
+with oldH = -10 - GetBrightness at y = -1, -2, ... indexed the chunk
+lighting array negatively (user's crash registers showed rsi/r12/r13 =
+-1/-2/-3 mid-walk and a heap read ~width*length bytes before the array).
+Trigger: placing the FIRST block into an open-void column ("placing a
+block on a lower platform" on a deep floating map). Fix: clamp the walk
+at y >= 0. Audited the siblings: Indev_SeedSkyColumn already clamps
+(yMin >= h+1 never lowers a 0 floor, empty-column top walk produces no
+iterations), breaking the last block gives newH = -10 which skips the
+loop, and ClassicLighting_UpdateLighting only writes heightmap entries.

@@ -584,8 +584,12 @@ static void Indev_SkyBlockChanged(int x, int y, int z, int oldH, int newH) {
 		/* Heightmap rose: cells in (oldH, newH] lost their implicit sun.
 		    Boundary cells among them carry stored 15s that were spread into
 		    caves - unlight those; the placed cell itself was handled by the
-		    generic CalcBlockChange pass. */
-		for (yy = newH; yy > oldH; yy--) {
+		    generic CalcBlockChange pass. oldH is the -10 empty-column
+		    sentinel when this is the column's FIRST block (floating maps'
+		    open void) - clamp the walk at y=0 or it reads lighting data at
+		    negative y (user crash: placing over the void on a deep
+		    floating map). */
+		for (yy = newH; yy > oldH && yy >= 0; yy--) {
 			if (yy == y) continue;
 			stored = GetBrightness(x, yy, z, false);
 			if (stored > 0) CalcUnlight(x, yy, z, stored, false);
