@@ -51,6 +51,11 @@ void SurvivalTest_NetMobMove(int id, Vec3 pos, float yaw, float pitch);
 void SurvivalTest_NetMobState(int id, int health, int flags);
 void SurvivalTest_NetMobDespawn(int id, int reason);
 
+/* MP inventory view (phase 4) - SurvivalNet's INV_FULL/INV_SLOT/CURSOR appliers.
+    The server owns every slot + the cursor; these write the echoed state. */
+void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg);
+void SurvivalTest_NetCursor(int id, int count, int dmg);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */

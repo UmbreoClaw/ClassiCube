@@ -192,6 +192,41 @@ static void SurvivalNet_HandleMobDespawn(cc_uint8* data) {
 	SurvivalTest_NetMobDespawn(mobId, data[3]);
 }
 
+/* --- phase 4: inventory streaming (0x20-0x25) --- */
+/* The server owns every slot and the cursor (networking-plan 27); these write
+   the echoed authoritative state into st_inv/st_craft/st_armor + st_cursor. */
+
+static void SurvivalNet_HandleInvFull(cc_uint8* data) {
+	/* [id][baseSlot][runLen] then runLen x {id:u16, count:u8, dmg:i16} */
+	int base = data[1], run = data[2], i;
+	cc_uint8* f;
+	if (SurvivalNet_ActiveMode() == 0) return;
+	if (run > 12) run = 12; /* 3 + 12*5 = 63: never read past the 64-byte frame */
+
+	for (i = 0; i < run; i++) {
+		f = data + 3 + i * 5;
+		SurvivalTest_NetInvSlot(base + i,
+			((int)f[0] << 8) | f[1], f[2],
+			(cc_int16)(((cc_uint16)f[3] << 8) | f[4]));
+	}
+}
+
+static void SurvivalNet_HandleInvSlot(cc_uint8* data) {
+	/* [id][slot][id:u16][count][dmg:i16] */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	SurvivalTest_NetInvSlot(data[1],
+		((int)data[2] << 8) | data[3], data[4],
+		(cc_int16)(((cc_uint16)data[5] << 8) | data[6]));
+}
+
+static void SurvivalNet_HandleCursor(cc_uint8* data) {
+	/* [id][id:u16][count][dmg:i16] - the server-owned held stack */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	SurvivalTest_NetCursor(
+		((int)data[1] << 8) | data[2], data[3],
+		(cc_int16)(((cc_uint16)data[4] << 8) | data[5]));
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -205,9 +240,12 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_MOB_MOVE:    SurvivalNet_HandleMobMove(data);    break;
 	case SURV_MOB_STATE:   SurvivalNet_HandleMobState(data);   break;
 	case SURV_MOB_DESPAWN: SurvivalNet_HandleMobDespawn(data); break;
-	/* Remaining server->client messages (inventory 0x20-0x25, drops 0x30-0x32,
-	   blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h and land with
-	   the server's phases 4-5. */
+	case SURV_INV_FULL:    SurvivalNet_HandleInvFull(data);    break;
+	case SURV_INV_SLOT:    SurvivalNet_HandleInvSlot(data);    break;
+	case SURV_CURSOR:      SurvivalNet_HandleCursor(data);     break;
+	/* Remaining server->client messages (containers 0x22-0x24, drops
+	   0x30-0x32, blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h
+	   and land with the rest of phase 4 + phase 5. */
 	default: break;
 	}
 }

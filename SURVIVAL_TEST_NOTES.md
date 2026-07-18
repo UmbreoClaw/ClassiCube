@@ -5850,3 +5850,50 @@ to 1-3 (vs genuine up-to-9) to tame MP populations.
 - Natural spawner verified ticking (population 0 in daylight is correct for
   monsters; animal spawn odds are conservative - raised Indev attempts to
   match c0.30 area count before landing).
+
+## 2026-07-18 (cont): Phase 4 first slice - server-owned inventory, live-tested
+
+### Client: st_inv/st_craft/st_armor + st_cursor become a server-driven view
+- SurvivalTest_NetInvSlot/NetCursor appliers (SurvivalNet 0x20/0x21/0x25
+  handlers, INV_FULL chunked 12 slots x 5 bytes) write echoed state via
+  SlotPtr + invVersion++ + SyncHotbar - the HUD and the survival inventory
+  screen already redraw on invVersion, so echoes appear immediately.
+- The MP gate that forced the classic inventory screen is gone: the survival
+  screen opens in MP and renders the streamed slots. Clicks are INTENTS now
+  (echo-only v1, networking-plan 27.2): slot -> SendSlotClick, craft result ->
+  SendResultClick, close/outside-click -> SendContClose (the SERVER refunds
+  cursor + grid and echoes). SP paths unchanged.
+- MP hotbar consequence: SyncHotbar now feeds from the streamed inventory, so
+  the classic creative palette is gone on survival maps - slots start empty
+  and fill by mining. (Creative-flag maps keep free placement server-side.)
+
+### Server: SurvivalInventory.cs
+Per-player 103-slot layout mirroring SurvivalTest.h exactly (36 main + 9
+craft + 54 container reserved + 4 armor) + cursor + held slot, stored in
+Player.Extras (follows /goto within a session). SendAll streams main+craft,
+armor, cursor at handshake. HandleSlotClick is the 1:1 GuiContainer port
+(pickup-all/half, merge-with-max-stack, right-place-one, swap) run on server
+state with SLOT+CURSOR echoes; container range rejected until streamed;
+armor accepts nothing yet (no armor items exist). HandleContClose refunds
+cursor + craft grid (AddOne = storePartialItemStack order: merge first -
+hotbar wins - then first empty) and resyncs. OnBlockChangingEvent bridge:
+mining adds the broken classic block (raw <= 49) directly to the inventory
+(drop-entity hop is phase 5; liquids yield nothing), placing consumes one
+(held-slot preferred) or cancels + RevertBlock + full resync. Dead players'
+block edits are cancelled. Max stacks v1: 99 c0.30 / 64 Indev flat (per-id
+tables land with item definitions).
+
+### Live test (gdb-driven, same rig)
+- Mine grass -> INV_SLOT echo -> st_inv[0] = {2, 1}; second mine merged to
+  count 2; hotbar rendered the stack (survival view, not the classic palette).
+- Place -> consumed back to 1 -> 0; place with an EMPTY inventory -> server
+  cancelled + reverted (the target cell came back as the authoritative dirt).
+- SendSlotClick(0) -> cursor {2,1} + slot empty (echoed); SendSlotClick(5) ->
+  stack moved to slot 5; SendContClose -> cursor refunded into slot 0.
+- Rig notes: server/client must be started with setsid (a Bash-tool timeout
+  killed the whole process group mid-test); survival digging is hold-to-break,
+  so scripted mining calls Game_ChangeBlock (the dig-finish call) directly.
+
+Remaining phase 4: containers + furnace streaming (0x22-0x24), crafting
+recipes server-side, USE_ITEM (eat/containers), per-id max-stack + item
+tables, PLAYER_EQUIP, optimistic click prediction.

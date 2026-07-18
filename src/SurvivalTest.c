@@ -5244,6 +5244,7 @@ static void SurvivalTest_TickPuppetMobs(float delta) {
 }
 
 
+
 /* Render.java's burning-entity pass: stacked camera-facing strips of the
     animated fire tile (see Animations.c's FireAnimation_Tick), each 1.4
     units tall and 10% narrower than the one below, scaled by width*1.4 and
@@ -6836,6 +6837,40 @@ void SurvivalTest_CursorReturn(void) {
 	if (st_cursor.count <= 0) { st_cursor.id = BLOCK_AIR; st_cursor.damage = 0; }
 	st_invVersion++;
 	SurvivalTest_SyncHotbar();
+}
+
+/*########################################################################################################################*
+*--------------------------------------------MP inventory view (phase 4)--------------------------------------------------*
+*#########################################################################################################################*/
+/* st_inv/st_craft/st_armor + st_cursor as a server-driven view (networking-plan
+    27): the SERVER owns every slot and the cursor; clicks leave as intents
+    (SurvivalNet_SendSlotClick and friends) and these appliers write the echoed
+    authoritative result. No local mutation happens on the click itself in MP
+    (echo-only v1 - optimistic prediction is a later polish). */
+
+void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg) {
+	struct SurvivalSlot* p;
+	if (!SurvivalTest_Enabled) return;
+	if (idx < 0 || idx >= SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS) return;
+	/* container slots aren't streamed yet (rest of phase 4) */
+	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_MAX) return;
+
+	p = SurvivalTest_SlotPtr(idx);
+	p->id     = (cc_uint16)id;
+	p->count  = (cc_int16)count;
+	p->damage = (cc_int16)dmg;
+	if (p->count <= 0) { p->id = BLOCK_AIR; p->count = 0; p->damage = 0; }
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
+void SurvivalTest_NetCursor(int id, int count, int dmg) {
+	if (!SurvivalTest_Enabled) return;
+	st_cursor.id     = (cc_uint16)id;
+	st_cursor.count  = (cc_int16)count;
+	st_cursor.damage = (cc_int16)dmg;
+	if (st_cursor.count <= 0) { st_cursor.id = BLOCK_AIR; st_cursor.count = 0; st_cursor.damage = 0; }
+	st_invVersion++;
 }
 
 void SurvivalTest_SwapSlots(int a, int b) {

@@ -3639,17 +3639,25 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 		cc_bool insidePanel = mx >= s->panelX && mx < s->panelX + s->panelW &&
 		                      my >= s->panelY && my < s->panelY + s->panelH;
 		if (insidePanel) return;
-		/* Clicked fully outside the window - refund cursor + grid and close */
-		SurvivalTest_CursorReturn();
+		/* Clicked fully outside the window - refund cursor + grid and close.
+		    MP: the SERVER owns cursor + grid; CONT_CLOSE makes it do the
+		    refund and echo the result (networking-plan 27.2). */
+		if (SurvivalNet_ServerDriven()) SurvivalNet_SendContClose();
+		else SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
 		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
 		Gui_Remove((struct Screen*)s);
 		return;
 	}
+	/* MP: clicks are intents - the server runs the click on its authoritative
+	    slots/cursor and echoes INV_SLOT + CURSOR back (echo-only v1, no local
+	    prediction). SP keeps mutating local state directly. */
 	if (hit == SURVINV_RESULT_HIT) {
-		SurvivalTest_ResultClick(); /* crafts once onto the cursor */
+		if (SurvivalNet_ServerDriven()) SurvivalNet_SendResultClick();
+		else SurvivalTest_ResultClick(); /* crafts once onto the cursor */
 	} else {
-		SurvivalTest_SlotClick(hit, rightClick);
+		if (SurvivalNet_ServerDriven()) SurvivalNet_SendSlotClick(hit, rightClick);
+		else SurvivalTest_SlotClick(hit, rightClick);
 	}
 	s->dirty = true;
 }
@@ -3659,7 +3667,9 @@ static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* 
 	/* The Survival inventory bind (or Escape) closes the screen it opened. */
 	if (InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
-		SurvivalTest_CursorReturn();
+		/* MP: the server refunds cursor + grid on CONT_CLOSE and echoes it */
+		if (SurvivalNet_ServerDriven()) SurvivalNet_SendContClose();
+		else SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
 		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
 		Gui_Remove((struct Screen*)s);
@@ -3709,10 +3719,9 @@ void SurvivalInvScreen_Show(void) {
 	/*  GuiInventory panel - just like survival (PlayerControllerCreative opened */
 	/*  the same GuiInventory; blocks come from the palette hotbar, not a picker). */
 	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
-	/* On a server-driven survival map the inventory is SERVER state, and the */
-	/*  server doesn't stream it yet (its phase 4) - the local survival screen */
-	/*  would show stale/fake slots. Behave like plain classic until then. */
-	if (SurvivalNet_ServerDriven()) { InventoryScreen_Show(); return; }
+	/* On a server-driven survival map the inventory is SERVER state, streamed
+	    via INV_FULL/INV_SLOT/CURSOR (phase 4) - the same survival screen
+	    renders it, with clicks leaving as intents (see the click handler). */
 	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
 	/*  fixed hotbar - so opening the inventory does nothing at all. The storage/ */
 	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */
