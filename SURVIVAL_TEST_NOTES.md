@@ -5717,3 +5717,71 @@ immediate skylightSubtracted sync).
 
 Also ported LevelLoader:69-75's SkyBrightness load clamp: getByte is
 SIGNED (negative -> 0) and values > 16 are legacy percentages (* 15/100).
+
+## 2026-07-18: COMBINED TWO-REPO SESSION - MP implementation restored + live integration test
+
+Both repos in one session at last (branch claude/mock-survival-server-33jx1q
+on each, containing survival-test / survival-support respectively).
+
+### Restore of the parked MP implementation (ed604b6)
+`git cherry-pick ed604b6` onto the tip; conflicts resolved deliberately per the
+handoff's restore caveat (17 later fidelity commits touched the same files):
+- SURVIVAL_TEST_NOTES.md / doc/*: kept HEAD (the park kept docs; HEAD carries
+  all later corrections). server-session-handoff.md add/add -> HEAD.
+- Screens.c GameOverScreen_Init: merged BOTH sides - ed604b6's MP-conditional
+  Load button (single Respawn button when ServerDriven) UNDER HEAD's
+  WIDGET_FLAG_INDEV_SCALE clears (the double-scale missing-buttons fix).
+- SurvivalTest.c fire block: HEAD's later genuine fire-resistance ramp port
+  (st_playerFire counting up from -PLAYER_FIRE_RESIST) kept, wrapped inside
+  ed604b6's !SurvivalNet_ServerDriven() gate.
+- SurvivalTest.c Init: took ed604b6's EnableMode split + unconditional hook
+  registration (needed for runtime HELLO flips), with HEAD's later c0.30
+  Tile$SoundType table block moved inside EnableMode.
+Builds + links clean (needed apt libxi-dev + libgl1-mesa-dev in this container).
+
+### Server side landed this session (mcgalaxy)
+Death-screen dwell (handoff SS3.1): OnPlayerDied now HOLDS health at 0 (no
+back-to-back revive), Player.HandleDeath skips its auto-respawn while
+SurvivalNet.HoldsDeathScreen, repeat hazard deaths are suppressed via
+OnPlayerDying cancel, and the revive comes from the client's SURV_RESPAWN
+intent (validated: dead players only - a stray intent gets an authoritative
+health echo instead of a free spawn teleport) or a 30 s safety timeout ticked
+by the TIME scheduler. Map change while dead auto-restores full health
+(OnJoinedLevel) since the client tears down per-map death state. Plus the SS1
+HackControl note: Hacks.MakeHackControl now overrides fly/speed from the
+level's SurvivalCreative (same decision as HELLO bit1) for survival-active
+sessions, respawn hack off (server-owned), Referee keeps its escape hatch;
+/Survival re-sends motd+hacks on live changes. No wire change - ext stays v1.
+
+### Live integration test (MCGalaxy CLI + this client, Xvfb rig)
+Setup notes for future sessions: the CLI anchors its CWD to the exe dir
+(CLI/bin/Release/net8.0 holds properties/ + levels/); verify-names=false lets
+the direct-connect client in; console via a FIFO. The misc/ps1 texpack has NO
+icons.png/gui.png (no hearts/crosshair!), and classicube.net's default.zip has
+a DIFFERENT icons.png layout (touch buttons where c0.30 hearts live -> solid
+blue bar). Rig pack = classicube.net default.zip + genuine icons.png/sun.png/
+moon.png overlaid from /tmp/indev_eagler resources (engine keeps only the top
+quarter of icons.png, so the genuine 256x256 lands exactly on our /64 UVs).
+
+Verified live against the fork server (main level SurvivalMode=Indev):
+- HELLO (mode=2 flags=8 proto=1) + WORLDINFO (ground=30 water=32) chat lines;
+  "Connected via the survival client (handshake verified)" both sides.
+- SURV_HEALTH -> 10 genuine hearts above the hotbar (rebuilt on change).
+- SURV_TIME -> genuine celestial day/night: scene went day->night with stars;
+  IndevTest_WorldTime() advanced 15580->15680 over 5 s = the server's 20
+  ticks/s with the local advance gated off.
+- /kill -> Game Over + death camera + red tint + single Respawn button HELD
+  by the server (health 0, empty heart backgrounds). Dwell verified >10 s.
+- Respawn button path (gdb call SurvivalNet_SendRespawn, the exact call the
+  button makes) -> server log "revived (respawn intent)", teleport to spawn,
+  hearts refill, screen down. Round-trip ~1 s.
+- Safety timeout path: no intent -> "revived (safety timeout)" at exactly +30 s.
+- Stray respawn while alive -> "ignored respawn intent (not dead)" + echo.
+- HELD_SLOT (0x85) intents logged server-side on hotbar changes.
+- /Survival off mid-map -> mode-0 HELLO -> SurvivalTest/IndevTest_Enabled
+  flip 1->0 live; /Survival indev flips them back. No rejoin needed.
+- Map spawn caveat found: MCGalaxy default spawn (y=48 over ground 32) is a
+  16-block drop - with /map death on + default fall 9 every (re)spawn was
+  lethal (an infinite death loop, stock MCGalaxy behaves the same). Test rig
+  uses /map main fall 20. Real survival maps must place spawn on the ground
+  (or the phase-1 generator must set it) - noted for the server session.

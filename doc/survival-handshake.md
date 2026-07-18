@@ -5,16 +5,16 @@ record of the **client-side handshake foundation** that actually landed in the
 repo, why it's shaped the way it is, and exactly what the MCGalaxy server session
 must build to match it.*
 
-Status: **foundation in tree; mode-flip PARKED at commit `ed604b6`.** The
-capability negotiation + HELLO/WORLDINFO parse/log foundation is what the tree
-carries. The full per-map activation, sim handover
-(`SurvivalNet_ServerDriven()`), HEALTH/TIME appliers and `0x80-0x87` intent
-senders were implemented and verified byte-for-byte against the MCGalaxy fork's
-`Network/SurvivalNet.cs`, then deliberately reverted - they'll be re-landed
-(`git cherry-pick ed604b6`) from the combined two-repo session that can
-integration-test client and server together. Everything below describing that
-behaviour documents the parked commit; the WIRE CONTRACT sections are
-authoritative regardless. See `doc/server-session-handoff.md`.
+Status: **fully in tree (restored from parked commit `ed604b6`).** The
+capability negotiation + HELLO/WORLDINFO foundation, the full per-map
+activation, sim handover (`SurvivalNet_ServerDriven()`), HEALTH/TIME appliers
+and `0x80-0x87` intent senders are all live. The implementation was verified
+byte-for-byte against the MCGalaxy fork's `Network/SurvivalNet.cs`, parked
+while the repos lived in separate sessions, then re-landed from the combined
+two-repo session and **integration-tested live** against the fork's CLI server
+(handshake, health/hearts HUD, server-driven day/night, death-screen dwell +
+`SURV_RESPAWN` round-trip, live `/Survival` mode flips). See
+`doc/server-session-handoff.md`.
 
 ---
 
@@ -49,8 +49,8 @@ Consequence for the client state model:
 | `Server.SupportsSurvival` | whole connection | `ExtEntry("SurvivalTest")` | reconnect |
 | `net_mode` (per-map activation) | current map | `SURV_HELLO` | `OnNewMap`, mode-0 HELLO |
 
-The first row is in the tree; the second is in the parked commit `ed604b6`.
-There `net_mode` lives in `SurvivalNet.c`; the component's
+Both rows are in the tree (the second was restored from parked commit
+`ed604b6`). `net_mode` lives in `SurvivalNet.c`; the component's
 `OnNewMap` hook clears it so activation never leaks across a `/goto`, and a
 mode-0 `SURV_HELLO` (the server's live `/Survival` config refresh) deactivates
 mid-map. `SurvivalNet_ServerDriven()` = capability + activation is the single
@@ -248,7 +248,7 @@ None of them block the foundation.
    the server code so nobody reuses `0xB0`. (Making the channel negotiable would
    be over-engineering for a first version.)
 
-4. **Activation state — solved in the parked commit.** `ed604b6` implements it
+4. **Activation state — solved (in tree).** The restored `ed604b6` implements it
    exactly as prescribed: `net_mode` set on `SURV_HELLO`, cleared in the component's
    `OnNewMap` hook (and by a mode-0 HELLO), consumed through
    `SurvivalNet_ServerDriven()` before any local sim state changes. Survival
@@ -277,14 +277,14 @@ wire format changes, bump the `SurvivalTest` CPE ext version on both sides.
 
 ## 8. Deferred (as the server's phases 3–5 land)
 
-~~`SURV_HELLO` mode-flip~~ ✅ **implemented (parked at `ed604b6`)** — the client flips into the
+~~`SURV_HELLO` mode-flip~~ ✅ **implemented (in tree)** — the client flips into the
 server-authoritative sim in MP: mode/flags applied from HELLO, and
 `SurvivalNet_ServerDriven()` gates off local damage, mob AI/spawner, drops,
 arrows, paintings, TNT, furnace tick, the day/night *advance*, eating, tool
 wear, containers and the local survival inventory UI. (Random block ticks and
 fire already only run under SP block physics.)
 
-~~Intent senders~~ ✅ **implemented for all of `0x80–0x87` (same parked commit)** — `SURV_RESPAWN`,
+~~Intent senders~~ ✅ **implemented for all of `0x80–0x87` (in tree)** — `SURV_RESPAWN`,
 `SURV_HELD_SLOT` (auto on hotbar change) and `SURV_DROP_ITEM` (Q) are live;
 `ATTACK`/`USE_ITEM`/`SLOT_CLICK`/`RESULT_CLICK`/`CONT_CLOSE` are called as the
 server streams the state they act on (phases 3–4).
