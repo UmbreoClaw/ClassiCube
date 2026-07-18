@@ -15,7 +15,49 @@ Read `doc/networking-plan.md` (§25 wire format, §20 gating) and
 > HELLO/WORLDINFO parse/log foundation. The wire-contract corrections in §2
 > hold either way.
 
-## 0. Setup: read the client from your session
+## 0. Session conventions (carry these over — they are standing rules)
+
+- **Ground truths**: clone both decompiles into /tmp and cross-reference EVERY
+  mechanic against the Java before changing behavior — fixes must be genuine
+  ports, not patches:
+  ```
+  git clone --depth 1 https://github.com/EaglerPorts/in-20100223 /tmp/indev_eagler
+  git clone --depth 1 https://github.com/ManiaDevelopment/MCraft-Client /tmp/mcraft_client
+  ```
+  (`/tmp` is ephemeral — re-clone whenever the container recycles.)
+- **c0.30 vs Indev isolation**: c0.30 Survival Test behavior must NEVER be
+  altered by Indev features. Gate on `IndevTest_Enabled` / mode checks in SP;
+  in MP gate ALL sim handover through `SurvivalNet_ServerDriven()`, never raw
+  mode checks.
+- **Branches**: client work on `survival-test`, server work on
+  `survival-support`. Push with `git push -u origin <branch>`. Do NOT open
+  pull requests.
+- **Logs**: session log in `SURVIVAL_TEST_NOTES.md`, audit results in
+  `AUDIT_FINDINGS.md` (findings #1–#45 exist; continue numbering). Both are
+  APPEND-ONLY — append via shell heredoc (`cat >> file << 'EOF'`), never
+  rewrite in place (a rewrite once truncated the audit log to 0 bytes).
+- **Wire changes**: any layout change to an existing message = bump the
+  `SurvivalTest` CPE ext version on BOTH sides in the same change, and update
+  `networking-plan.md` §25 + the mcgalaxy `doc/survival-support/reference/`
+  snapshots together.
+- **Client test rig** (headless): `Xvfb :99` + `./ClassiCube --singleplayer`.
+  Prereqs: seed `texpacks/default.zip` from `misc/ps1/classicube.zip`, write
+  `options.txt` with `survival-gamemode=2` (Indev; 1 = c0.30). Before every
+  run: `pkill -f ClassiCube; pkill Xvfb; rm -f /tmp/.X*-lock`. To poke game
+  state use gdb ATTACHED to the live process (`gdb -p`), never `gdb run`
+  (unusably slow under ptrace). Screenshot with `import -window root`.
+- **Integration test**: MCGalaxy CLI with `SurvivalMode=Indev` + this client
+  connecting — expect HELLO/WORLDINFO/TIME/HEALTH chat lines client-side and
+  HELD_SLOT/RESPAWN intents in the server debug log; a death must HOLD the
+  Game Over screen (MP shows a single Respawn button) until the server
+  revives.
+- **Restore caveat**: `ed604b6` predates later fidelity work (17+ commits:
+  Indev sky lighting, finite fluids, Indev GUI scaling, audio table, mob
+  hurt-flash overhaul, world-time reset...) all touching SurvivalTest.c /
+  IndevTest.c / Screens.c — expect cherry-pick conflicts; re-apply the §1
+  gating points deliberately rather than taking either side wholesale.
+
+## 0.5. Setup: read the client from your session
 
 Your GitHub scope is the mcgalaxy repo, but this repo is public — clone it
 read-only for reference exactly like the client session did with yours:
