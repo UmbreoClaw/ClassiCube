@@ -5732,3 +5732,16 @@ at y >= 0. Audited the siblings: Indev_SeedSkyColumn already clamps
 (yMin >= h+1 never lowers a 0 floor, empty-column top walk produces no
 iterations), breaking the last block gives newH = -10 which skips the
 loop, and ClassicLighting_UpdateLighting only writes heightmap entries.
+
+## 2026-07-18: pause menu scrambled on servers (user report)
+
+PauseScreen_Init disables Generate/Load in MP with a RAW flags assignment
+(`btns[n].flags = WIDGET_FLAG_DISABLED`), which wiped the auto-set
+WIDGET_FLAG_INDEV_SCALE off exactly those buttons - they laid out with
+plain Display_Scale offsets while the rest of the menu used the Indev
+(offset*s)/2 transform, producing the overlapping half-grid (only the two
+dark disabled buttons sat wrong in the screenshot). Same latent pattern in
+ClassicPauseScreen_Init and DisconnectScreen (reconnect). All three now go
+through Widget_SetDisabled, which sets/clears only the DISABLED bit - the
+same helper the texture-pack button already used, so click/selection
+handling is unchanged.

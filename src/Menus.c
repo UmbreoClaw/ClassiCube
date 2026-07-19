@@ -568,8 +568,12 @@ static void PauseScreen_Init(void* screen) {
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 
 	if (Server.IsSinglePlayer) return;
-	s->btns[3].flags = WIDGET_FLAG_DISABLED;
-	s->btns[4].flags = WIDGET_FLAG_DISABLED;
+	/* Widget_SetDisabled, NOT a raw flags assignment - that wiped
+	    WIDGET_FLAG_INDEV_SCALE off just these two buttons, so on servers
+	    they laid out with unscaled offsets while the rest of the menu
+	    used the Indev transform (user screenshot: overlapping grid). */
+	Widget_SetDisabled(&s->btns[3], true);
+	Widget_SetDisabled(&s->btns[4], true);
 }
 
 static void PauseScreen_Free(void* screen) {
@@ -632,10 +636,11 @@ static void ClassicPauseScreen_Init(void* screen) {
 	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
 
 	if (Server.IsSinglePlayer) return;
-	s->btns[1].flags = WIDGET_FLAG_DISABLED;
-	s->btns[3].flags = WIDGET_FLAG_DISABLED;
+	/* preserve other flags (WIDGET_FLAG_INDEV_SCALE) - see PauseScreen_Init */
+	Widget_SetDisabled(&s->btns[1], true);
+	Widget_SetDisabled(&s->btns[3], true);
 
-	if (Game_PureClassic) s->btns[2].flags = WIDGET_FLAG_DISABLED;
+	if (Game_PureClassic) Widget_SetDisabled(&s->btns[2], true);
 }
 
 static const struct ScreenVTABLE ClassicPauseScreen_VTABLE = {
