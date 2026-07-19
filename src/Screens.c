@@ -4247,7 +4247,9 @@ static void DisconnectScreen_Init(void* screen) {
 
 	ButtonWidget_Add(s, &s->reconnect, 300, DisconnectScreen_OnReconnect);
 	ButtonWidget_Add(s, &s->quit,      300, DisconnectScreen_OnQuit);
-	if (!s->canReconnect) s->reconnect.flags = WIDGET_FLAG_DISABLED;
+	/* preserve other flags (WIDGET_FLAG_INDEV_SCALE) - raw assignment
+	    de-scaled this button's layout offsets in Indev GUI scale mode */
+	if (!s->canReconnect) Widget_SetDisabled(&s->reconnect, true);
 
 	Game_SetMinFrameTime(1000 / 5.0f);
 
