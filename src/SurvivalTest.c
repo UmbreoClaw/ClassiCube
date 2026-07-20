@@ -8145,6 +8145,18 @@ static void SurvivalTest_Free(void) {
 }
 
 static void SurvivalTest_OnNewMap(void) {
+	/* A map change ALWAYS tears down the death presentation - the Game Over
+	    screen belongs to the old map's session. This must run before the
+	    enabled check: when a server moves a dead player to a NON-survival map
+	    (or they /goto off one), SurvivalTest deactivates and no revive
+	    SURV_HEALTH will ever arrive to dismiss the screen, which left it
+	    stuck over the new map with full health (user-hit live). */
+	if (st_isDead) {
+		st_isDead     = false;
+		st_deathTicks = 0;
+		GameOverScreen_Hide();
+		Camera_UpdateProjection(); /* undo the death-zoom FOV */
+	}
 	if (!SurvivalTest_Enabled) return;
 	/* Resets to the SurvivalGameMode.apply(Player) starting loadout (10 TNT, */
 	/*  everything else gathered by mining) every time a new map is loaded. */

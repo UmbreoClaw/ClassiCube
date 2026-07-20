@@ -6018,3 +6018,33 @@ connection. Both flags now reset. Docs: networking-plan section 25 updated to
 the v2 layout, survival-handshake table updated, mcgalaxy reference
 snapshots refreshed. NEXT SESSION: user wants an in-depth bug + quality pass
 across the whole stack; candidates listed in mcgalaxy session-notes.
+
+## 2026-07-20: map-change leaks - night lighting, forced fancy mode, death screen
+
+Three user-reported leaks when leaving a survival map (all fixed, verified
+live against a midnight Indev map -> plain flatgrass map move):
+
+1. Night lighting bled into the next map: FancyLighting's eased Indev sky
+   level (indevSkyLevel, e.g. 4 at midnight) is a static that only the Indev
+   day/night tick writes - on a non-Indev map that tick never runs, so the
+   next map rendered permanently at night while its env colours reset to
+   daylight ("grass weirdly brighter" mismatch). IndevTest's OnNewMap now
+   resets it to 15 and clears the stale base-colour snapshot.
+2. The lighting mode itself: MapActivate force-switches to FANCY and never
+   restored the player's previous mode; OnNewMap now restores it (unless the
+   server locked the mode or the player changed it again mid-map). The
+   mid-map mode-0 HELLO path (/Survival off) got the same cleanup plus an
+   immediate env colour/sun/shadow restore.
+3. The Game Over screen survived a server-initiated map change while dead:
+   the new map may not even be survival, so no revive SURV_HEALTH ever
+   arrives to dismiss it - the screen sat over the new map with full hearts.
+   SurvivalTest_OnNewMap now tears down the death presentation (screen +
+   death-zoom FOV) unconditionally, before its enabled check.
+
+Server side (same session): the mob sim now ticks whenever ANY player is on
+the level, so mobs keep roaming for classic spectators after the last
+survival client leaves (they only freeze on truly empty maps), the spawner
+rings around any viewer, and the ChangeModel mirror syncs at 10 Hz (was 5) -
+the cadence MCGalaxy relays player positions at, so stock-client entity
+interpolation smooths mobs exactly like players. AI targeting, hazards and
+puppet streams remain survival-client-only.

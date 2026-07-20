@@ -1428,6 +1428,10 @@ int IndevTest_FurnaceCookScaled(void) {
 static int indev_worldTime;
 static int indev_skyBright = 15; /* Environment.SkyBrightness; > 15 = always day */
 static PackedCol indev_baseSky, indev_baseFog, indev_baseClouds;
+/* the lighting mode the player had before an Indev map force-switched to
+    FANCY, so leaving the map restores their choice (see OnNewMap) */
+static cc_uint8 indev_prevLighting;
+static cc_bool  indev_forcedLighting;
 static cc_bool   indev_baseColsKnown;
 static int       indev_lastSkyLight = -1;
 
@@ -3179,6 +3183,10 @@ static void IndevTest_MapActivate(void) {
 	}
 
 	if (Lighting_Mode != LIGHTING_MODE_FANCY && !Lighting_ModeLockedByServer) {
+		/* remember what the player had, so leaving the Indev map can put it
+		    back (else every visit permanently flips their lighting option) */
+		indev_prevLighting   = Lighting_Mode;
+		indev_forcedLighting = true;
 		Lighting_SetMode(LIGHTING_MODE_FANCY, false);
 	}
 }
@@ -3202,8 +3210,25 @@ void IndevTest_NetworkModeChanged(void) {
 	} else {
 		/* Flipped off mid-map (mode-0 HELLO from a live /Survival change):
 		    gameplay stops at once; the custom block DEFINITIONS linger visually
-		    until the next map load wipes them (Game_Reset) - v1 limitation. */
+		    until the next map load wipes them (Game_Reset) - v1 limitation.
+		    The day/night presentation does NOT linger: colours return to the
+		    full-day base and the lighting resets (same cleanup as OnNewMap). */
 		World_FallThroughFloor = false;
+		if (indev_baseColsKnown) {
+			Env_SetSkyCol(indev_baseSky);
+			Env_SetFogCol(indev_baseFog);
+			Env_SetCloudsCol(indev_baseClouds);
+			Env_SetSunCol(ENV_DEFAULT_SUN_COLOR);
+			Env_SetShadowCol(ENV_DEFAULT_SHADOW_COLOR);
+		}
+		FancyLighting_SetIndevSky(15);
+		indev_baseColsKnown = false;
+		if (indev_forcedLighting) {
+			indev_forcedLighting = false;
+			if (Lighting_Mode == LIGHTING_MODE_FANCY && !Lighting_ModeLockedByServer) {
+				Lighting_SetMode(indev_prevLighting, false);
+			}
+		}
 	}
 }
 
@@ -3360,6 +3385,26 @@ static void OnNewMap(void) {
 	indev_worldTime    = 0;
 	indev_skyBright    = 15;
 	indev_lastSkyLight = -1;
+
+	/* Day/night presentation must not leak into the NEXT map (user report:
+	    leaving a night-time Indev server map for a plain map kept the world
+	    rendering at night while the env colours reset - a mismatched look):
+	    - the fancy-lighting eased sky level is a static in FancyLighting.c,
+	      stuck at the old map's value (4 at night) until the next tick - and
+	      on non-Indev maps that tick never comes, so reset it to full day;
+	    - the base-colour snapshot belongs to the old map (MapActivate
+	      re-snapshots when an Indev map comes around again);
+	    - the lighting mode we force-flipped to FANCY goes back to whatever
+	      the player had, unless the server owns the mode or the player
+	      changed it themselves mid-map. */
+	FancyLighting_SetIndevSky(15);
+	indev_baseColsKnown = false;
+	if (indev_forcedLighting) {
+		indev_forcedLighting = false;
+		if (Lighting_Mode == LIGHTING_MODE_FANCY && !Lighting_ModeLockedByServer) {
+			Lighting_SetMode(indev_prevLighting, false);
+		}
+	}
 
 	IndevFire_Reset();
 }
