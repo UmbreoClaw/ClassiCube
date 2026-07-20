@@ -174,6 +174,7 @@ int SurvivalTest_HotbarCount(int slot);
 /* A counter that increments whenever inventory contents change. */
 /* Lets the HUD cheaply detect when it needs to redraw stack counts. */
 int SurvivalTest_InvVersion(void);
+void SurvivalTest_MarkInvDirty(void);
 /* Bumps the inventory version (for external mutators like the furnace tick). */
 void SurvivalTest_InvChanged(void);
 /* Worn armor piece in array slot 0..3 (0 boots .. 3 helmet). */

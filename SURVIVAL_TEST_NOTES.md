@@ -6116,3 +6116,31 @@ Rig note: repeated rapid gdb attach/call cycles can wedge the client
 insufficient) - space attaches by a few seconds and use timeout'd gdb.
 Also: a heredoc that dies with a timed-out command silently leaves the
 NEXT run reading a nonexistent script - check for "No such file".
+
+## 2026-07-20: ITEMS land server-side (SurvivalItems.cs) - no client changes
+
+The mcgalaxy port of this client's item machinery: the full indevItems table
+(ids 256+, per-id max stacks 99/64/1), IndevTest_CanHarvest (pickaxe-tier
+gating), SpawnIndevDrops as the authoritative mining-yield table (stone->
+cobble, coal ore->coal ITEM, diamond ore->diamond, gravel flint roll, crop
+wheat+seed rolls; v1 yields go straight to the inventory until phase-5
+drops), the complete CraftingManager recipe set (fixed recipes + the
+generated 5x5 tool matrix + armor incl. the genuine chain-from-FIRE quirk,
+offset+mirror matching) behind a real RESULT_CLICK, and TileEntityFurnace
+smelting on the 20 TPS survival tick with the lit/unlit block flip and
+FURN_PROG/CONT_SLOT streaming. Recipe/smelt/fuel tables are byte-identical
+ports of this client's - REQUIRED, because this client renders the craft
+result PREVIEW locally from the streamed grid while the server crafts
+authoritatively on the click.
+
+Zero client changes for items themselves (u16 ids already ride every slot
+message and the icon table exists) - ONE client fix: the net-container
+appliers (CONT_SLOT/FURN_PROG/CONT_OPEN) now bump the inventory version
+(new SurvivalTest_MarkInvDirty) so an open furnace/chest GUI repaints when
+the server streams changes; before, live smelting only showed after a click.
+
+Verified live: /Survival give by item name (coal, iron_pickaxe); log ->
+planks x4 (client preview + server craft onto cursor, log consumed);
+cobble x3 + coal smelted to stone x3 with the furnace block flipping lit
+(61->62) and flame/arrow streaming at 4 Hz. Not yet: eating/tools/durability
+(USE_ITEM on items), PLAYER_EQUIP/armor absorption, drop entities.

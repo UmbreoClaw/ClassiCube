@@ -6675,6 +6675,9 @@ int SurvivalTest_SlotDamage(int slot) { return st_inv[slot].damage; }
 int     SurvivalTest_SlotCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_HotbarCount(int slot) { return st_inv[slot].count; }
 int     SurvivalTest_InvVersion(void) { return st_invVersion; }
+/* Repaint hook for the Indev layer's NET container appliers (CONT_SLOT /
+    FURN_PROG land in IndevTest state the inventory screen renders). */
+void    SurvivalTest_MarkInvDirty(void) { st_invVersion++; }
 /* Public bump so the Indev layer (furnace tick mutating container slots) */
 /*  can tell the open inventory screen to rebuild its mesh. */
 void    SurvivalTest_InvChanged(void)  { st_invVersion++; }

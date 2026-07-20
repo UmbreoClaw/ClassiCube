@@ -1292,6 +1292,7 @@ void IndevTest_NetContOpen(int kind, int slots) {
 	indev_netContLarge = kind == INDEV_CONTAINER_CHEST && slots > SURVIVAL_CONTAINER_SLOTS;
 	indev_netBurn = 0; indev_netCook = 0;
 	Mem_Set(indev_netCont, 0, sizeof(indev_netCont));
+	SurvivalTest_MarkInvDirty();
 }
 
 void IndevTest_NetContSlot(int i, int id, int count, int dmg) {
@@ -1302,11 +1303,13 @@ void IndevTest_NetContSlot(int i, int id, int count, int dmg) {
 	if (indev_netCont[i].count <= 0) {
 		indev_netCont[i].id = BLOCK_AIR; indev_netCont[i].count = 0; indev_netCont[i].damage = 0;
 	}
+	SurvivalTest_MarkInvDirty();
 }
 
 void IndevTest_NetFurnProg(int burn, int cook) {
 	indev_netBurn = burn;
 	indev_netCook = cook;
+	SurvivalTest_MarkInvDirty(); /* repaint the flame/arrow overlays */
 }
 
 int IndevTest_OpenKind(void) {
