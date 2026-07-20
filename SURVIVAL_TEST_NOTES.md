@@ -6144,3 +6144,30 @@ planks x4 (client preview + server craft onto cursor, log consumed);
 cobble x3 + coal smelted to stone x3 with the furnace block flipping lit
 (61->62) and flame/arrow streaming at 4 Hz. Not yet: eating/tools/durability
 (USE_ITEM on items), PLAYER_EQUIP/armor absorption, drop entities.
+
+## 2026-07-20 (later): furnace output take-only + server .mclevel I/O
+
+User-reported: the furnace GUI accepted placing items into the output
+(product) slot; genuine SlotFurnace is take-only. Fixed on both sides with
+the same one-line rule - a click on furnace container slot 2 with a
+non-empty cursor is refused (covers plain places AND merge-onto-stack;
+taking stays the cursor-empty pickup path). Client: SurvivalTest_SlotClick
+(the singleplayer click model). Server: HandleSlotClick, so multiplayer is
+guarded regardless of client. The crafting result slot was already fine -
+it goes through RESULT_CLICK, which only ever moves the preview onto the
+cursor.
+
+Server side (mcgalaxy, same session): .mclevel import/export landed -
+McLevelImporter now expands the Data metadata nibble through the
+SurvivalBlocks bijection (facings/stages/moisture/orientation) and marks
+imports survival-ready; new McLevelExporter writes this client's
+MCLevel_Save schema (LocalPlayer stub, chest/furnace TileEntities with live
+contents, one per container block). /Survival export <name> <level> ->
+extra/import/, /Import round trip verified cell-identical (128x64x128);
+networking-plan 18 updated with the as-implemented status. Files exported
+by the server open in this client's singleplayer loader (same schema).
+
+Verified live (gdb-driven intents against the rig server): open furnace ->
+SLOT_CLICK on output with coal held = slot stays empty; next click on fuel
+slot lands the stack (streamed CONT_SLOT echoes confirm). Exported the
+level after: the furnace TE carries Slot 1 = coal, output untouched.

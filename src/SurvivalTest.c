@@ -6790,6 +6790,11 @@ void SurvivalTest_SlotClick(int idx, cc_bool rightClick) {
 	if (idx >= SURVIVAL_ARMOR_BASE && idx < SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS &&
 		st_cursor.count > 0 &&
 		IndevTest_ArmorPiece(st_cursor.id) != 3 - (idx - SURVIVAL_ARMOR_BASE)) return;
+	/* SlotFurnace (the output, container slot 2): TAKE-ONLY - placing into
+	    it (incl. merging onto the smelted stack) is refused, like genuine
+	    (user-reported; the same rule rides the MP intent server-side). */
+	if (idx == SURVIVAL_CONTAINER_BASE + 2 && st_cursor.count > 0 &&
+		IndevTest_OpenKind() == INDEV_CONTAINER_FURNACE) return;
 
 	p = SurvivalTest_SlotPtr(idx);
 
