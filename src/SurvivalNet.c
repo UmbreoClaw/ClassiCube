@@ -9,6 +9,7 @@
 #include "Inventory.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
+#include "Screens.h"
 
 /* Client reference implementation of the survival multiplayer sub-protocol.
    Everything here is inert until BOTH:
@@ -240,6 +241,41 @@ static void SurvivalNet_HandleCursor(cc_uint8* data) {
 		(cc_int16)(((cc_uint16)data[4] << 8) | data[5]));
 }
 
+static void SurvivalNet_HandleContOpen(cc_uint8* data) {
+	/* [id][kind][slotCount] - SurvivalInventory.HandleUseItem's reply.
+	   Kinds: 0 force-close (container destroyed under an open screen),
+	   1 chest, 2 furnace, 3 large chest, 4 workbench (no container slots -
+	   the 3x3 grid rides the normal streamed craft slots 36..44). */
+	int kind = data[1], slots = data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	if (kind == 0) {
+		SurvivalInvScreen_ForceClose();
+		return;
+	}
+	if (kind == 4) {
+		SurvivalTest_SetCraftDim(3);
+		SurvivalInvScreen_Show();
+		return;
+	}
+	IndevTest_NetContOpen(kind == 2 ? INDEV_CONTAINER_FURNACE : INDEV_CONTAINER_CHEST, slots);
+	SurvivalInvScreen_Show();
+}
+
+static void SurvivalNet_HandleContSlot(cc_uint8* data) {
+	/* [id][slot(0..53)][itemId:u16][count][dmg:i16] - a container slot echo */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	IndevTest_NetContSlot(data[1],
+		((int)data[2] << 8) | data[3], data[4],
+		(cc_int16)(((cc_uint16)data[5] << 8) | data[6]));
+}
+
+static void SurvivalNet_HandleFurnProg(cc_uint8* data) {
+	/* [id][burn(0..12)][cook(0..24)] - pre-scaled furnace GUI overlays */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	IndevTest_NetFurnProg(data[1], data[2]);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -255,6 +291,9 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_MOB_DESPAWN: SurvivalNet_HandleMobDespawn(data); break;
 	case SURV_INV_FULL:    SurvivalNet_HandleInvFull(data);    break;
 	case SURV_INV_SLOT:    SurvivalNet_HandleInvSlot(data);    break;
+	case SURV_CONT_OPEN:   SurvivalNet_HandleContOpen(data);   break;
+	case SURV_CONT_SLOT:   SurvivalNet_HandleContSlot(data);   break;
+	case SURV_FURN_PROG:   SurvivalNet_HandleFurnProg(data);   break;
 	case SURV_CURSOR:      SurvivalNet_HandleCursor(data);     break;
 	/* Remaining server->client messages (containers 0x22-0x24, drops
 	   0x30-0x32, blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h

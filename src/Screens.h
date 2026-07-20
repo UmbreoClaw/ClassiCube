@@ -30,6 +30,10 @@ void InventoryScreen_Show(void);
 void InventoryScreen_Hide(void);
 /* Opens the survival inventory screen (only meaningful when SurvivalTest_Enabled). */
 void SurvivalInvScreen_Show(void);
+/* Closes the survival inventory/container screen WITHOUT sending the
+    CONT_CLOSE intent - used when the SERVER force-closes the view (the
+    container block was destroyed under the open screen). */
+void SurvivalInvScreen_ForceClose(void);
 /* Shows the Survival Test "Game over!" screen (permadeath, no respawn). */
 void GameOverScreen_Show(void);
 void GameOverScreen_Hide(void);

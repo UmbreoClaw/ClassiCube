@@ -3719,6 +3719,17 @@ static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
 	NULL
 };
 
+void SurvivalInvScreen_ForceClose(void) {
+	/* Server-initiated close (SURV_CONT_OPEN kind 0): the container was
+	    destroyed under the open screen. No CONT_CLOSE goes back - the server
+	    already refunded/discarded authoritatively. */
+	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
+	SurvivalTest_SetCraftDim(2);
+	IndevTest_CloseContainer();
+	s->heldSlot = -1;
+	Gui_Remove((struct Screen*)s); /* no-ops cleanly when not on the stack */
+}
+
 void SurvivalInvScreen_Show(void) {
 	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
 	/* Only plain creative ClassiCube (survival off) uses the stock floating */

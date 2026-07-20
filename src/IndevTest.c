@@ -1272,22 +1272,73 @@ int IndevTest_OpenContainer(IVec3 pos) {
 	return kind;
 }
 
+/* ---- MP net container view (rest of phase 4) ----
+    On server maps the open container is SERVER state: SURV_CONT_OPEN sets the
+    kind + slot count here, SURV_CONT_SLOT writes the slots, and the accessors
+    below serve this view instead of the local tile-entity pool - so the
+    existing chest/large-chest/furnace screens render it unchanged. Clicks
+    leave as intents through the normal ServerOwnsInventory routing. */
+static int indev_netContKind;   /* INDEV_CONTAINER_NONE = not net-open */
+static int indev_netContSlots;
+static struct SurvivalSlot indev_netCont[SURVIVAL_CONTAINER_MAX];
+static int indev_netContLarge;  /* chest with 54 slots (renders the double GUI) */
+static int indev_netBurn, indev_netCook; /* FURN_PROG: pre-scaled 0..12 / 0..24 */
+
+void IndevTest_NetContOpen(int kind, int slots) {
+	if (slots < 0) slots = 0;
+	if (slots > SURVIVAL_CONTAINER_MAX) slots = SURVIVAL_CONTAINER_MAX;
+	indev_netContKind  = kind;
+	indev_netContSlots = slots;
+	indev_netContLarge = kind == INDEV_CONTAINER_CHEST && slots > SURVIVAL_CONTAINER_SLOTS;
+	indev_netBurn = 0; indev_netCook = 0;
+	Mem_Set(indev_netCont, 0, sizeof(indev_netCont));
+}
+
+void IndevTest_NetContSlot(int i, int id, int count, int dmg) {
+	if (!indev_netContKind || i < 0 || i >= indev_netContSlots) return;
+	indev_netCont[i].id     = (cc_uint16)id;
+	indev_netCont[i].count  = (cc_int16)count;
+	indev_netCont[i].damage = (cc_int16)dmg;
+	if (indev_netCont[i].count <= 0) {
+		indev_netCont[i].id = BLOCK_AIR; indev_netCont[i].count = 0; indev_netCont[i].damage = 0;
+	}
+}
+
+void IndevTest_NetFurnProg(int burn, int cook) {
+	indev_netBurn = burn;
+	indev_netCook = cook;
+}
+
 int IndevTest_OpenKind(void) {
-	if (!IndevTest_Enabled || indev_openTE < 0) return INDEV_CONTAINER_NONE;
+	if (!IndevTest_Enabled) return INDEV_CONTAINER_NONE;
+	if (indev_netContKind)  return indev_netContKind;
+	if (indev_openTE < 0)   return INDEV_CONTAINER_NONE;
 	return indev_tes[indev_openTE].kind;
 }
 
-void IndevTest_CloseContainer(void) { indev_openTE = -1; indev_openTE2 = -1; }
+void IndevTest_CloseContainer(void) {
+	indev_openTE = -1; indev_openTE2 = -1;
+	indev_netContKind = 0; indev_netContSlots = 0; indev_netContLarge = 0;
+	indev_netBurn = 0; indev_netCook = 0;
+}
 
 /* Slot count of the open container: furnace 3, single chest 27, large (double) */
 /*  chest 54 (InventoryLargeChest.getSizeInventory = upper 27 + lower 27). */
 int IndevTest_ContainerSlotCount(void) {
+	if (indev_netContKind) return indev_netContSlots;
 	if (indev_openTE < 0) return 0;
 	if (indev_tes[indev_openTE].kind == INDEV_CONTAINER_FURNACE) return 3;
 	return indev_openTE2 >= 0 ? SURVIVAL_CONTAINER_SLOTS * 2 : SURVIVAL_CONTAINER_SLOTS;
 }
 
 struct SurvivalSlot* IndevTest_ContainerSlot(int i) {
+	/* MP: the server-streamed view (clicks on it leave as intents and never
+	    mutate it locally - the CONT_SLOT echo writes the result back) */
+	if (indev_netContKind) {
+		if (i >= 0 && i < indev_netContSlots) return &indev_netCont[i];
+		indev_discardSlot.id = 0; indev_discardSlot.count = 0; indev_discardSlot.damage = 0;
+		return &indev_discardSlot;
+	}
 	/* InventoryLargeChest routing: slots below the upper chest's size come from
 	    the upper tile entity, the rest from the lower one. A single chest /
 	    furnace has no lower half (indev_openTE2 < 0), so it only uses openTE. */
@@ -1396,6 +1447,7 @@ static void Furnace_Tick(struct IndevTE* te) {
 
 int IndevTest_FurnaceBurnScaled(void) {
 	struct IndevTE* te;
+	if (indev_netContKind) return indev_netContKind == INDEV_CONTAINER_FURNACE ? indev_netBurn : 0;
 	if (indev_openTE < 0) return 0;
 	te = &indev_tes[indev_openTE];
 	if (te->kind != INDEV_CONTAINER_FURNACE || te->currentBurn <= 0) return 0;
@@ -1406,6 +1458,7 @@ int IndevTest_FurnaceBurnScaled(void) {
     12-step scaled height has hit 0, leaving the genuine 2px ember stub). */
 int IndevTest_FurnaceIsBurning(void) {
 	struct IndevTE* te;
+	if (indev_netContKind) return indev_netContKind == INDEV_CONTAINER_FURNACE && indev_netBurn > 0;
 	if (indev_openTE < 0) return 0;
 	te = &indev_tes[indev_openTE];
 	return te->kind == INDEV_CONTAINER_FURNACE && te->burnTime > 0;
@@ -1413,6 +1466,7 @@ int IndevTest_FurnaceIsBurning(void) {
 
 int IndevTest_FurnaceCookScaled(void) {
 	struct IndevTE* te;
+	if (indev_netContKind) return indev_netContKind == INDEV_CONTAINER_FURNACE ? indev_netCook : 0;
 	if (indev_openTE < 0) return 0;
 	te = &indev_tes[indev_openTE];
 	if (te->kind != INDEV_CONTAINER_FURNACE) return 0;
@@ -3374,7 +3428,7 @@ void IndevTest_RestoreTE(int kind, int x, int y, int z, int burn, int cook,
 static void OnNewMap(void) {
 	int i;
 	for (i = 0; i < INDEV_TE_MAX; i++) indev_tes[i].used = false;
-	indev_openTE = -1; indev_openTE2 = -1;
+	IndevTest_CloseContainer(); /* local open refs AND the MP net container view */
 	indev_surKnown = false; /* each map records its own surroundings */
 
 	/* Every genuine level is a brand-new World object: worldTime starts 0

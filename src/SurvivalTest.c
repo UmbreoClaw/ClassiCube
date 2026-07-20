@@ -7116,15 +7116,22 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 	IVec3 pos;
 	BlockID block;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled) return false;
-	/* MP: containers are server state opened via SURV_CONT_OPEN (phase 4) -
-	    the local GUIs are backed by local tile entities that don't exist on
-	    a server map. Until then act like classic (no container UI). */
-	if (SurvivalNet_ServerDriven()) return false;
 	if (!Game_SelectedPos.valid) return false;
 
 	pos = Game_SelectedPos.pos;
 	if (!World_Contains(pos.x, pos.y, pos.z)) return false;
 	block = World_GetBlock(pos.x, pos.y, pos.z);
+
+	/* MP: containers are SERVER state - the right-click leaves as a
+	    SURV_USE_ITEM intent and the GUI opens when SURV_CONT_OPEN answers
+	    (streamed into the net container view). The click is consumed for any
+	    container/workbench block, like genuine blockActivated. */
+	if (SurvivalNet_ServerDriven()) {
+		if (!IndevTest_IsWorkbench(block) && !IndevTest_IsContainerBlock(block)) return false;
+		SurvivalNet_SendUseItem(Inventory.SelectedIndex, pos.x, pos.y, pos.z,
+		                        (int)Game_SelectedPos.closest);
+		return true;
+	}
 
 	if (IndevTest_IsWorkbench(block)) {
 		SurvivalTest_SetCraftDim(3);

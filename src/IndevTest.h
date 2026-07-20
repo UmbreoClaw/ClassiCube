@@ -134,6 +134,12 @@ cc_bool IndevTest_IsContainerBlock(BlockID b);
 int  IndevTest_OpenContainer(IVec3 pos);
 /* Kind of the currently open container (NONE when no container screen). */
 int  IndevTest_OpenKind(void);
+/* MP net container view (SURV_CONT_OPEN/CONT_SLOT/FURN_PROG appliers): the
+    server-owned open container rendered by the same chest/furnace screens.
+    kind 0 closes the view; slots is the streamed size (3/27/54). */
+void IndevTest_NetContOpen(int kind, int slots);
+void IndevTest_NetContSlot(int i, int id, int count, int dmg);
+void IndevTest_NetFurnProg(int burn, int cook);
 /* Closes the open container (contents stay in the tile entity). */
 void IndevTest_CloseContainer(void);
 /* Slot i of the OPEN container (0..26 single chest, 0..53 large chest, 0..2 */

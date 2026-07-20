@@ -6074,3 +6074,45 @@ Indev inventory screen opens with local clicks, CreativeGive(chest 54 /
 workbench 58) deposits 99-stacks, torch placement sticks with no revert and
 no consume, and /Survival inv shows the server tracking nothing. Flipping
 creative off live resyncs the real server inventory via the fresh handshake.
+
+## 2026-07-20: the rest of the phase-4 GUI intents - containers over the wire
+
+USE_ITEM 0x81 + CONT_OPEN 0x22 + CONT_SLOT 0x23 + FURN_PROG 0x24 are live on
+both sides (no ext bump needed - all four ids were reserved; an old server
+logs the intent, an old client never sends it).
+
+Client: right-clicking a workbench/chest/furnace on a server map now sends
+SURV_USE_ITEM (consuming the click like genuine blockActivated) instead of
+no-opping; the reply CONT_OPEN routes into a new NET CONTAINER VIEW in
+IndevTest (IndevTest_NetContOpen/NetContSlot/NetFurnProg) that the existing
+chest/large-chest/furnace screens render unchanged - OpenKind/SlotCount/
+ContainerSlot and the furnace flame/arrow getters branch to it when set.
+Kind 4 (workbench) just sets CraftDim(3) over the streamed craft slots.
+Kind 0 force-closes via SurvivalInvScreen_ForceClose (new; removes the
+screen without echoing CONT_CLOSE - Gui_Remove no-ops when absent, an
+InputGrab guard turned out to skip removal and was dropped). Container
+clicks ride the existing SLOT_CLICK intents at slots 45..98.
+
+Server (SurvivalInventory.cs): session-scoped tile entities keyed by level+
+position (chest 27, furnace 3), lazily created on open; the genuine large
+chest pairing (-X/-Z neighbour = upper half) and the BlockChest lid-block
+rule (solid above either half refuses to open); reach-validated. The
+GuiContainer click model now resolves the 45..98 range through the player's
+open view, echoing CONT_SLOT to every viewer of the same entity. Mining a
+container discards the tile entity (scatter needs phase-5 drops) and
+force-closes any open screens. Not opened on creative maps (local palette).
+
+Verified live: chest open -> deposit a torch stack via container clicks ->
+close -> reopen persists -> full reconnect persists (level-keyed state);
+workbench opens the 3x3 grid; furnace opens its 3-slot GUI; mining the
+furnace under the open screen force-closed the GUI and yielded the pickup.
+Untested live (single-client rig, verified by inspection): large-chest
+pairing, multi-viewer CONT_SLOT echo. V1 deviations: no smelting or recipes
+until items land, container contents vanish on destruction, contents do not
+persist across server restarts.
+
+Rig note: repeated rapid gdb attach/call cycles can wedge the client
+(SIGSTOP-like freeze with identical HUD frames; kill -CONT sometimes
+insufficient) - space attaches by a few seconds and use timeout'd gdb.
+Also: a heredoc that dies with a timed-out command silently leaves the
+NEXT run reading a nonexistent script - check for "No such file".
