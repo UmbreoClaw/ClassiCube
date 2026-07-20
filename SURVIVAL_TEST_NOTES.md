@@ -6171,3 +6171,32 @@ Verified live (gdb-driven intents against the rig server): open furnace ->
 SLOT_CLICK on output with coal held = slot stays empty; next click on fuel
 slot lands the stack (streamed CONT_SLOT echoes confirm). Exported the
 level after: the furnace TE carries Slot 1 = coal, output untouched.
+
+## 2026-07-20 (later still): server-side placement shaping + block-set finish
+
+User request: finish the blocks, drop the non-Indev leftovers from Indev
+levels, audit def shapes, and give placed furnaces their facing (MP had
+none - the client's SP rotation was local-only, so the server kept the
+canonical id).
+
+All landed server-side in mcgalaxy; NO client code changes were needed -
+the client was already the oracle for every rule and its local placement
+guess is now confirmed (or corrected) by the server's authoritative echo:
+
+- MP furnace/chest placement now rotates to face the placer using this
+  client's exact yaw-quadrant formula (IndevTest_BlockChanged); torches
+  wall-mount server-side via the onBlockAdded -X/+X/-Z/+Z/floor auto pick,
+  unsupported torches and chest triples/L-shapes are refused before any
+  inventory consume. Deviation: the clicked-face torch override
+  (onBlockPlaced) can't ride the classic place packet (no face byte) -
+  when several supports exist the server's auto pick wins.
+- The nonGenuine leftovers (59/60/63/64/65) are now hidden AND unplaceable
+  on Indev maps server-side too (they placed free before); stock clients
+  get proper thin-column torch defs (bounds-cropped tile) instead of
+  full-size X sprites.
+
+Verified live on the rig: gdb-driven Game_ChangeBlock placements through a
+real MP session - faced furnace (76) / chest (72), double chest ok, triple
+refused with the original wall block restored, wall torch mounts on the
+placed furnace (94), floating torch and pillar(63) refused, consumption
+counts exact, def stream audited via the synthetic CPE client.
