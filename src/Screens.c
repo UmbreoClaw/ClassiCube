@@ -2437,7 +2437,14 @@ static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* de
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (InputDevice_IsEnter(key, device) && table->selectedIndex != -1) {
-		Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		/* Indev creative: the picker acts as the creative palette browser -
+		    a pick deposits a stack into the Indev inventory (which drives the
+		    hotbar via SyncHotbar) instead of poking the classic hotbar. */
+		if (SurvivalTest_CreativeActive()) {
+			SurvivalTest_CreativeGive(table->blocks[table->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		}
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (Elem_HandlesKeyDown(table, key, device)) {
@@ -3642,7 +3649,7 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 		/* Clicked fully outside the window - refund cursor + grid and close.
 		    MP: the SERVER owns cursor + grid; CONT_CLOSE makes it do the
 		    refund and echo the result (networking-plan 27.2). */
-		if (SurvivalNet_ServerDriven()) SurvivalNet_SendContClose();
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendContClose();
 		else SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
 		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
@@ -3653,10 +3660,10 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 	    slots/cursor and echoes INV_SLOT + CURSOR back (echo-only v1, no local
 	    prediction). SP keeps mutating local state directly. */
 	if (hit == SURVINV_RESULT_HIT) {
-		if (SurvivalNet_ServerDriven()) SurvivalNet_SendResultClick();
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendResultClick();
 		else SurvivalTest_ResultClick(); /* crafts once onto the cursor */
 	} else {
-		if (SurvivalNet_ServerDriven()) SurvivalNet_SendSlotClick(hit, rightClick);
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendSlotClick(hit, rightClick);
 		else SurvivalTest_SlotClick(hit, rightClick);
 	}
 	s->dirty = true;
@@ -3668,7 +3675,7 @@ static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* 
 	if (InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
 		s->heldSlot = -1;
 		/* MP: the server refunds cursor + grid on CONT_CLOSE and echoes it */
-		if (SurvivalNet_ServerDriven()) SurvivalNet_SendContClose();
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendContClose();
 		else SurvivalTest_CursorReturn();
 		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
 		IndevTest_CloseContainer();  /* container contents stay in the tile entity */

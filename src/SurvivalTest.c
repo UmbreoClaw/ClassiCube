@@ -55,6 +55,15 @@ cc_bool SurvivalTest_Enhanced;
 cc_bool SurvivalTest_Creative;
 int     SurvivalTest_Health = SURVIVAL_MAX_HEALTH;
 
+/* Whether the SERVER owns the inventory/cursor state (the phase-4 streams).
+    False in SP - and in MP CREATIVE, where the inventory is the genuine
+    client-side palette: the server tracks no inventory on creative maps
+    (free build, no pickup/consume), so clicks stay local, the palette
+    hotbar fills locally, and the INV/CURSOR stream appliers are ignored. */
+cc_bool SurvivalTest_ServerOwnsInventory(void) {
+	return SurvivalNet_ServerDriven() && !SurvivalTest_CreativeActive();
+}
+
 cc_bool SurvivalTest_CreativeActive(void) {
 	/* SP: the local toggle. MP: server-dictated (deferred - SurvivalNet will set
 	    this from SURV_HELLO, so downstream checks need no change). Indev-only, so
@@ -6851,6 +6860,10 @@ void SurvivalTest_CursorReturn(void) {
 void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg) {
 	struct SurvivalSlot* p;
 	if (!SurvivalTest_Enabled) return;
+	/* MP creative: the inventory is the local palette - a stray stream from
+	    the server (e.g. sent before a live creative flip landed) must not
+	    wipe it. The server also skips these sends on creative maps. */
+	if (SurvivalTest_CreativeActive()) return;
 	if (idx < 0 || idx >= SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS) return;
 	/* container slots aren't streamed yet (rest of phase 4) */
 	if (idx >= SURVIVAL_CONTAINER_BASE && idx < SURVIVAL_CONTAINER_BASE + SURVIVAL_CONTAINER_MAX) return;
@@ -6866,6 +6879,7 @@ void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg) {
 
 void SurvivalTest_NetCursor(int id, int count, int dmg) {
 	if (!SurvivalTest_Enabled) return;
+	if (SurvivalTest_CreativeActive()) return; /* local palette - see NetInvSlot */
 	st_cursor.id     = (cc_uint16)id;
 	st_cursor.count  = (cc_int16)count;
 	st_cursor.damage = (cc_int16)dmg;
@@ -6987,8 +7001,9 @@ void SurvivalTest_TryDropHeld(void) {
 	int i;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled || !p) return;
 	/* MP: dropping is an intent - the server owns the inventory and the drop
-	    entity (phases 4/5); it spawns the drop and streams it back. */
-	if (SurvivalNet_ServerDriven()) {
+	    entity (phases 4/5); it spawns the drop and streams it back. MP
+	    creative keeps the local palette inventory, so drops stay local too. */
+	if (SurvivalTest_ServerOwnsInventory()) {
 		SurvivalNet_SendDropItem(slot, false);
 		return;
 	}
@@ -7032,6 +7047,7 @@ void SurvivalTest_CreativeGive(int id) {
 	for (n = 0; n < max; n++) {
 		if (!SurvivalTest_AddItem((cc_uint16)id)) break; /* inventory full */
 	}
+	st_invVersion++; /* redraw an open Indev inventory screen */
 }
 
 /* Public wrappers for the Indev layer's held-item actions (hoe wear, */
@@ -8257,13 +8273,18 @@ static void SurvivalTest_MapActivate(void) {
 
 	SurvivalTest_CreativeUpdateHacks(); /* fly/speed/reach for the current mode */
 
-	/* Server-driven maps: inventory (so the palette hotbar too) and mobs are
-	    the server's job - phases 4 and 3 stream them. Touching the classic
-	    hotbar or spawning local mobs here would fight the server's state. */
+	/* Creative's palette hotbar is CLIENT state in both SP and MP - on a
+	    creative map the server tracks no inventory at all, so the genuine
+	    palette fills locally either way (user request: MP Indev creative
+	    uses the Indev creative inventory, not the classic picker flow). */
+	if (SurvivalTest_CreativeActive())
+		SurvivalTest_CreativeFillPalette();
+
+	/* Server-driven maps: the (survival) inventory and mobs are the server's
+	    job - phases 4 and 3 stream them. Touching the classic hotbar or
+	    spawning local mobs here would fight the server's state. */
 	if (SurvivalNet_ServerDriven()) return;
 
-	if (SurvivalTest_CreativeActive())
-		SurvivalTest_CreativeFillPalette(); /* genuine creative palette hotbar */
 	SurvivalTest_SpawnInitialMobs();
 }
 

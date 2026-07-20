@@ -18,6 +18,7 @@
 #include "Input.h"
 #include "InputHandler.h"
 #include "Launcher.h"
+#include "SurvivalTest.h"
 
 static void Widget_NullFunc(void* widget) { }
 static int  Widget_Pointer(void* elem, int id, int x, int y) { return false; }
@@ -978,7 +979,14 @@ static int TableWidget_PointerDown(void* widget, int id, int x, int y) {
 	if (Elem_HandlesPointerDown(&w->scroll, id, x, y)) {
 		return TOUCH_TYPE_GUI;
 	} else if (w->selectedIndex != -1 && w->blocks[w->selectedIndex] != BLOCK_AIR) {
-		Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
+		/* Indev creative: picks deposit a stack into the Indev inventory
+		    (the palette flow) instead of poking the classic hotbar - see
+		    the matching branch in InventoryScreen_KeyDown. */
+		if (SurvivalTest_CreativeActive()) {
+			SurvivalTest_CreativeGive(w->blocks[w->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
+		}
 		w->pendingClose = true;
 		return TOUCH_TYPE_GUI;
 	} else if (Gui_Contains(Table_X(w), Table_Y(w), Table_Width(w), Table_Height(w), x, y)) {

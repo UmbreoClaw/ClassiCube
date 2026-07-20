@@ -6048,3 +6048,29 @@ rings around any viewer, and the ChangeModel mirror syncs at 10 Hz (was 5) -
 the cadence MCGalaxy relays player positions at, so stock-client entity
 interpolation smooths mobs exactly like players. AI targeting, hazards and
 puppet streams remain survival-client-only.
+
+## 2026-07-20: MP Indev creative uses the Indev creative inventory (user request)
+
+On creative survival maps (HELLO flags bit1) the fork client now behaves like
+SP Indev creative instead of falling back to the classic picker flow:
+
+- New SurvivalTest_ServerOwnsInventory() = ServerDriven && !CreativeActive.
+  In MP creative the inventory is the genuine CLIENT-side palette - the
+  server tracks no inventory on creative maps (free build, no consume) - so
+  the Indev GuiInventory clicks stay local (Screens.c routes through the new
+  helper), the palette hotbar fills at MapActivate in MP too, drops stay
+  local, and the INV_FULL/INV_SLOT/CURSOR appliers ignore stray streams.
+- The classic block picker (B) becomes the creative palette browser: picking
+  a block deposits a full stack via SurvivalTest_CreativeGive (finally wired
+  - it was dead code from the section-14 research) into the Indev inventory
+  instead of poking the classic hotbar, in SP and MP alike. Stack size 99 =
+  the genuine Indev block stack limit.
+- Server (mcgalaxy): SendHandshake skips the inventory streams on creative
+  maps (they would wipe the palette the HELLO just filled) and
+  HandleSlotClick/HandleContClose reject stray intents there.
+
+Verified live on a creative Indev map: palette hotbar fills on join, the
+Indev inventory screen opens with local clicks, CreativeGive(chest 54 /
+workbench 58) deposits 99-stacks, torch placement sticks with no revert and
+no consume, and /Survival inv shows the server tracking nothing. Flipping
+creative off live resyncs the real server inventory via the fresh handshake.

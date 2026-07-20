@@ -80,6 +80,9 @@ extern cc_bool SurvivalTest_Creative;
     server-sent mode in MP (deferred). Gated to Indev - c0.30-s and plain creative
     ClassiCube are never affected. Route ALL creative checks through this. */
 cc_bool SurvivalTest_CreativeActive(void);
+/* Whether the server owns the inventory/cursor (phase-4 streaming). False in
+    SP and in MP creative, where the inventory is the local palette. */
+cc_bool SurvivalTest_ServerOwnsInventory(void);
 /* Deposits a full stack of the given block/item id into the inventory (the
     creative block-picker's click action). No-op unless creative is active. */
 void SurvivalTest_CreativeGive(int id);
