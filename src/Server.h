@@ -70,6 +70,10 @@ CC_VAR extern struct _ServerConnectionData {
 	cc_bool SupportsNotifyAction;
 	/* Whether the server supports the SurvivalTest CPE (Indev/c0.30-s multiplayer) */
 	cc_bool SupportsSurvival;
+	/* The negotiated SurvivalTest ext version (min of ours and the server's) -
+	   the authoritative survival wire-format version. 0 when unsupported.
+	   v2: SURV_WORLDINFO ground/water promoted from u8 to i16. */
+	cc_uint8 SurvivalExtVersion;
 } Server;
 
 /* If user hasn't previously accepted url, displays a dialog asking to confirm downloading it */

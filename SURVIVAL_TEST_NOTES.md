@@ -5968,3 +5968,53 @@ buried 2 blocks under the surface, which at night produced a mob-attack /
 suffocation death loop — the death dwell + 30 s safety revive cycled exactly
 as designed throughout; grounding only fixes FLOATING spawns, so a buried
 spawn may deserve the same auto-fix treatment some session.
+
+## 2026-07-20: phase 1 step 2 — the Indev world generator on the server (server session)
+
+No client code changed. mcgalaxy Generator/IndevGenerator.cs is now a C# port
+of this repo's src/IndevGen.c (the oracle-verified LevelGenerator.java port),
+registered as the "indev" /NewLvl theme: themes normal/hell/paradise/woods,
+types inland/island/floating/flat, power-of-two width/length, height >= 64.
+The parity-critical machinery came along: the three java.util.Random streams,
+the double-built MathHelper sine table, float/double expression precision,
+and the WR_* World replica (clamped reads, interior-only setBlock, falling
+sand, liquid wake-ups, flower pops burning World.random draws, the
+Assembling y-skip). Same seed/type/theme/size should reproduce this client's
+generator block-for-block; the server output was verified by theme-signature
+histograms + in-client inspection, not by re-running the Java oracle.
+
+Generated maps come out survival-ready (SurvivalMode=Indev, hazards, the
+block set, spawn house with genuine wall-torch mounting stored as extended
+blocks) and their env config now feeds SURV_WORLDINFO genuine per-map
+ground/water levels + edge fluid, replacing the placeholder defaults this
+client had been receiving. Live-checked from this client: normal inland
+terrain + house interior spawn, floating multi-layer islands, hell's lava
+flood + dark red ambience, with the mob sim populating everything.
+
+Server-side deviations to remember: per-theme sky brightness (hell 7, woods
+12, paradise always-day 16) exists only in the generation light snapshot and
+env colours - the live light model is still the shared clock; a floating
+hell map's SurvivalTheme config byte reads Floating (type folded into the
+enum). GitHub note: today's queued CI runs were a github-wide Actions
+partial outage (incident since Jul 19 23:34 UTC), not a workflow problem.
+
+## 2026-07-20: SURV_WORLDINFO v2 - i16 levels (floating dirt-plane fix)
+
+User-diagnosed on the generated floating world: a dirt ground plane rendered
+under the islands. Cause: SURV_WORLDINFO v1 carries ground/water as u8, but
+floating maps genuinely use groundLevel -128 / waterLevel -127 (hell -16) -
+the server clamped them to 0, so the OOB ground plane sat at y=0 instead of
+far below the void. Fix: SurvivalTest CPE ext bumped to version 2 on BOTH
+sides; WORLDINFO now carries the levels as i16 BE at offsets 1-4 (fields
+after shift by 2). Both sides branch on the NEGOTIATED version, so v1 peers
+still exchange the old layout. Client stores the negotiated version in
+Server.SurvivalExtVersion (Server.h). Verified live: floating map renders
+open sky with the genuine below-island clouds (cloud height -16), no plane.
+
+Also fixed: Server_ResetState never cleared Server.SupportsSurvival on
+reconnect (the SurvivalNet.c comment claimed the net layer did) - a survival
+flag could leak from a survival server into a following non-survival
+connection. Both flags now reset. Docs: networking-plan section 25 updated to
+the v2 layout, survival-handshake table updated, mcgalaxy reference
+snapshots refreshed. NEXT SESSION: user wants an in-depth bug + quality pass
+across the whole stack; candidates listed in mcgalaxy session-notes.

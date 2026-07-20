@@ -44,6 +44,8 @@ static void Server_ResetState(void) {
 	Server.SupportsPartialMessages = false;
 	Server.SupportsFullCP437       = false;
 	Server.SupportsNotifyAction    = false;
+	Server.SupportsSurvival        = false;
+	Server.SurvivalExtVersion      = 0;
 }
 
 void Server_RetrieveTexturePack(const cc_string* url) {

@@ -99,7 +99,7 @@ static struct CpeExt
 	toggleBlockList_Ext = { "ToggleBlockList", 1 },
 	extTextures_Ext     = { "ExtendedTextures", 1 },
 	extBlocks_Ext       = { "ExtendedBlocks", 1 },
-	survival_Ext        = { "SurvivalTest", 1 };
+	survival_Ext        = { "SurvivalTest", 2 };
 
 static struct CpeExt* cpe_clientExtensions[] = {
 	&clickDist_Ext, &customBlocks_Ext, &heldBlock_Ext, &emoteFix_Ext, &textHotKey_Ext, &extPlayerList_Ext,
@@ -1047,7 +1047,8 @@ static void CPE_ExtEntry(cc_uint8* data) {
 	} else if (ext == &notifyAction_Ext) {
 		Server.SupportsNotifyAction = true;
 	} else if (ext == &survival_Ext) {
-		Server.SupportsSurvival = true;
+		Server.SupportsSurvival   = true;
+		Server.SurvivalExtVersion = ext->serverVersion;
 	}
 #ifdef EXTENDED_TEXTURES
 	else if (ext == &extTextures_Ext) {

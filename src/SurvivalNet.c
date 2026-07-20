@@ -85,19 +85,32 @@ static void SurvivalNet_HandleHello(cc_uint8* data) {
 }
 
 static void SurvivalNet_HandleWorldInfo(cc_uint8* data) {
-	/* v1 layout - SurvivalNet.cs SendWorldInfo:
-	   [id][ground:u8][water:u8][fluid][theme][flags(b0 floating)][sidesBlk][edgeBlk]
-	   (the fuller int16 heights + env colours of §25 are a deferred revision;
-	   colours ride the stock EnvColors CPE path meanwhile). */
-	cc_uint8 ground = data[1];
-	cc_uint8 water  = data[2];
-	cc_uint8 fluid  = data[3];
-	cc_uint8 theme  = data[4];
-	cc_uint8 flags  = data[5];
+	/* v2 layout (SurvivalTest ext version >= 2) - SurvivalNet.cs SendWorldInfo:
+	   [id][ground:i16 BE][water:i16 BE][fluid][theme][flags(b0 floating)][sidesBlk][edgeBlk]
+	   Floating maps have genuinely NEGATIVE levels (groundLevel -128 /
+	   waterLevel -127, hell -16) which v1's u8 fields clamped to 0 - the
+	   spurious dirt horizon plane visible under floating islands.
+	   v1 layout (legacy servers): same fields with ground/water as u8. */
+	int ground, water;
+	cc_uint8 fluid, theme, flags;
 	cc_string msg; char buf[STRING_SIZE];
 	String_InitArray(msg, buf);
 
-	String_Format4(&msg, "&7[survival] worldinfo: ground=%b water=%b theme=%b flags=%b",
+	if (Server.SurvivalExtVersion >= 2) {
+		ground = (cc_int16)(((cc_uint16)data[1] << 8) | data[2]);
+		water  = (cc_int16)(((cc_uint16)data[3] << 8) | data[4]);
+		fluid  = data[5];
+		theme  = data[6];
+		flags  = data[7];
+	} else {
+		ground = data[1];
+		water  = data[2];
+		fluid  = data[3];
+		theme  = data[4];
+		flags  = data[5];
+	}
+
+	String_Format4(&msg, "&7[survival] worldinfo: ground=%i water=%i theme=%b flags=%b",
 	               &ground, &water, &theme, &flags);
 	Chat_Add(&msg);
 

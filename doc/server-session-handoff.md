@@ -184,11 +184,12 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
    (`INV_FULL`/`INV_SLOT`/`CURSOR`), GuiContainer click model server-side,
    mine→pickup / place→consume bridge. Remaining: containers 0x22–0x24,
    recipes, `USE_ITEM`, per-id item tables, `PLAYER_EQUIP 0x50`.
-4. 🔶 **Phase 1 step 1 done — the Indev block set** (`SurvivalBlocks.cs`,
-   see §3 item 5): level-scoped BlockDefinitions + view-id bijection +
-   `/Survival give`. Next in phase 1: the Indev map generator port
-   (`IndevGen.c` is the reference), then `.mclevel` I/O (§18); placement
-   facing + `SURV_BLOCKMETA 0x40` after that.
+4. 🔶 **Phase 1 steps 1+2 done** — the Indev block set (`SurvivalBlocks.cs`,
+   see §3 item 5) and the world generator (`Generator/IndevGenerator.cs`,
+   ported from this repo's `IndevGen.c`; `/NewLvl name w h l indev [theme]
+   [type] [seed]`, maps come out survival-ready with genuine WORLDINFO
+   ground/water/fluid from the level env config). Next in phase 1:
+   `.mclevel` I/O (§18); placement facing + `SURV_BLOCKMETA 0x40` after.
 5. **Phase 5 drops** (`0x30–0x32`) — `SURV_DROP_ITEM` intents already arrive.
    Also unlocks: skeleton arrows, mob death drops, wool from shearing.
 
