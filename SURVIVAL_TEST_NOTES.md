@@ -5925,3 +5925,46 @@ ClassicPauseScreen_Init and DisconnectScreen (reconnect). All three now go
 through Widget_SetDisabled, which sets/clears only the DISABLED bit - the
 same helper the texture-pack button already used, so click/selection
 handling is unchanged.
+
+## 2026-07-20: phase 1 step 1 — the Indev block set on survival maps (server session)
+
+No client code changed. The server (mcgalaxy `SurvivalBlocks.cs`) now applies
+the full Indev block set to Indev-mode maps as level-scoped BlockDefinitions —
+a 1:1 port of IndevBlocks_Define (src/IndevTest.c): the same names, tiles
+(96-123), per-face container fronts on the -Z/+Z/-X/+X faces for views 71-82,
+farmland 15/16 height, sprite crops/torches, lamp brightness 14/15, classic
+fallback ids for pre-BlockDefs visitors. No new 0xB0 messages and no ext bump
+(stock CPE DefineBlock/DefineBlockExt v2/UndefineBlock), so the wire contract
+is untouched. The IndevTest_BlockToIndev/_FromIndev/BlockDataMeta bijection is
+ported as SurvivalBlocks.ToIndev/FromIndev/DataMeta/ApplyDataMeta — the
+authoritative view-id <-> (id, Data nibble) encoding for the upcoming server
+generator + .mclevel steps, exactly the §18.2 model.
+
+Confirmed during integration: on SURV_HELLO(mode=Indev) this client runs
+IndevTest_NetworkModeChanged -> IndevTest_MapActivate -> IndevBlocks_Define,
+i.e. the fork DOES locally (re)define the genuine models over the server defs
+in MP (torch stick, fire mesh, wall-torch tilt, and the SetHardness table ride
+along). The server-session-handoff claim that the client never self-defines on
+server maps was stale and has been corrected. Server defs are what stock CPE
+spectators render; the ones this client briefly shows between map load and
+HELLO are visually identical tiles.
+
+Server-side verified live (fork client + synthetic BlockDefs CPE client):
+37 defs stream on join; /Survival off -> 37 undefines, /Survival indev ->
+re-apply; /Survival give torch|chest|workbench|furnace -> INV_FULL echo with
+genuine item icons + held torch model; in-reach place consumed (x4->x3),
+break picked back up (x3->x4); un-owned lit-furnace place reverted without
+consuming; reach-rejected far place consumed nothing; classic dirt mining
+still yields its block. Mining view ids normalizes (facing views -> canonical,
+lit furnace -> idle, wall torch -> torch, farmland -> dirt); crops/fire/
+sources yield nothing until items/drops exist.
+
+Test-rig note (not a code issue): this environment's hand-assembled
+default.zip lacked the beta-jar terrain tiles 96+, so hotbar icons rendered
+as the blue placeholder cells until the rig's terrain.png was patched with
+the b1.7.3 jar tiles per the Resources.c beta_tiles table (a normal install
+patches these on first-run asset download). Also: the test map's spawn was
+buried 2 blocks under the surface, which at night produced a mob-attack /
+suffocation death loop — the death dwell + 30 s safety revive cycled exactly
+as designed throughout; grounding only fixes FLOATING spawns, so a buried
+spawn may deserve the same auto-fix treatment some session.

@@ -133,12 +133,17 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
    (`SURV_MOB_STATE` has an onFire bit for mobs; the player needs a carrier,
    e.g. a reserved bit or a small `SURV_PLAYER_STATE` message — bump the ext
    version if you add one).
-5. **Custom blocks on Indev maps** (your phase 1): until you send
-   `BlockDefinitions` for the Indev ids (torch 50, fire 51, sources 52/53,
-   chest 54, gears 55, diamond 56/57, workbench 58, furnace 61/62, farmland
-   83/84, crops 85–92, wall torches 94–97 — the authoritative table is
-   `IndevBlocks_Define` in `src/IndevTest.c`), those ids render as CPE
-   defaults. The client does NOT locally define blocks on server maps.
+5. ~~**Custom blocks on Indev maps** (your phase 1)~~ ✅ done (server
+   `SurvivalBlocks.cs`): Indev-mode maps carry the full block set as
+   level-scoped BlockDefinitions (1:1 port of `IndevBlocks_Define` — torch 50,
+   fire 51, sources 52/53, chest 54, gears 55, diamond 56/57, workbench 58,
+   furnace 61/62, views 71–82, farmland 83/84, crops 85–92, wall torches
+   94–97), applied/stripped live with the survival mode, with classic fallback
+   ids for pre-BlockDefs clients. *(Correction to the line that used to be
+   here: the fork client DOES locally define the set on server maps — a
+   `SURV_HELLO(mode=Indev)` runs `IndevTest_NetworkModeChanged` →
+   `IndevBlocks_Define`, restoring the genuine torch/fire/wall-torch models
+   over the server defs. The server defs are what stock CPE clients render.)*
 
    **Architecture decision (user-approved): metadata is the MODEL, the
    multi-id table is the VIEW/WIRE ENCODING.** Store level data server-side
@@ -146,7 +151,12 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
    the genuine sim logic). Translate on the wire only: outbound SetBlock maps
    `(id, meta)` -> the view id (crop stage 3 -> 88, chest facing -> 71-74,
    etc. — the client's `IndevTest_BlockToIndev`/`_FromIndev` pair is the
-   authoritative bijection, port it); inbound SetBlock from any client maps
+   authoritative bijection, ported as `SurvivalBlocks.ToIndev/FromIndev/`
+   `DataMeta/ApplyDataMeta`. As landed, the server's LEVEL ARRAY holds view
+   ids — the classic protocol reads it directly — and the bijection runs at
+   the I/O boundaries (`.mclevel`, generator, sim logic), which §18.2 of the
+   networking plan endorses: view id ≡ (id, meta) losslessly for every
+   visible state); inbound SetBlock from any client maps
    the view id back to `(id, meta)` before your sim logic runs. Result:
    EVERY CPE client (stock ClassiCube included) watches crops grow and
    furnaces light over plain SetBlock + BlockDefinitions — no sub-protocol
@@ -170,10 +180,16 @@ snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
    need phase-5 wire), brightness = sky-exposure x day/night approximation,
    explosions damage players but never blocks, no drops, mobs freeze on
    empty maps and don't persist across server restarts.
-3. **Phase 4 inventory** (`0x20–0x25`, `0x50`) — the client's survival
-   inventory UI re-enables in MP once you stream it; `SLOT_CLICK`/`RESULT_CLICK`
-   /`CONT_CLOSE` senders are already written.
-4. **Phase 5 drops** (`0x30–0x32`) — `SURV_DROP_ITEM` intents already arrive.
+3. ~~**Phase 4 inventory** (`0x20–0x25`)~~ 🔶 first slice done: full streaming
+   (`INV_FULL`/`INV_SLOT`/`CURSOR`), GuiContainer click model server-side,
+   mine→pickup / place→consume bridge. Remaining: containers 0x22–0x24,
+   recipes, `USE_ITEM`, per-id item tables, `PLAYER_EQUIP 0x50`.
+4. 🔶 **Phase 1 step 1 done — the Indev block set** (`SurvivalBlocks.cs`,
+   see §3 item 5): level-scoped BlockDefinitions + view-id bijection +
+   `/Survival give`. Next in phase 1: the Indev map generator port
+   (`IndevGen.c` is the reference), then `.mclevel` I/O (§18); placement
+   facing + `SURV_BLOCKMETA 0x40` after that.
+5. **Phase 5 drops** (`0x30–0x32`) — `SURV_DROP_ITEM` intents already arrive.
    Also unlocks: skeleton arrows, mob death drops, wool from shearing.
 
 Integration testing: the client session verified everything by build + code
