@@ -2922,7 +2922,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		} else if (IndevTest_Enabled && s->texF > 0.0f) {
 			/* genuine anchors: dx from (guiLeft+51), dy from (guiTop+25)
 			    (= 75 - 50), both in genuine GUI px (mouse / texF) */
-			dx = ((float)s->panelX + 51.0f * s->texF - (float)s->mouseX) / s->texF;
+			dx = ((float)s->dollBoxX + 25.0f * s->texF - (float)s->mouseX) / s->texF;
 			dy = ((float)s->panelY + 25.0f * s->texF - (float)s->mouseY) / s->texF;
 		} else {
 			float eyeY = (float)boxY + (float)boxH * (20.0f / 70.0f);
@@ -2988,7 +2988,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		    glRotatef about X) rides on top, so vertical mouse movement
 		    tips the CAMERA over the doll rather than bending the body. */
 		if (IndevTest_Enabled && s->texF > 0.0f) {
-			px = ((float)s->panelX + 51.0f * s->texF) - (float)(boxX + 1);
+			px = ((float)s->dollBoxX + 25.0f * s->texF) - (float)(boxX + 1);
 			py = ((float)s->panelY + 75.0f * s->texF) - (float)(boxY + 1);
 		} else {
 			px = (float)(boxSize - 2) * 0.5f;
@@ -3194,23 +3194,17 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
 			Texture_Render(&panel);
 		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
-			/* /Inventory view: inventory.png (176x166) shows the TARGET's 40
-			    slots pocket-style on top, then the container.png player strip
-			    (v126..222, 96 texels) below it for the VIEWER's own inventory
-			    - a dual-inventory drag window. */
-			GfxResourceID strip = IndevTest_ContGuiTex();
-			panel.width  = (cc_uint16)s->panelW;
+			/* /Inventory view: two inventory.png panels side by side - the TARGET's
+			    40 slots (left, via the container cells) and the VIEWER's own
+			    inventory (right) - a dual-inventory drag window. */
+			panel.width  = (cc_uint16)(int)(176 * s->texF);
 			panel.height = (cc_uint16)(int)(166 * s->texF);
 			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
 			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
-			Texture_Render(&panel);
-			if (strip) {
-				panel.ID     = strip;
-				panel.y      = (short)(s->panelY + (int)(166 * s->texF));
-				panel.height = (cc_uint16)(int)(96 * s->texF);
-				panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
-				Texture_Render(&panel);
-			}
+			Texture_Render(&panel);                             /* left: target */
+			panel.x = (short)(s->panelX + (int)((176 + 8) * s->texF));
+			Texture_Render(&panel);                             /* right: own */
+			panel.x = (short)s->panelX;
 		} else {
 			panel.width  = (cc_uint16)s->panelW;
 			panel.height = (cc_uint16)s->panelH;
@@ -3441,10 +3435,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		} else if (contKind == INDEV_CONTAINER_FURNACE) {
 			name = &s->lblFurnace; nx = 60;
 		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
-			/* No top title (the target's name isn't known client-side); the
-			    "Inventory" label sits above the viewer's own bottom strip at
-			    ySize-96+2 = (166+96)-96+2 = 168. */
-			invY = 166 + 2;
+			/* Two side-by-side inventory panels; no captions (the target's name
+			    isn't known client-side, and both panels are self-evidently invs). */
+			invY = -1;
 		} else if (workbench) {
 			name = &s->lblCrafting; nx = 28;
 		} else if (s->lblCrafting.ID) {
@@ -3463,11 +3456,12 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	}
 
-	/* 3D paperdoll (only the pocket inventory has a doll window; the */
-	/*  workbench/chest/furnace GUIs have none). Genuine draws it in the */
-	/*  background layer; ours last for viewport reasons (accepted). */
+	/* 3D paperdoll (the pocket inventory has a doll window; so does the RIGHT
+	    (viewer's own) panel of the /Inventory view - the doll is the LOCAL
+	    player, so it belongs there. The workbench/chest/furnace GUIs have none). */
 	if (SurvivalTest_CraftDim() != 3 &&
-		IndevTest_OpenKind() == INDEV_CONTAINER_NONE) SurvivalInv_RenderDoll(s);
+		(IndevTest_OpenKind() == INDEV_CONTAINER_NONE ||
+		 IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV)) SurvivalInv_RenderDoll(s);
 }
 
 static void SurvivalInvScreen_Init(void* screen) {
@@ -3603,18 +3597,26 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		int var3  = (rows - 4) * 18;
 		float f = s->slotSize / 18.0f;
 		s->texF   = f;
-		s->panelW = (int)(176 * f);
-		/* PLAYERINV stacks inventory.png (166) over the container.png player */
-		/*  strip (96) - one texture per inventory in the dual-inventory window. */
-		s->panelH = (int)((playerInv ? (166 + 96) : (chest ? (114 + rows * 18) : 166)) * f);
+		/* PLAYERINV is two inventory.png panels side by side (target on the left,
+		    the viewer's own on the right, 8px apart); everything else is the
+		    single 176-wide panel. */
+		s->panelW = (int)((playerInv ? (176 + 8 + 176) : 176) * f);
+		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
-		s->gridX   = s->panelX + (int)(8   * f);
-		/* PLAYERINV: the VIEWER's own inventory is the bottom strip, so its slots */
-		/*  sit at the strip-local storage(14)/hotbar(72) offsets past the 166 base. */
-		s->gridY   = s->panelY + (int)((playerInv ? (166 + 14) : (chest ? (103 + var3) : 84))  * f);
-		s->hotY    = s->panelY + (int)((playerInv ? (166 + 72) : (chest ? (161 + var3) : 142)) * f);
+		if (playerInv) {
+			/* the viewer's OWN storage/hotbar live in the RIGHT panel (the target's
+			    40 cells go in the left panel via SurvivalInv_ContainerSlotXY). */
+			int rightX = s->panelX + (int)((176 + 8) * f);
+			s->gridX = rightX + (int)(8   * f);
+			s->gridY = s->panelY + (int)(84  * f);
+			s->hotY  = s->panelY + (int)(142 * f);
+		} else {
+			s->gridX = s->panelX + (int)(8   * f);
+			s->gridY = s->panelY + (int)((chest ? (103 + var3) : 84)  * f);
+			s->hotY  = s->panelY + (int)((chest ? (161 + var3) : 142) * f);
+		}
 		if (SurvivalTest_CraftDim() == 3) {
 			/* GuiCrafting (crafting.png): 3x3 grid at (30,17), result (124,35), */
 			/*  no paperdoll window. */
@@ -3632,7 +3634,9 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  not square, so legs aren't clipped. dollBoxSize stays the WIDTH */
 		/*  (mouse-follow + horizontal centring key off it); dollBoxH is the */
 		/*  viewport height. */
-		s->dollBoxX    = s->panelX + (int)(26 * f);
+		/* PLAYERINV: the doll shows the LOCAL player, so it belongs in the RIGHT
+		    (viewer's own) panel; the left/target panel's doll window stays empty. */
+		s->dollBoxX    = s->panelX + (int)((playerInv ? (176 + 8 + 26) : 26) * f);
 		s->dollBoxY    = s->panelY + (int)(8  * f);
 		s->dollBoxSize = (int)(48 * f);
 		s->dollBoxH    = (int)(68 * f);

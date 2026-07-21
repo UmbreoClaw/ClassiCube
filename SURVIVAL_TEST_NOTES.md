@@ -6256,3 +6256,18 @@ target paperdoll window is left empty (the client isn't told whose inventory it 
 Verified in the graphical rig via gdb-injected IndevTest_NetContOpen(3,40) +
 NetContSlot samples: armor column, storage grid, hotbar and the viewer's own strip
 all render in the right cells.
+
+### Revision: side-by-side panels (not stacked)
+
+The first cut stacked inventory.png over the container.png player strip, which read
+as broken (tall, seamed, empty middle). Replaced with TWO inventory.png panels side
+by side: LEFT = the target's 40 cells (via the container cells), RIGHT = the
+viewer's own inventory. Layout: panelW = 176+8+176, both panels 166 tall; the
+viewer's own gridX/gridY/hotY point at the right panel (panelX + 184 + 8). The
+paperdoll (which renders the LOCAL player) moved to the RIGHT panel's doll window
+(dollBoxX = panelX + 184 + 26); RenderDoll is enabled for PLAYERINV, and its two
+hardcoded `panelX + 51*texF` model-anchor references became `dollBoxX + 25*texF`
+(identical for the normal single panel, correct for the right panel here). The
+LEFT/target doll window stays empty (the client isn't told the target's entity).
+Verified via gdb-injected NetContOpen(3,40) + NetContSlot/NetInvSlot samples: two
+filled inventories side by side with the viewer's doll in the right one.
