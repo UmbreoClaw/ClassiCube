@@ -6226,3 +6226,12 @@ Flint&steel -> fire is deferred with the phase-5 fire spread/burnout ticks.
 Verified live server-authoritative (via /Export + /SurvInv): grass tilled to
 genuine farmland (60), hoe took 1 durability, seeds planted a genuine crop (59)
 and consumed one, bread was eaten out of the stack.
+
+## Handoff note (branch)
+
+Continue this work on the EXISTING feature branch
+`claude/mock-survival-server-33jx1q` on BOTH repos (UmbreoClaw/ClassiCube and
+UmbreoClaw/mcgalaxy) - do NOT create a new branch. The full next-session plan
+(pending live-verification items, the /inventory GUI design, spectate, block
+drops) lives in mcgalaxy `doc/survival-support/session-notes.md` under
+"HANDOFF - next session pickup".
