@@ -2877,13 +2877,15 @@ static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
 /*  + rotZ 180, dx/dy from (51, 25) with the atan(d/40)*20/40 tracking, */
 /*  camera tilt glRotatef(-atan(dy/40)*20, 1,0,0). The classic-mode doll box */
 /*  is our own invention (c0.30-s has no doll) and keeps its approximation. */
-static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
-	struct Entity* p = &Entities.CurPlayer->Base;
+/* Renders entity `p`'s paperdoll into the (boxX,boxY,boxSize,boxH) window. The
+    /Inventory view calls this twice (the local player on the right, the target on
+    the left); the normal inventory uses the SurvivalInv_RenderDoll wrapper below. */
+static void SurvivalInv_RenderDollAt(struct SurvivalInvScreen* s, struct Entity* p,
+                                     int boxX, int boxY, int boxSize, int boxH) {
 	struct Matrix proj, savedView;
 	float aspect;
-	int boxX = s->dollBoxX, boxY = s->dollBoxY, boxSize = s->dollBoxSize;
-	int boxH  = s->dollBoxH > 0 ? s->dollBoxH : s->dollBoxSize;
-	if (boxSize <= 0) return;
+	if (boxH <= 0) boxH = boxSize;
+	if (boxSize <= 0 || !p) return;
 
 	/* Use the player's skin when it has one; otherwise fall back to the */
 	/*  default char.png. In singleplayer with no ClassiCube skin, the local */
@@ -2922,7 +2924,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		} else if (IndevTest_Enabled && s->texF > 0.0f) {
 			/* genuine anchors: dx from (guiLeft+51), dy from (guiTop+25)
 			    (= 75 - 50), both in genuine GUI px (mouse / texF) */
-			dx = ((float)s->dollBoxX + 25.0f * s->texF - (float)s->mouseX) / s->texF;
+			dx = ((float)boxX + 25.0f * s->texF - (float)s->mouseX) / s->texF;
 			dy = ((float)s->panelY + 25.0f * s->texF - (float)s->mouseY) / s->texF;
 		} else {
 			float eyeY = (float)boxY + (float)boxH * (20.0f / 70.0f);
@@ -2988,7 +2990,7 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		    glRotatef about X) rides on top, so vertical mouse movement
 		    tips the CAMERA over the doll rather than bending the body. */
 		if (IndevTest_Enabled && s->texF > 0.0f) {
-			px = ((float)s->dollBoxX + 25.0f * s->texF) - (float)(boxX + 1);
+			px = ((float)boxX + 25.0f * s->texF) - (float)(boxX + 1);
 			py = ((float)s->panelY + 75.0f * s->texF) - (float)(boxY + 1);
 		} else {
 			px = (float)(boxSize - 2) * 0.5f;
@@ -3047,6 +3049,12 @@ static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
 		Gfx_LoadMatrix(MATRIX_PROJ, &ortho);
 		Gfx_LoadMatrix(MATRIX_VIEW, &Matrix_Identity);
 	}
+}
+
+/* The normal inventory / right-panel doll: the local player in the screen's box. */
+static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
+	SurvivalInv_RenderDollAt(s, &Entities.CurPlayer->Base,
+		s->dollBoxX, s->dollBoxY, s->dollBoxSize, s->dollBoxH);
 }
 
 static void SurvivalInvScreen_BuildMesh(void* screen) {
@@ -3257,10 +3265,15 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_Draw2DFlat(s->panelX,     s->panelY,     pw,     s->panelH,     panelBg);
 		Gfx_Draw2DFlat(rx - 2,        s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
 		Gfx_Draw2DFlat(rx,            s->panelY,     pw,     s->panelH,     panelBg);
-		/* the viewer's doll window (right panel) gets its recessed frame */
+		/* both doll windows get a recessed frame: right = viewer, left = target */
 		b = s->dollBoxSize;
 		Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
 		Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		{
+			int ldx = s->panelX + (int)(26 * s->texF);
+			Gfx_Draw2DFlat(ldx,     s->dollBoxY,     b,     b,     panelBorder);
+			Gfx_Draw2DFlat(ldx + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		}
 	} else {
 		/* Panel: outer dark border then light-grey fill */
 		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
@@ -3471,12 +3484,24 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	}
 
-	/* 3D paperdoll (the pocket inventory has a doll window; so does the RIGHT
-	    (viewer's own) panel of the /Inventory view - the doll is the LOCAL
-	    player, so it belongs there. The workbench/chest/furnace GUIs have none). */
-	if (SurvivalTest_CraftDim() != 3 &&
-		(IndevTest_OpenKind() == INDEV_CONTAINER_NONE ||
-		 IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV)) SurvivalInv_RenderDoll(s);
+	/* 3D paperdolls. The pocket inventory and the RIGHT panel of the /Inventory
+	    view show the LOCAL player (RenderDoll). The /Inventory LEFT panel shows
+	    the TARGET's model, if the server sent an entity id the viewer can see
+	    (same level). The workbench/chest/furnace GUIs have no doll. */
+	if (SurvivalTest_CraftDim() != 3) {
+		int kind = IndevTest_OpenKind();
+		if (kind == INDEV_CONTAINER_NONE || kind == INDEV_CONTAINER_PLAYERINV)
+			SurvivalInv_RenderDoll(s);
+		if (kind == INDEV_CONTAINER_PLAYERINV) {
+			int tid = IndevTest_NetContTargetId();
+			struct Entity* tgt = (tid >= 0 && tid < ENTITIES_SELF_ID) ? Entities.List[tid] : NULL;
+			if (tgt) {
+				float f = s->texF;
+				SurvivalInv_RenderDollAt(s, tgt, s->panelX + (int)(26 * f),
+					s->panelY + (int)(8 * f), (int)(48 * f), (int)(68 * f));
+			}
+		}
+	}
 }
 
 static void SurvivalInvScreen_Init(void* screen) {

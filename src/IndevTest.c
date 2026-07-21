@@ -1284,16 +1284,26 @@ static struct SurvivalSlot indev_netCont[SURVIVAL_CONTAINER_MAX];
 static int indev_netContLarge;  /* chest with 54 slots (renders the double GUI) */
 static int indev_netBurn, indev_netCook; /* FURN_PROG: pre-scaled 0..12 / 0..24 */
 
+static int indev_netContTargetId = -1; /* PLAYERINV: the target's entity id as the
+    viewer sees it (-1 = none/not visible), for the left-panel paperdoll. */
+
 void IndevTest_NetContOpen(int kind, int slots) {
 	if (slots < 0) slots = 0;
 	if (slots > SURVIVAL_CONTAINER_MAX) slots = SURVIVAL_CONTAINER_MAX;
 	indev_netContKind  = kind;
 	indev_netContSlots = slots;
 	indev_netContLarge = kind == INDEV_CONTAINER_CHEST && slots > SURVIVAL_CONTAINER_SLOTS;
+	indev_netContTargetId = -1;
 	indev_netBurn = 0; indev_netCook = 0;
 	Mem_Set(indev_netCont, 0, sizeof(indev_netCont));
 	SurvivalTest_MarkInvDirty();
 }
+
+/* PLAYERINV: record the target entity id the server sent (0xFF = not visible). */
+void IndevTest_NetContTarget(int entityId) {
+	indev_netContTargetId = (entityId >= 0 && entityId < 255) ? entityId : -1;
+}
+int IndevTest_NetContTargetId(void) { return indev_netContTargetId; }
 
 void IndevTest_NetContSlot(int i, int id, int count, int dmg) {
 	if (!indev_netContKind || i < 0 || i >= indev_netContSlots) return;
@@ -1322,6 +1332,7 @@ int IndevTest_OpenKind(void) {
 void IndevTest_CloseContainer(void) {
 	indev_openTE = -1; indev_openTE2 = -1;
 	indev_netContKind = 0; indev_netContSlots = 0; indev_netContLarge = 0;
+	indev_netContTargetId = -1;
 	indev_netBurn = 0; indev_netCook = 0;
 }
 
