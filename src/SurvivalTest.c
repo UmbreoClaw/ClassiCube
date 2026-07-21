@@ -7130,12 +7130,15 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 	if (!World_Contains(pos.x, pos.y, pos.z)) return false;
 	block = World_GetBlock(pos.x, pos.y, pos.z);
 
-	/* MP: containers are SERVER state - the right-click leaves as a
-	    SURV_USE_ITEM intent and the GUI opens when SURV_CONT_OPEN answers
-	    (streamed into the net container view). The click is consumed for any
-	    container/workbench block, like genuine blockActivated. */
+	/* MP: containers AND item-on-block uses (hoe tilling, seed planting) are
+	    SERVER state - the right-click leaves as a SURV_USE_ITEM intent and the
+	    server answers with SURV_CONT_OPEN / the resulting block + inventory
+	    changes. The click is consumed like genuine blockActivated/onItemUse. */
 	if (SurvivalNet_ServerDriven()) {
-		if (!IndevTest_IsWorkbench(block) && !IndevTest_IsContainerBlock(block)) return false;
+		int heldId = st_inv[Inventory.SelectedIndex].id;
+		cc_bool container = IndevTest_IsWorkbench(block) || IndevTest_IsContainerBlock(block);
+		cc_bool itemUse   = IndevTest_IsHoe(heldId) || heldId == 256 + 39; /* Seeds */
+		if (!container && !itemUse) return false;
 		SurvivalNet_SendUseItem(Inventory.SelectedIndex, pos.x, pos.y, pos.z,
 		                        (int)Game_SelectedPos.closest);
 		return true;
@@ -7166,7 +7169,18 @@ cc_bool SurvivalTest_TryEat(void) {
 	int slot;
 	BlockID block;
 	if (!SurvivalTest_Enabled) return false;
-	if (SurvivalNet_ServerDriven()) return false; /* MP: eating = server intent (phase 4) */
+
+	/* MP: eating is a SERVER intent. A held food leaves as a targetless
+	    SURV_USE_ITEM (sentinel coords) so the server takes the eat path
+	    (heal + consume, soup -> bowl) and pushes SURV_HEALTH + the slot. */
+	if (SurvivalNet_ServerDriven()) {
+		slot = Inventory.SelectedIndex;
+		if (st_inv[slot].count > 0 && IndevTest_ItemFoodHeal(st_inv[slot].id) > 0) {
+			SurvivalNet_SendUseItem(slot, -1, -1, -1, 0xFF);
+			return true;
+		}
+		return false;
+	}
 
 	slot  = Inventory.SelectedIndex;
 	if (st_inv[slot].count <= 0) return false;

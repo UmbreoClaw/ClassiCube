@@ -6200,3 +6200,29 @@ real MP session - faced furnace (76) / chest (72), double chest ok, triple
 refused with the original wall block restored, wall torch mounts on the
 placed furnace (94), floating torch and pillar(63) refused, consumption
 counts exact, def stream audited via the synthetic CPE client.
+
+## 2026-07-21: MP right-click item intents (hoe / seeds / food)
+
+The client now forwards held-item right-clicks to the server as SURV_USE_ITEM,
+where before only container blocks did:
+
+- SurvivalTest_TryUseBlock (ServerDriven branch): sends USE_ITEM when the held
+  item is a hoe or seeds (targeted at the clicked block), in addition to the
+  existing workbench/chest/furnace container opens.
+- SurvivalTest_TryEat (ServerDriven branch): a held food is now sent as a
+  TARGETLESS USE_ITEM - sentinel coords (-1,-1,-1, face 0xFF) - so the server
+  takes the eat path. Previously eating was a no-op in MP.
+
+No new wire message: USE_ITEM's existing [heldSlot][x i16][y i16][z i16][face]
+layout carries it, with x=-1 signalling "no target block" (eat / use-in-air).
+The server applies the effect and streams back the block change + SURV_HEALTH +
+the affected inventory slot, so the client just renders the authoritative
+result (it runs none of the hoe/seed/eat logic locally when ServerDriven).
+
+Server side (MCGalaxy): hoe -> farmland (+1 durability, grass 1/8 seed), seeds
+-> crop + consume, food -> heal + consume (soup -> bowl), damageItem tool wear.
+Flint&steel -> fire is deferred with the phase-5 fire spread/burnout ticks.
+
+Verified live server-authoritative (via /Export + /SurvInv): grass tilled to
+genuine farmland (60), hoe took 1 durability, seeds planted a genuine crop (59)
+and consumed one, bread was eaten out of the stack.
