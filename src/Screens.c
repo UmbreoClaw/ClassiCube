@@ -3202,7 +3202,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
 			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
 			Texture_Render(&panel);                             /* left: target */
-			panel.x = (short)(s->panelX + (int)((176 + 8) * s->texF));
+			panel.x = (short)(s->panelX + (int)((176 + 16) * s->texF));
 			Texture_Render(&panel);                             /* right: own */
 			panel.x = (short)s->panelX;
 		} else {
@@ -3248,15 +3248,30 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		    (drawGuiContainerForegroundLayer, above even the held stack). */
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	} else {
-	/* Panel: outer dark border then light-grey fill */
-	Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
-	Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
-
-	/* Paperdoll preview box: recessed dark square (not in container GUIs) */
-	if (contKind == INDEV_CONTAINER_NONE) {
+	if (contKind == INDEV_CONTAINER_PLAYERINV) {
+		/* No inventory texture: draw TWO separate flat inventory panels side by
+		    side (target left, viewer right) - never one combined panel. */
+		int pw = (int)(176 * s->texF);
+		int rx = s->panelX + (int)((176 + 16) * s->texF);
+		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
+		Gfx_Draw2DFlat(s->panelX,     s->panelY,     pw,     s->panelH,     panelBg);
+		Gfx_Draw2DFlat(rx - 2,        s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
+		Gfx_Draw2DFlat(rx,            s->panelY,     pw,     s->panelH,     panelBg);
+		/* the viewer's doll window (right panel) gets its recessed frame */
 		b = s->dollBoxSize;
 		Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
 		Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+	} else {
+		/* Panel: outer dark border then light-grey fill */
+		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
+		Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
+
+		/* Paperdoll preview box: recessed dark square (not in container GUIs) */
+		if (contKind == INDEV_CONTAINER_NONE) {
+			b = s->dollBoxSize;
+			Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
+			Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		}
 	}
 
 	/* Slot backgrounds (storage + craft grid + result): recessed bevel */
@@ -3600,7 +3615,7 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/* PLAYERINV is two inventory.png panels side by side (target on the left,
 		    the viewer's own on the right, 8px apart); everything else is the
 		    single 176-wide panel. */
-		s->panelW = (int)((playerInv ? (176 + 8 + 176) : 176) * f);
+		s->panelW = (int)((playerInv ? (176 + 16 + 176) : 176) * f);
 		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
@@ -3608,7 +3623,7 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		if (playerInv) {
 			/* the viewer's OWN storage/hotbar live in the RIGHT panel (the target's
 			    40 cells go in the left panel via SurvivalInv_ContainerSlotXY). */
-			int rightX = s->panelX + (int)((176 + 8) * f);
+			int rightX = s->panelX + (int)((176 + 16) * f);
 			s->gridX = rightX + (int)(8   * f);
 			s->gridY = s->panelY + (int)(84  * f);
 			s->hotY  = s->panelY + (int)(142 * f);
@@ -3636,7 +3651,7 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  viewport height. */
 		/* PLAYERINV: the doll shows the LOCAL player, so it belongs in the RIGHT
 		    (viewer's own) panel; the left/target panel's doll window stays empty. */
-		s->dollBoxX    = s->panelX + (int)((playerInv ? (176 + 8 + 26) : 26) * f);
+		s->dollBoxX    = s->panelX + (int)((playerInv ? (176 + 16 + 26) : 26) * f);
 		s->dollBoxY    = s->panelY + (int)(8  * f);
 		s->dollBoxSize = (int)(48 * f);
 		s->dollBoxH    = (int)(68 * f);

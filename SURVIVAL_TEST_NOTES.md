@@ -6271,3 +6271,16 @@ hardcoded `panelX + 51*texF` model-anchor references became `dollBoxX + 25*texF`
 LEFT/target doll window stays empty (the client isn't told the target's entity).
 Verified via gdb-injected NetContOpen(3,40) + NetContSlot/NetInvSlot samples: two
 filled inventories side by side with the viewer's doll in the right one.
+
+### Fix: two SEPARATE panels in the non-textured fallback
+
+Root cause of the "combined screen": when gui/inventory.png isn't in the texture
+pack (IndevTest_InvGuiTex()==0), rendering falls to the flat procedural path,
+which had no PLAYERINV case and drew ONE panel spanning panelW (both halves) - a
+single combined screen. Added a PLAYERINV branch there that draws TWO separate
+flat panels (each 176 wide, own border) with the viewer's doll box on the right,
+then the shared slot-bevel loop. Inter-panel gap widened 8 -> 16 so the two read
+as distinct screens (world visible between them). The textured path already drew
+two inventory.png panels; both paths now match. Verified in the rig (textures
+absent, so this is the fallback): two bordered inventory panels side by side, gap
+between, viewer's doll framed in the right one.
