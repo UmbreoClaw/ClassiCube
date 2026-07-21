@@ -6235,3 +6235,24 @@ UmbreoClaw/mcgalaxy) - do NOT create a new branch. The full next-session plan
 (pending live-verification items, the /inventory GUI design, spectate, block
 drops) lives in mcgalaxy `doc/survival-support/session-notes.md` under
 "HANDOFF - next session pickup".
+
+## /Inventory dedicated panel (SurvivalTest v3, CONT_OPEN kind 5)
+
+The server's /Inventory viewer now opens a bespoke player-inventory panel instead
+of reusing the chest GUI. New internal kind INDEV_CONTAINER_PLAYERINV (IndevTest.h),
+mapped from wire kind 5 in SurvivalNet_HandleContOpen. The ext version bumped to 3
+(Protocol.c) - the server (mcgalaxy) sends kind 5 / 40 cells to v3 clients and the
+chest fallback (kind 1 / 36) to older ones.
+
+Screens.c renders it as a DUAL-INVENTORY window: inventory.png on top shows the
+TARGET's 40 slots laid out pocket-style (27 storage + 9 hotbar + 4 armor column,
+helmet on top), and the container.png player strip below shows the VIEWER's own
+36 slots for drag-transfer. Cell layout in SurvivalInv_ContainerSlotXY: 0..26
+storage grid (8,84), 27..35 hotbar (8,142), 36..39 armor (8, 8/26/44/62). The rest
+of the survival-inv screen (hit-test, content, damage overlays, DisplaySlot split
+of own-strip vs container) already generalised to a 40-cell net container. The
+target paperdoll window is left empty (the client isn't told whose inventory it is).
+
+Verified in the graphical rig via gdb-injected IndevTest_NetContOpen(3,40) +
+NetContSlot samples: armor column, storage grid, hotbar and the viewer's own strip
+all render in the right cells.

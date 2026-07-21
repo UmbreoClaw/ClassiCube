@@ -2663,8 +2663,9 @@ static int SurvivalInv_CraftCells(void) {
 /*  furnace 3 (input/fuel/output). */
 static int SurvivalInv_ContainerCells(void) {
 	switch (IndevTest_OpenKind()) {
-	case INDEV_CONTAINER_CHEST:   return IndevTest_ContainerSlotCount();
-	case INDEV_CONTAINER_FURNACE: return 3;
+	case INDEV_CONTAINER_CHEST:     return IndevTest_ContainerSlotCount();
+	case INDEV_CONTAINER_PLAYERINV: return IndevTest_ContainerSlotCount(); /* 40 */
+	case INDEV_CONTAINER_FURNACE:   return 3;
 	default: return 0;
 	}
 }
@@ -2685,6 +2686,22 @@ static void SurvivalInv_ContainerSlotXY(struct SurvivalInvScreen* s, int i, int*
 		case 1:  *ox = s->panelX + (int)( 56 * f); *oy = s->panelY + (int)(53 * f); return;
 		default: *ox = s->panelX + (int)(116 * f); *oy = s->panelY + (int)(35 * f); return;
 		}
+	}
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV) {
+		/* the 40 target cells map onto the genuine inventory.png pocket layout:
+		    0..26 storage grid at (8,84), 27..35 hotbar at (8,142), 36..39 the
+		    armor column at (8, 8/26/44/62) with the helmet (cell 39) on top. */
+		if (i < 27) {
+			*ox = s->panelX + (int)((8 + (i % 9) * 18) * f);
+			*oy = s->panelY + (int)((84 + (i / 9) * 18) * f);
+		} else if (i < 36) {
+			*ox = s->panelX + (int)((8 + (i - 27) * 18) * f);
+			*oy = s->panelY + (int)(142 * f);
+		} else {
+			*ox = s->panelX + (int)(8 * f);
+			*oy = s->panelY + (int)((8 + (3 - (i - 36)) * 18) * f);
+		}
+		return;
 	}
 	*ox = s->panelX + (int)((8  + (i % 9) * 18) * f);
 	*oy = s->panelY + (int)((18 + (i / 9) * 18) * f);
@@ -3127,8 +3144,9 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	int contKind      = IndevTest_OpenKind();
 	cc_bool workbench = IndevTest_Enabled && SurvivalTest_CraftDim() == 3;
 	GfxResourceID guiTex;
-	if (contKind == INDEV_CONTAINER_CHEST)        guiTex = IndevTest_ContGuiTex();
-	else if (contKind == INDEV_CONTAINER_FURNACE) guiTex = IndevTest_FurnGuiTex();
+	if (contKind == INDEV_CONTAINER_CHEST)          guiTex = IndevTest_ContGuiTex();
+	else if (contKind == INDEV_CONTAINER_FURNACE)   guiTex = IndevTest_FurnGuiTex();
+	else if (contKind == INDEV_CONTAINER_PLAYERINV) guiTex = IndevTest_InvGuiTex();
 	else guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
 
 	/* GuiContainer.drawScreen begins with drawDefaultBackground(): a
@@ -3175,6 +3193,24 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			panel.height = (cc_uint16)(int)(96 * s->texF);
 			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
 			Texture_Render(&panel);
+		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
+			/* /Inventory view: inventory.png (176x166) shows the TARGET's 40
+			    slots pocket-style on top, then the container.png player strip
+			    (v126..222, 96 texels) below it for the VIEWER's own inventory
+			    - a dual-inventory drag window. */
+			GfxResourceID strip = IndevTest_ContGuiTex();
+			panel.width  = (cc_uint16)s->panelW;
+			panel.height = (cc_uint16)(int)(166 * s->texF);
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
+			Texture_Render(&panel);
+			if (strip) {
+				panel.ID     = strip;
+				panel.y      = (short)(s->panelY + (int)(166 * s->texF));
+				panel.height = (cc_uint16)(int)(96 * s->texF);
+				panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
+				Texture_Render(&panel);
+			}
 		} else {
 			panel.width  = (cc_uint16)s->panelW;
 			panel.height = (cc_uint16)s->panelH;
@@ -3404,6 +3440,11 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			invY = rows * 18 + 20;
 		} else if (contKind == INDEV_CONTAINER_FURNACE) {
 			name = &s->lblFurnace; nx = 60;
+		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
+			/* No top title (the target's name isn't known client-side); the
+			    "Inventory" label sits above the viewer's own bottom strip at
+			    ySize-96+2 = (166+96)-96+2 = 168. */
+			invY = 166 + 2;
 		} else if (workbench) {
 			name = &s->lblCrafting; nx = 28;
 		} else if (s->lblCrafting.ID) {
@@ -3557,18 +3598,23 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  at 161+var3 (single: 85/143; double: 139/197). GuiFurnace uses the */
 		/*  standard 176x166 layout. */
 		cc_bool chest = IndevTest_OpenKind() == INDEV_CONTAINER_CHEST;
+		cc_bool playerInv = IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV;
 		int rows  = chest ? SurvivalInv_ChestRows() : 3;
 		int var3  = (rows - 4) * 18;
 		float f = s->slotSize / 18.0f;
 		s->texF   = f;
 		s->panelW = (int)(176 * f);
-		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
+		/* PLAYERINV stacks inventory.png (166) over the container.png player */
+		/*  strip (96) - one texture per inventory in the dual-inventory window. */
+		s->panelH = (int)((playerInv ? (166 + 96) : (chest ? (114 + rows * 18) : 166)) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
 
 		s->gridX   = s->panelX + (int)(8   * f);
-		s->gridY   = s->panelY + (int)((chest ? (103 + var3) : 84)  * f);
-		s->hotY    = s->panelY + (int)((chest ? (161 + var3) : 142) * f);
+		/* PLAYERINV: the VIEWER's own inventory is the bottom strip, so its slots */
+		/*  sit at the strip-local storage(14)/hotbar(72) offsets past the 166 base. */
+		s->gridY   = s->panelY + (int)((playerInv ? (166 + 14) : (chest ? (103 + var3) : 84))  * f);
+		s->hotY    = s->panelY + (int)((playerInv ? (166 + 72) : (chest ? (161 + var3) : 142)) * f);
 		if (SurvivalTest_CraftDim() == 3) {
 			/* GuiCrafting (crafting.png): 3x3 grid at (30,17), result (124,35), */
 			/*  no paperdoll window. */

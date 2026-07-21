@@ -245,7 +245,10 @@ static void SurvivalNet_HandleContOpen(cc_uint8* data) {
 	/* [id][kind][slotCount] - SurvivalInventory.HandleUseItem's reply.
 	   Kinds: 0 force-close (container destroyed under an open screen),
 	   1 chest, 2 furnace, 3 large chest, 4 workbench (no container slots -
-	   the 3x3 grid rides the normal streamed craft slots 36..44). */
+	   the 3x3 grid rides the normal streamed craft slots 36..44),
+	   5 player-inventory (/Inventory viewer, SurvivalTest v3+) - 40 cells
+	   proxy another player's inventory, rendered as a dedicated panel with
+	   the viewer's own inventory below. */
 	int kind = data[1], slots = data[2];
 	if (SurvivalNet_ActiveMode() == 0) return;
 
@@ -255,6 +258,11 @@ static void SurvivalNet_HandleContOpen(cc_uint8* data) {
 	}
 	if (kind == 4) {
 		SurvivalTest_SetCraftDim(3);
+		SurvivalInvScreen_Show();
+		return;
+	}
+	if (kind == 5) {
+		IndevTest_NetContOpen(INDEV_CONTAINER_PLAYERINV, slots); /* server sends 40 */
 		SurvivalInvScreen_Show();
 		return;
 	}

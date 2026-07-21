@@ -96,7 +96,10 @@ GfxResourceID IndevTest_ContGuiTex(void);
 enum IndevContainerKind {
 	INDEV_CONTAINER_NONE  = 0,
 	INDEV_CONTAINER_CHEST = 1, /* 27 slots */
-	INDEV_CONTAINER_FURNACE = 2 /* 3 slots: 0 input, 1 fuel, 2 output */
+	INDEV_CONTAINER_FURNACE = 2, /* 3 slots: 0 input, 1 fuel, 2 output */
+	INDEV_CONTAINER_PLAYERINV = 3 /* 40 slots: 27 storage +9 hotbar +4 armor,
+	    a server-streamed view of another player's inventory (/Inventory).
+	    Never a placed block - only opened over the wire (CONT_OPEN kind 5). */
 };
 /* Whether the held item id is a hoe (any tier). */
 cc_bool IndevTest_IsHoe(int id);
