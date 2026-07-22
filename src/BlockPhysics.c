@@ -17,6 +17,7 @@
 #include "SurvivalTest.h"
 #include "IndevTest.h"
 #include "IndevFire.h"
+#include "SurvivalNet.h"
 
 /* Data for a resizable queue, used for liquid physic tick entries. */
 struct TickQueue {
@@ -663,6 +664,13 @@ void Physics_Tick(void) {
 	    which visibly stalled crop growth and farmland moisture. c0.30
 	    and creative keep the engine loop untouched. */
 	if (IndevTest_Enabled) {
+		/* MP: the server owns ALL Indev world simulation (growth, leaf decay,
+		    fire, finite fluids - SurvivalGrowth/SurvivalPhysics) and streams
+		    every change as a SetBlock. The client must not run it locally or it
+		    would double up and diverge. Ambient display ticks (fire crackle,
+		    lava embers) are a separate path (IndevTest_RandomDisplayTicks) and
+		    keep running. */
+		if (SurvivalNet_ServerDriven()) return;
 		IndevFire_Tick(); /* the scheduled-update list runs before random ticks */
 		IndevTest_TickFluids();
 		IndevTest_TickRandomBlocks();
