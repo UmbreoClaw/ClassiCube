@@ -5486,9 +5486,12 @@ static void SurvivalTest_RenderMobFires(void) {
 }
 
 /* Draws a remote player's held block/item in third person (SURV_PLAYER_EQUIP).
-    TODO(phase 5, held-item render): a genuine third-person held-item renderer
-    does not exist in the engine yet - this lands with the armor pass. For now
-    the held id is streamed + stored but not drawn; armor renders fully. */
+    DELIBERATELY A NO-OP: in-20100223 RenderPlayer never drew a held item on the
+    third-person body (held-item-in-hand came in Alpha; the engine itself skips
+    the held render outside first person, HeldBlockRenderer.c). Armor is the only
+    faithful overlay. The held id is still streamed + stored so a NON-faithful
+    "show held item" bonus could be gated on later for MP if desired - but it's
+    intentionally off to match Indev. */
 static void SurvivalTest_RenderHeldItem(struct Entity* e, cc_uint16 id) {
 	(void)e; (void)id;
 }
