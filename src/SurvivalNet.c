@@ -327,6 +327,56 @@ static void SurvivalNet_HandleDropRemove(cc_uint8* data) {
 	SurvivalTest_NetDropRemove(dropId);
 }
 
+/* --- phase 5: arrows (0x33-0x36) --- */
+/* Positions int16 coord*32; arrow velocity int16 blocks/TICK*1024 (arrows use
+   per-tick velocity, unlike the per-second drop stream). The client simulates
+   the same c0.30 flight from the spawn state; the server owns sticks + hits. */
+
+static Vec3 SurvivalNet_ReadArrowVel(cc_uint8* data) {
+	Vec3 vel;
+	vel.x = SurvivalNet_I16(data)     / 1024.0f;
+	vel.y = SurvivalNet_I16(data + 2) / 1024.0f;
+	vel.z = SurvivalNet_I16(data + 4) / 1024.0f;
+	return vel;
+}
+
+static void SurvivalNet_HandleArrowSpawn(cc_uint8* data) {
+	/* [id][arrowId:u16][type][gravity:u8 ×100][pos:3xi16][vel:3xi16] */
+	int arrowId = ((int)data[1] << 8) | data[2];
+	int type    = data[3];
+	float grav  = data[4] / 100.0f;
+	Vec3 pos    = SurvivalNet_ReadPos(data + 5);
+	Vec3 vel    = SurvivalNet_ReadArrowVel(data + 11);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetArrowSpawn(arrowId, type, grav, pos, vel);
+}
+
+static void SurvivalNet_HandleArrowStick(cc_uint8* data) {
+	/* [id][arrowId:u16][pos:3xi16] */
+	int arrowId = ((int)data[1] << 8) | data[2];
+	Vec3 pos    = SurvivalNet_ReadPos(data + 3);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetArrowStick(arrowId, pos);
+}
+
+static void SurvivalNet_HandleArrowRemove(cc_uint8* data) {
+	/* [id][arrowId:u16][reason] */
+	int arrowId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetArrowRemove(arrowId);
+}
+
+static void SurvivalNet_HandleArrowAmmo(cc_uint8* data) {
+	/* [id][count:u16] - the player's own quiver count */
+	int count = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetSetArrowCount(count);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -349,6 +399,10 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_DROP_SPAWN:  SurvivalNet_HandleDropSpawn(data);  break;
 	case SURV_DROP_PICKUP: SurvivalNet_HandleDropPickup(data); break;
 	case SURV_DROP_REMOVE: SurvivalNet_HandleDropRemove(data); break;
+	case SURV_ARROW_SPAWN: SurvivalNet_HandleArrowSpawn(data); break;
+	case SURV_ARROW_STICK: SurvivalNet_HandleArrowStick(data); break;
+	case SURV_ARROW_REMOVE:SurvivalNet_HandleArrowRemove(data);break;
+	case SURV_ARROW_AMMO:  SurvivalNet_HandleArrowAmmo(data);  break;
 	/* Remaining server->client messages (blockmeta 0x40, equip 0x50) are
 	   reserved in SurvivalNet.h and land with the rest of phase 5. */
 	default: break;
@@ -429,6 +483,25 @@ void SurvivalNet_SendContClose(void) {
 	cc_uint8 payload[64] = { 0 };
 	if (!SurvivalNet_ServerDriven()) return;
 	payload[0] = SURV_CONT_CLOSE;
+	SurvivalNet_Send(payload);
+}
+
+/* Fire an arrow from the current aim. yaw/pitch are sent as int16 hundredths of
+   a degree so the shot direction survives the round-trip; the server owns the
+   arrow entity + the ammo. kind is 0 (c0.30 Tab-fire) / 1 (Indev bow). */
+void SurvivalNet_SendFireArrow(float yaw, float pitch, int kind) {
+	cc_uint8 payload[64] = { 0 };
+	int y, p;
+	if (!SurvivalNet_ServerDriven()) return;
+	/* normalise yaw into [0,360) so ×100 always fits the i16 the server reads */
+	yaw = yaw - (float)((int)(yaw / 360.0f)) * 360.0f;
+	if (yaw < 0.0f) yaw += 360.0f;
+	y = (int)(yaw   * 100.0f);
+	p = (int)(pitch * 100.0f);
+	payload[0] = SURV_FIRE_ARROW;
+	payload[1] = (cc_uint8)(y >> 8); payload[2] = (cc_uint8)y;
+	payload[3] = (cc_uint8)(p >> 8); payload[4] = (cc_uint8)p;
+	payload[5] = (cc_uint8)kind;
 	SurvivalNet_Send(payload);
 }
 

@@ -64,6 +64,14 @@ void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count,
 void SurvivalTest_NetDropPickup(int netId, int pickerEntityId);
 void SurvivalTest_NetDropRemove(int netId);
 
+/* MP arrows (phase 5) - SurvivalNet's ARROW_SPAWN/STICK/REMOVE/AMMO appliers.
+    The server owns each arrow's id, flight authority and every hit; the client
+    seeds an st_arrows entry and simulates the same c0.30 flight for the visual. */
+void SurvivalTest_NetArrowSpawn(int netId, int type, float gravity, Vec3 pos, Vec3 vel);
+void SurvivalTest_NetArrowStick(int netId, Vec3 pos);
+void SurvivalTest_NetArrowRemove(int netId);
+void SurvivalTest_NetSetArrowCount(int count);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */

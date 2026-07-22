@@ -40,6 +40,10 @@ enum SurvNetMsg {
 	SURV_DROP_SPAWN   = 0x30, /* dropId, itemId, count, pos, vel, rot0 */
 	SURV_DROP_PICKUP  = 0x31, /* dropId, pickerEntityId */
 	SURV_DROP_REMOVE  = 0x32, /* dropId, reason */
+	SURV_ARROW_SPAWN  = 0x33, /* arrowId, type, gravity, pos, vel */
+	SURV_ARROW_STICK  = 0x34, /* arrowId, pos (snap + freeze) */
+	SURV_ARROW_REMOVE = 0x35, /* arrowId, reason (despawn/hit/pickup) */
+	SURV_ARROW_AMMO   = 0x36, /* player's quiver count (HUD) */
 	SURV_BLOCKMETA    = 0x40, /* xyz, meta nibble */
 	SURV_PLAYER_EQUIP = 0x50, /* entityId, heldId, armor[4] */
 
@@ -51,7 +55,8 @@ enum SurvNetMsg {
 	SURV_CONT_CLOSE   = 0x84, /* window closed */
 	SURV_HELD_SLOT    = 0x85, /* hotbar index */
 	SURV_DROP_ITEM    = 0x86, /* slot, wholeStack */
-	SURV_RESPAWN      = 0x87  /* menu action */
+	SURV_RESPAWN      = 0x87, /* menu action */
+	SURV_FIRE_ARROW   = 0x88  /* yaw, pitch, kind(0 tab/1 bow) */
 };
 
 /* SURV_MOB_SPAWN flags byte (spawn-time cosmetics). */
@@ -94,4 +99,5 @@ void SurvivalNet_SendUseItem(int heldSlot, int x, int y, int z, int face); /* SU
 void SurvivalNet_SendSlotClick(int slot, int button);    /* SURV_SLOT_CLICK [id][slot:u16][button] */
 void SurvivalNet_SendResultClick(void);                  /* SURV_RESULT_CLICK [id] */
 void SurvivalNet_SendContClose(void);                    /* SURV_CONT_CLOSE [id] */
+void SurvivalNet_SendFireArrow(float yaw, float pitch, int kind); /* SURV_FIRE_ARROW */
 #endif

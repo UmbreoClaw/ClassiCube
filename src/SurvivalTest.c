@@ -5718,6 +5718,13 @@ struct ArrowEntity {
 	cc_bool  pickingUp;
 	float    pickupTime;
 	Vec3     pickupFrom;
+
+	/* MP (server-owned) arrows: the server assigns the id, owns the block-stick
+	    and every hit; a net arrow client-simulates the SAME c0.30 flight for a
+	    smooth arc but never resolves a collision itself - it freezes on a
+	    SURV_ARROW_STICK and is retired by SURV_ARROW_REMOVE. */
+	cc_bool  net;
+	int      netId;
 };
 static struct ArrowEntity st_arrows[ARROW_MAX];
 static RNGState st_arrowRng;
@@ -5829,6 +5836,100 @@ static void SurvivalTest_SpawnArrowIndev(Vec3 pos, Vec3 rawDir, float speed,
 	a->ownerIsPlayer = ownerIsPlayer;
 	a->ownerMobSlot  = (cc_int8)ownerMobSlot;
 	a->active        = true;
+}
+
+/*########################################################################################################################*
+*----------------------------------------------MP (server-owned) arrow appliers-------------------------------------------*
+*#########################################################################################################################*/
+/* SurvivalNet feeds these from SURV_ARROW_SPAWN/STICK/REMOVE. The server owns the
+    id, the flight authority (block-stick + every hit) and the ammo; a net arrow
+    client-simulates the c0.30 flight (drag+gravity, matching the server) for a
+    smooth visual and freezes / vanishes when the server says so. */
+static struct ArrowEntity* SurvivalTest_FindNetArrow(int netId) {
+	int i;
+	for (i = 0; i < ARROW_MAX; i++) {
+		if (st_arrows[i].active && st_arrows[i].net && st_arrows[i].netId == netId)
+			return &st_arrows[i];
+	}
+	return NULL;
+}
+
+void SurvivalTest_NetArrowSpawn(int netId, int type, float gravity, Vec3 pos, Vec3 vel) {
+	struct ArrowEntity* a = SurvivalTest_FindNetArrow(netId);
+	float len;
+	if (!a) a = &st_arrows[SurvivalTest_FindFreeArrowSlot()];
+	Mem_Set(a, 0, sizeof(struct ArrowEntity));
+
+	a->pos     = pos;
+	a->prevPos = pos;
+	a->velocity = vel;
+	a->gravity = gravity > 0.0001f ? gravity : 1.0f;
+	a->type    = (cc_uint8)type;
+	a->ownerIsPlayer = type == 0;
+	a->ownerMobSlot  = -1;
+	a->active  = true;
+	a->net     = true;
+	a->netId   = netId;
+
+	len = Math_SqrtF(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
+	if (len > 0.0001f) { a->facing.x = vel.x/len; a->facing.y = vel.y/len; a->facing.z = vel.z/len; }
+	else               { a->facing.y = 1.0f; }
+}
+
+void SurvivalTest_NetArrowStick(int netId, Vec3 pos) {
+	struct ArrowEntity* a = SurvivalTest_FindNetArrow(netId);
+	if (!a) return;
+	a->pos      = pos;
+	a->hasHit   = true;
+	a->velocity.x = a->velocity.y = a->velocity.z = 0.0f;
+	Indev_PlaySoundAt(a->pos, MOBSND_DRR,
+		1.0f, 1.2f / (Random_Float(&st_arrowRng) * 0.2f + 0.9f));
+}
+
+void SurvivalTest_NetArrowRemove(int netId) {
+	struct ArrowEntity* a = SurvivalTest_FindNetArrow(netId);
+	if (a) a->active = false;
+}
+
+void SurvivalTest_NetSetArrowCount(int count) {
+	if (count < 0) count = 0;
+	if (count > ARROW_PLAYER_MAX) count = ARROW_PLAYER_MAX;
+	st_playerArrows = count;
+}
+
+/* MP flight tick for server-owned arrows: the SAME c0.30 drag+gravity+move as
+    Arrow_Tick, but with NO collision or hit resolution (the server owns those and
+    corrects us via STICK/REMOVE). Stuck arrows just hold their frozen pose. */
+static void SurvivalTest_TickNetArrows(void) {
+	struct ArrowEntity* a;
+	float len;
+	int i;
+
+	for (i = 0; i < ARROW_MAX; i++) {
+		a = &st_arrows[i];
+		if (!a->active || !a->net) continue;
+
+		a->age++;
+		a->prevPos = a->pos;
+		if (a->hasHit) continue; /* frozen in a block - waits for SURV_ARROW_REMOVE */
+
+		/* c0.30 Arrow.tick: drag + speed-scaled gravity, then move (per tick) */
+		a->velocity.x *= ARROW_DRAG;
+		a->velocity.y *= ARROW_DRAG;
+		a->velocity.z *= ARROW_DRAG;
+		a->velocity.y -= 0.02f * a->gravity;
+
+		a->pos.x += a->velocity.x;
+		a->pos.y += a->velocity.y;
+		a->pos.z += a->velocity.z;
+
+		len = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
+		if (len > 0.0001f) {
+			a->facing.x = a->velocity.x / len;
+			a->facing.y = a->velocity.y / len;
+			a->facing.z = a->velocity.z / len;
+		}
+	}
 }
 
 static void Arrow_BoxAt(Vec3* pos, struct AABB* out) {
@@ -6347,15 +6448,23 @@ cc_bool SurvivalTest_TryShootArrow(void) {
 	struct Entity* e;
 	Vec3 eye;
 	if (!SurvivalTest_Enabled) return false;
-	if (SurvivalNet_ServerDriven()) return false; /* MP: arrows are server entities (phase 3) */
 	/* Indev has no Tab-fire - arrows are items fired by the BOW's right
 	    click (SurvivalTest_TryUseBow) */
 	if (IndevTest_Enabled)     return false;
-	if (st_playerArrows <= 0)  return false;
 
 	p = Entities.CurPlayer;
 	if (!p) return false;
 	e = &p->Base;
+
+	/* MP: firing is an intent - the server owns the arrow entity + the ammo
+	    count (streamed back as SURV_ARROW_AMMO), so send the aim and let it
+	    spawn + simulate the shot. */
+	if (SurvivalNet_ServerDriven()) {
+		SurvivalNet_SendFireArrow(e->Yaw, e->Pitch, 0);
+		return true;
+	}
+
+	if (st_playerArrows <= 0)  return false;
 
 	/* Spawn from eye level, NOT e->Position. In Minecraft Classic the player */
 	/*  entity's y field IS the eye/camera position (its bounding box extends */
@@ -6391,9 +6500,16 @@ cc_bool SurvivalTest_TryUseBow(void) {
 	Vec3 eye;
 	int i;
 	if (!IndevTest_Enabled || !p)                              return false;
-	if (SurvivalNet_ServerDriven())                            return false; /* MP: phase 3/4 */
 	if (!IndevTest_IsBow(st_inv[Inventory.SelectedIndex].id))  return false;
 	if (st_inv[Inventory.SelectedIndex].count <= 0)            return false;
+
+	/* MP: firing is an intent - the server consumes an arrow item from the
+	    server-owned inventory and spawns/simulates the arrow. */
+	if (SurvivalNet_ServerDriven()) {
+		e = &p->Base;
+		SurvivalNet_SendFireArrow(e->Yaw, e->Pitch, 1);
+		return true;
+	}
 
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		if (st_inv[i].id == INDEV_ITEM_ARROW && st_inv[i].count > 0) break;
@@ -8108,6 +8224,7 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		    server owns spawn/pickup/despawn). */
 		SurvivalTest_TickPuppetMobs(delta);
 		SurvivalTest_TickNetDrops(delta);
+		SurvivalTest_TickNetArrows();
 	}
 
 	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */
