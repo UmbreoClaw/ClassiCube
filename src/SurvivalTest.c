@@ -314,6 +314,14 @@ struct DropItem {
 	Vec3    pickupFrom;  /* position captured the instant pickup started */
 	cc_bool wasInWater;  /* last tick's water state - the air->water edge splashes */
 	cc_int8 health;      /* EntityItem.health = 5; fire/lava contact deals 1/tick */
+
+	/* MP (server-owned) drops: the server assigns the id, runs the pickup-delay
+	    countdown and decides who collects, so a net drop ticks its LOCAL physics
+	    and animation only - never local pickup or lifetime despawn (those arrive
+	    as SURV_DROP_PICKUP / SURV_DROP_REMOVE). */
+	cc_bool net;          /* streamed in by the server (SurvivalNet_NetDropSpawn) */
+	int     netId;        /* server drop id (wire key) - 0 for local SP drops */
+	Vec3    pickupTarget; /* body the pickup fly-in eases toward (captured on PICKUP) */
 };
 static struct DropItem st_drops[DROP_MAX];
 /* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
@@ -599,6 +607,69 @@ static struct DropItem* SurvivalTest_SpawnDropAtEx(Vec3 pos, cc_uint16 block, in
 /*  drop entities at an exact world position. */
 void SurvivalTest_SpawnDropWorld(Vec3 pos, int id, int count) {
 	SurvivalTest_SpawnDropAt(pos, (cc_uint16)id, count);
+}
+
+/*########################################################################################################################*
+*----------------------------------------------MP (server-owned) drop appliers--------------------------------------------*
+*#########################################################################################################################*/
+/* SurvivalNet feeds these from SURV_DROP_SPAWN/PICKUP/REMOVE. The server owns
+    the id, the pickup-delay countdown and the collection decision, so a net drop
+    only runs its LOCAL visual physics (the pop arc + spin/bob) - never a local
+    pickup or lifetime despawn. */
+static struct DropItem* SurvivalTest_FindNetDrop(int netId) {
+	int i;
+	for (i = 0; i < DROP_MAX; i++) {
+		if (st_drops[i].active && st_drops[i].net && st_drops[i].netId == netId)
+			return &st_drops[i];
+	}
+	return NULL;
+}
+
+void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0) {
+	struct DropItem* d = SurvivalTest_FindNetDrop(netId);
+	if (!d) {
+		/* new drop - claim a pool slot (evicts the oldest when full) */
+		d = &st_drops[SurvivalTest_FindFreeDropSlot()];
+	}
+	Mem_Set(d, 0, sizeof(struct DropItem));
+	d->position   = pos;
+	d->prevPos    = pos; /* seed so the first frame doesn't lerp in from (0,0,0) */
+	d->velocity   = vel;
+	d->block      = (cc_uint16)id;
+	d->count      = max(count, 1);
+	d->rot0       = (float)rot0 * 360.0f / 256.0f;
+	d->wasInWater = true; /* never splash on the spawn tick */
+	d->health     = 5;
+	d->active     = true;
+	d->net        = true;
+	d->netId      = netId;
+	/* pickupDelay stays 0: the SERVER gates collection, so the client never
+	    runs SurvivalTest_DropTryPickup on a net drop at all. */
+}
+
+void SurvivalTest_NetDropPickup(int netId, int pickerEntityId) {
+	struct DropItem* d = SurvivalTest_FindNetDrop(netId);
+	struct Entity* picker;
+	if (!d) return;
+
+	/* Ease the drop into whoever collected it. 255 = ENTITIES_SELF_ID (this
+	    viewer's own body); 0xFF from the server also lands here when the picker
+	    isn't visible to us - fall back to the local player so the item still
+	    zips away rather than freezing, then vanishes. */
+	picker = Entities.List[pickerEntityId < ENTITIES_MAX_COUNT ? pickerEntityId : ENTITIES_SELF_ID];
+	if (!picker) picker = &Entities.CurPlayer->Base;
+
+	d->pickingUp   = true;
+	d->pickupTime  = 0.0f;
+	d->pickupFrom  = d->position;
+	d->pickupTarget = picker->Position;
+	Indev_PlaySoundAt(d->position, MOBSND_POP, 0.2f,
+		((Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.7f + 1.0f) * 2.0f);
+}
+
+void SurvivalTest_NetDropRemove(int netId) {
+	struct DropItem* d = SurvivalTest_FindNetDrop(netId);
+	if (d) d->active = false; /* despawn/destroyed: no pickup animation */
 }
 
 /* Spawns one physical item drop inside the given block. BlockUtils.dropItems */
@@ -1005,6 +1076,71 @@ static void SurvivalTest_TickDrops(struct Entity* pe, float delta) {
 
 		if (d->pickupDelay > 0.0f) { d->pickupDelay -= delta; }
 		else                       { SurvivalTest_DropTryPickup(d, pe); }
+	}
+}
+
+/* MP counterpart of SurvivalTest_TickDrops: runs each server-owned drop's LOCAL
+    presentation only - the pop arc, spin/bob age, and the Indev lava-fizz / water
+    splash / push-out-of-blocks visuals - but NEVER local collection or lifetime
+    despawn (SURV_DROP_PICKUP / SURV_DROP_REMOVE drive those). Also NOT the fire
+    health-kill: the server doesn't burn drops, so destroying one locally would
+    desync it. The pickup fly-in eases toward the captured picker body. */
+static void SurvivalTest_TickNetDrops(float delta) {
+	struct DropItem* d;
+	float distance;
+	int i;
+
+	for (i = 0; i < DROP_MAX; i++) {
+		d = &st_drops[i];
+		if (!d->active || !d->net) continue;
+
+		d->prevPos = d->position;
+		d->prevAge = d->age;
+
+		if (d->pickingUp) {
+			/* TakeEntityAnim toward the body that collected it (fixed target
+			    captured on SURV_DROP_PICKUP - the fly-in is only ~3 ticks). */
+			d->pickupTime += delta;
+			distance = d->pickupTime / DROP_PICKUP_ANIM_SECS;
+			if (distance > 1.0f) distance = 1.0f;
+			distance = distance * distance;
+			d->position.x = d->pickupFrom.x + (d->pickupTarget.x - d->pickupFrom.x) * distance;
+			d->position.y = d->pickupFrom.y + (d->pickupTarget.y - d->pickupFrom.y) * distance;
+			d->position.z = d->pickupFrom.z + (d->pickupTarget.z - d->pickupFrom.z) * distance;
+			if (d->pickupTime >= DROP_PICKUP_ANIM_SECS) d->active = false;
+			continue;
+		}
+
+		d->age += delta; /* drives spin/bob/glow - server owns the 5-min despawn */
+
+		SurvivalTest_DropPhysics(d, delta);
+		if (IndevTest_Enabled) {
+			int cx = Math_Floor(d->position.x);
+			int cy = Math_Floor(d->position.y + DROP_ITEM_HALF);
+			int cz = Math_Floor(d->position.z);
+			if (World_Contains(cx, cy, cz) && ST_IsLavaBlock(World_GetBlock(cx, cy, cz))) {
+				d->velocity.y = 0.2f * 20.0f;
+				d->velocity.x = (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.2f * 20.0f;
+				d->velocity.z = (Random_Float(&st_dropRng) - Random_Float(&st_dropRng)) * 0.2f * 20.0f;
+				Indev_PlaySoundAt(d->position, MOBSND_FIZZ,
+					0.4f, 2.0f + Random_Float(&st_dropRng) * 0.4f);
+			}
+			Drop_PushOutOfBlocks(d);
+
+			{
+				int bx = (int)Math_Floor(d->position.x);
+				int by = (int)Math_Floor(d->position.y);
+				int bz = (int)Math_Floor(d->position.z);
+				cc_bool inW = World_Contains(bx, by, bz) &&
+					ST_IsWaterBlock(World_GetBlock(bx, by, bz));
+				if (inW && !d->wasInWater) {
+					Vec3 v = d->velocity;
+					v.x /= 20.0f; v.y /= 20.0f; v.z /= 20.0f;
+					Indev_EntitySplash(d->position, v, 0.25f);
+				}
+				d->wasInWater = inW;
+			}
+		}
 	}
 }
 
@@ -7967,8 +8103,11 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		SurvivalTest_TickTnt();
 	} else {
 		/* Phase 3: mobs stream in as puppets - only their presentation
-		    (interpolation, animation timers, sounds) ticks locally. */
+		    (interpolation, animation timers, sounds) ticks locally.
+		    Phase 5: drops stream in the same way (physics/spin local, the
+		    server owns spawn/pickup/despawn). */
 		SurvivalTest_TickPuppetMobs(delta);
+		SurvivalTest_TickNetDrops(delta);
 	}
 
 	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */

@@ -286,6 +286,47 @@ static void SurvivalNet_HandleFurnProg(cc_uint8* data) {
 	IndevTest_NetFurnProg(data[1], data[2]);
 }
 
+/* --- phase 5: dropped items (0x30-0x32) --- */
+/* The server owns each drop's id, pickup-delay countdown and collection; the
+   client just renders the pop arc + spin into its st_drops pool. Positions are
+   int16 coord*32 (like mobs), velocity int16 coord/sec*512. */
+
+static Vec3 SurvivalNet_ReadVel(cc_uint8* data) {
+	Vec3 vel;
+	vel.x = SurvivalNet_I16(data)     / 512.0f;
+	vel.y = SurvivalNet_I16(data + 2) / 512.0f;
+	vel.z = SurvivalNet_I16(data + 4) / 512.0f;
+	return vel;
+}
+
+static void SurvivalNet_HandleDropSpawn(cc_uint8* data) {
+	/* [id][dropId:u16][itemId:u16][count][pos:3xi16][vel:3xi16][rot0] */
+	int  dropId = ((int)data[1] << 8) | data[2];
+	int  itemId = ((int)data[3] << 8) | data[4];
+	int  count  = data[5];
+	Vec3 pos    = SurvivalNet_ReadPos(data + 6);
+	Vec3 vel    = SurvivalNet_ReadVel(data + 12);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetDropSpawn(dropId, pos, vel, itemId, count, data[18]);
+}
+
+static void SurvivalNet_HandleDropPickup(cc_uint8* data) {
+	/* [id][dropId:u16][pickerEntityId] */
+	int dropId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetDropPickup(dropId, data[3]);
+}
+
+static void SurvivalNet_HandleDropRemove(cc_uint8* data) {
+	/* [id][dropId:u16][reason(0 despawn/1 destroyed)] */
+	int dropId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetDropRemove(dropId);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -305,9 +346,11 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_CONT_SLOT:   SurvivalNet_HandleContSlot(data);   break;
 	case SURV_FURN_PROG:   SurvivalNet_HandleFurnProg(data);   break;
 	case SURV_CURSOR:      SurvivalNet_HandleCursor(data);     break;
-	/* Remaining server->client messages (containers 0x22-0x24, drops
-	   0x30-0x32, blockmeta 0x40, equip 0x50) are reserved in SurvivalNet.h
-	   and land with the rest of phase 4 + phase 5. */
+	case SURV_DROP_SPAWN:  SurvivalNet_HandleDropSpawn(data);  break;
+	case SURV_DROP_PICKUP: SurvivalNet_HandleDropPickup(data); break;
+	case SURV_DROP_REMOVE: SurvivalNet_HandleDropRemove(data); break;
+	/* Remaining server->client messages (blockmeta 0x40, equip 0x50) are
+	   reserved in SurvivalNet.h and land with the rest of phase 5. */
 	default: break;
 	}
 }

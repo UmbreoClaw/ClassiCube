@@ -56,6 +56,14 @@ void SurvivalTest_NetMobDespawn(int id, int reason);
 void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg);
 void SurvivalTest_NetCursor(int id, int count, int dmg);
 
+/* MP dropped items (phase 5) - SurvivalNet's DROP_SPAWN/PICKUP/REMOVE appliers.
+    The server owns each drop's id, pickup-delay countdown and collection; the
+    client feeds these into the same st_drops pool used in singleplayer, but a
+    net drop ticks its visual physics only (never local pickup or despawn). */
+void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0);
+void SurvivalTest_NetDropPickup(int netId, int pickerEntityId);
+void SurvivalTest_NetDropRemove(int netId);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */
