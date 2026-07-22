@@ -2536,6 +2536,16 @@ static void IndevTest_TickLeaves(int index) {
 	Game_UpdateBlock(x, y, z, BLOCK_AIR);
 }
 
+/* The four growth behaviours the server simulates authoritatively in MP
+    (SurvivalGrowth): crop ripening, farmland hydration, sapling->tree growth
+    and grass spread. Under server drive the client must not tick these locally
+    or growth would run twice and diverge from the streamed map. */
+static cc_bool Indev_ServerOwnsGrowth(BlockID b) {
+	return b == BLOCK_GRASS || b == BLOCK_SAPLING ||
+	       b == INDEV_BLOCK_FARMLAND || b == INDEV_BLOCK_FARMLAND_WET ||
+	       (b >= INDEV_BLOCK_CROPS_0 && b <= INDEV_BLOCK_CROPS_7);
+}
+
 void IndevTest_TickRandomBlocks(void) {
 	int shiftX = 1, shiftZ = 1;
 	int maskX, maskY, maskZ;
@@ -2543,7 +2553,11 @@ void IndevTest_TickRandomBlocks(void) {
 	cc_uint32 bits;
 	BlockID block;
 	PhysicsHandler tick;
+	cc_bool serverGrowth;
 	if (!IndevTest_Enabled || !World.Blocks) return;
+	/* MP: the server owns growth; only the deferred client-only systems
+	    (leaf decay, fire, flowers/mushrooms, fluid sources) still tick here. */
+	serverGrowth = SurvivalNet_ServerDriven();
 
 	while ((1 << shiftX) < World.Width)  shiftX++;
 	while ((1 << shiftZ) < World.Length) shiftZ++;
@@ -2570,6 +2584,7 @@ void IndevTest_TickRandomBlocks(void) {
 		    (random-tick sand rain hollows out Floating maps in seconds) */
 		if (block == BLOCK_SAND || block == BLOCK_GRAVEL || block == BLOCK_DIRT ||
 			block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA) continue;
+		if (serverGrowth && Indev_ServerOwnsGrowth(block)) continue;
 		if (block == BLOCK_GRASS) { IndevTest_TickGrass(index); continue; }
 		if (block == BLOCK_LEAVES) { IndevTest_TickLeaves(index); continue; }
 		if (IndevFire_IsFire(block)) { IndevFire_RandomTick(index); continue; }
