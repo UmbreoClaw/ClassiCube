@@ -1285,7 +1285,9 @@ static int indev_netContLarge;  /* chest with 54 slots (renders the double GUI) 
 static int indev_netBurn, indev_netCook; /* FURN_PROG: pre-scaled 0..12 / 0..24 */
 
 static int indev_netContTargetId = -1; /* PLAYERINV: the target's entity id as the
-    viewer sees it (-1 = none/not visible), for the left-panel paperdoll. */
+    viewer sees it (-1 = none/not visible), for the paperdoll. */
+static int indev_netContSolo = 0;      /* PLAYERINV: 1 = single-panel spectate view
+    (just the target), 0 = the two-panel /Inventory drag view. */
 
 void IndevTest_NetContOpen(int kind, int slots) {
 	if (slots < 0) slots = 0;
@@ -1294,6 +1296,7 @@ void IndevTest_NetContOpen(int kind, int slots) {
 	indev_netContSlots = slots;
 	indev_netContLarge = kind == INDEV_CONTAINER_CHEST && slots > SURVIVAL_CONTAINER_SLOTS;
 	indev_netContTargetId = -1;
+	indev_netContSolo = 0;
 	indev_netBurn = 0; indev_netCook = 0;
 	Mem_Set(indev_netCont, 0, sizeof(indev_netCont));
 	SurvivalTest_MarkInvDirty();
@@ -1304,6 +1307,10 @@ void IndevTest_NetContTarget(int entityId) {
 	indev_netContTargetId = (entityId >= 0 && entityId < 255) ? entityId : -1;
 }
 int IndevTest_NetContTargetId(void) { return indev_netContTargetId; }
+
+/* PLAYERINV: 1 = single-panel spectate view (target only). */
+void IndevTest_NetContSolo(int solo) { indev_netContSolo = solo ? 1 : 0; }
+int IndevTest_NetContIsSolo(void) { return indev_netContSolo; }
 
 void IndevTest_NetContSlot(int i, int id, int count, int dmg) {
 	if (!indev_netContKind || i < 0 || i >= indev_netContSlots) return;
@@ -1332,7 +1339,7 @@ int IndevTest_OpenKind(void) {
 void IndevTest_CloseContainer(void) {
 	indev_openTE = -1; indev_openTE2 = -1;
 	indev_netContKind = 0; indev_netContSlots = 0; indev_netContLarge = 0;
-	indev_netContTargetId = -1;
+	indev_netContTargetId = -1; indev_netContSolo = 0;
 	indev_netBurn = 0; indev_netCook = 0;
 }
 

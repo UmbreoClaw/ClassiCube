@@ -2728,6 +2728,15 @@ static void SurvivalInv_ArmorSlotXY(struct SurvivalInvScreen* s, int i, int* ox,
 /*  sentinel, or -1. */
 static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
 	int i, x, y, craft = SurvivalInv_CraftCells();
+	/* solo spectate view: only the target's container cells exist (no viewer's-own
+	    slots), and it's read-only anyway - just resolve hovers over the target. */
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo()) {
+		for (i = 0; i < SurvivalInv_ContainerCells(); i++) {
+			SurvivalInv_ContainerSlotXY(s, i, &x, &y);
+			if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CONTAINER_BASE + i;
+		}
+		return -1;
+	}
 	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
 		SurvivalInv_SlotXY(s, i, &x, &y);
 		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return i;
@@ -2784,16 +2793,23 @@ static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x,
 #define SURVINV_DISPLAY_SLOTS (SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
 /* Crafting slots only exist in Indev mode; plain c0.30-s shows storage only */
 /*  (it never had crafting), so its screen is byte-for-byte the old layout. */
+/* The solo spectate view (single panel) shows ONLY the target's container cells - */
+/*  no viewer's-own storage/hotbar/craft/armor. */
+static cc_bool SurvivalInv_Solo(void) {
+	return IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo();
+}
 static int SurvivalInv_DisplayCount(void) {
 	/* hotbar row + storage, plus (Indev) either the open container's slots */
 	/*  or the active craft cells + result slot */
 	int n = SURVIVAL_HOTBAR_SLOTS + SURVINV_STORAGE_SLOTS;
 	if (!IndevTest_Enabled) return n;
+	if (SurvivalInv_Solo()) return SurvivalInv_ContainerCells(); /* target only */
 	if (SurvivalInv_ContainerCells()) return n + SurvivalInv_ContainerCells();
 	return n + SurvivalInv_CraftCells() + 1 + SurvivalInv_ArmorCells();
 }
 static int SurvivalInv_DisplaySlot(int n) {
 	int cells = SurvivalInv_CraftCells(), cont = SurvivalInv_ContainerCells();
+	if (SurvivalInv_Solo()) return SURVIVAL_CONTAINER_BASE + n; /* target cells only */
 	if (n < SURVIVAL_HOTBAR_SLOTS) return n; /* hotbar row first */
 	n -= SURVIVAL_HOTBAR_SLOTS;
 	if (n < SURVINV_STORAGE_SLOTS)         return SURVIVAL_HOTBAR_SLOTS + n;
@@ -3202,17 +3218,19 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
 			Texture_Render(&panel);
 		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
-			/* /Inventory view: two inventory.png panels side by side - the TARGET's
-			    40 slots (left, via the container cells) and the VIEWER's own
-			    inventory (right) - a dual-inventory drag window. */
+			/* /Inventory: two inventory.png panels side by side - the TARGET's 40
+			    slots (left) and the VIEWER's own inventory (right). The solo
+			    spectate view draws only the target panel. */
 			panel.width  = (cc_uint16)(int)(176 * s->texF);
 			panel.height = (cc_uint16)(int)(166 * s->texF);
 			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
 			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
-			Texture_Render(&panel);                             /* left: target */
-			panel.x = (short)(s->panelX + (int)((176 + 16) * s->texF));
-			Texture_Render(&panel);                             /* right: own */
-			panel.x = (short)s->panelX;
+			Texture_Render(&panel);                             /* target */
+			if (!IndevTest_NetContIsSolo()) {
+				panel.x = (short)(s->panelX + (int)((176 + 16) * s->texF));
+				Texture_Render(&panel);                         /* viewer's own */
+				panel.x = (short)s->panelX;
+			}
 		} else {
 			panel.width  = (cc_uint16)s->panelW;
 			panel.height = (cc_uint16)s->panelH;
@@ -3257,19 +3275,23 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	} else {
 	if (contKind == INDEV_CONTAINER_PLAYERINV) {
-		/* No inventory texture: draw TWO separate flat inventory panels side by
-		    side (target left, viewer right) - never one combined panel. */
+		/* No inventory texture: flat panels. /Inventory draws TWO (target left,
+		    viewer right); the solo spectate view draws ONE (just the target). */
+		cc_bool solo = IndevTest_NetContIsSolo();
 		int pw = (int)(176 * s->texF);
-		int rx = s->panelX + (int)((176 + 16) * s->texF);
 		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
 		Gfx_Draw2DFlat(s->panelX,     s->panelY,     pw,     s->panelH,     panelBg);
-		Gfx_Draw2DFlat(rx - 2,        s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
-		Gfx_Draw2DFlat(rx,            s->panelY,     pw,     s->panelH,     panelBg);
-		/* both doll windows get a recessed frame: right = viewer, left = target */
+		if (!solo) {
+			int rx = s->panelX + (int)((176 + 16) * s->texF);
+			Gfx_Draw2DFlat(rx - 2, s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
+			Gfx_Draw2DFlat(rx,     s->panelY,     pw,     s->panelH,     panelBg);
+		}
+		/* recessed doll window(s): dollBoxX is the target's (solo) or the viewer's
+		    (two-panel); the two-panel also frames the target's box on the left. */
 		b = s->dollBoxSize;
 		Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
 		Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
-		{
+		if (!solo) {
 			int ldx = s->panelX + (int)(26 * s->texF);
 			Gfx_Draw2DFlat(ldx,     s->dollBoxY,     b,     b,     panelBorder);
 			Gfx_Draw2DFlat(ldx + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
@@ -3484,13 +3506,15 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	}
 
-	/* 3D paperdolls. The pocket inventory and the RIGHT panel of the /Inventory
-	    view show the LOCAL player (RenderDoll). The /Inventory LEFT panel shows
-	    the TARGET's model, if the server sent an entity id the viewer can see
-	    (same level). The workbench/chest/furnace GUIs have no doll. */
+	/* 3D paperdolls. The pocket inventory and the RIGHT panel of the two-panel
+	    /Inventory view show the LOCAL player (RenderDoll) - but the solo spectate
+	    view has no viewer panel, so skip it there. PLAYERINV also shows the
+	    TARGET's model (if the viewer can see that entity). Workbench/chest/furnace
+	    have no doll. */
 	if (SurvivalTest_CraftDim() != 3) {
 		int kind = IndevTest_OpenKind();
-		if (kind == INDEV_CONTAINER_NONE || kind == INDEV_CONTAINER_PLAYERINV)
+		cc_bool solo = kind == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo();
+		if (kind == INDEV_CONTAINER_NONE || (kind == INDEV_CONTAINER_PLAYERINV && !solo))
 			SurvivalInv_RenderDoll(s);
 		if (kind == INDEV_CONTAINER_PLAYERINV) {
 			int tid = IndevTest_NetContTargetId();
@@ -3633,14 +3657,16 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  standard 176x166 layout. */
 		cc_bool chest = IndevTest_OpenKind() == INDEV_CONTAINER_CHEST;
 		cc_bool playerInv = IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV;
+		/* solo = the single-panel spectate view (just the target); otherwise the
+		    two-panel /Inventory drag view (target left, viewer's own right). */
+		cc_bool solo = playerInv && IndevTest_NetContIsSolo();
 		int rows  = chest ? SurvivalInv_ChestRows() : 3;
 		int var3  = (rows - 4) * 18;
 		float f = s->slotSize / 18.0f;
 		s->texF   = f;
-		/* PLAYERINV is two inventory.png panels side by side (target on the left,
-		    the viewer's own on the right, 8px apart); everything else is the
-		    single 176-wide panel. */
-		s->panelW = (int)((playerInv ? (176 + 16 + 176) : 176) * f);
+		/* PLAYERINV /Inventory is two inventory.png panels side by side; the solo
+		    spectate view and everything else are one 176-wide panel. */
+		s->panelW = (int)(((playerInv && !solo) ? (176 + 16 + 176) : 176) * f);
 		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
 		s->panelX = (Window_Main.Width  - s->panelW) / 2;
 		s->panelY = (Window_Main.Height - s->panelH) / 2;
@@ -3674,9 +3700,10 @@ static void SurvivalInvScreen_Layout(void* screen) {
 		/*  not square, so legs aren't clipped. dollBoxSize stays the WIDTH */
 		/*  (mouse-follow + horizontal centring key off it); dollBoxH is the */
 		/*  viewport height. */
-		/* PLAYERINV: the doll shows the LOCAL player, so it belongs in the RIGHT
-		    (viewer's own) panel; the left/target panel's doll window stays empty. */
-		s->dollBoxX    = s->panelX + (int)((playerInv ? (176 + 16 + 26) : 26) * f);
+		/* Doll window x: the two-panel /Inventory puts the LOCAL player's doll in
+		    the RIGHT panel; the solo spectate view puts the TARGET's doll in its
+		    single panel (26); everything else uses the single panel too. */
+		s->dollBoxX    = s->panelX + (int)(((playerInv && !solo) ? (176 + 16 + 26) : 26) * f);
 		s->dollBoxY    = s->panelY + (int)(8  * f);
 		s->dollBoxSize = (int)(48 * f);
 		s->dollBoxH    = (int)(68 * f);

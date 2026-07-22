@@ -141,9 +141,12 @@ int  IndevTest_OpenKind(void);
     server-owned open container rendered by the same chest/furnace screens.
     kind 0 closes the view; slots is the streamed size (3/27/54). */
 void IndevTest_NetContOpen(int kind, int slots);
-/* PLAYERINV: the target entity id for the left-panel paperdoll (-1 = none). */
+/* PLAYERINV: the target entity id for the paperdoll (-1 = none). */
 void IndevTest_NetContTarget(int entityId);
 int  IndevTest_NetContTargetId(void);
+/* PLAYERINV: 1 = single-panel spectate view (just the target), 0 = two-panel. */
+void IndevTest_NetContSolo(int solo);
+int  IndevTest_NetContIsSolo(void);
 void IndevTest_NetContSlot(int i, int id, int count, int dmg);
 void IndevTest_NetFurnProg(int burn, int cook);
 /* Closes the open container (contents stay in the tile entity). */

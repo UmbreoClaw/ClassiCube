@@ -263,7 +263,8 @@ static void SurvivalNet_HandleContOpen(cc_uint8* data) {
 	}
 	if (kind == 5) {
 		IndevTest_NetContOpen(INDEV_CONTAINER_PLAYERINV, slots); /* server sends 40 */
-		IndevTest_NetContTarget(data[3]); /* target entity id for the left doll */
+		IndevTest_NetContTarget(data[3]); /* target entity id for the doll */
+		IndevTest_NetContSolo(data[4]);   /* 1 = single-panel spectate view */
 		SurvivalInvScreen_Show();
 		return;
 	}

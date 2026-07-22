@@ -6284,3 +6284,14 @@ as distinct screens (world visible between them). The textured path already drew
 two inventory.png panels; both paths now match. Verified in the rig (textures
 absent, so this is the fallback): two bordered inventory panels side by side, gap
 between, viewer's doll framed in the right one.
+
+### /Spectate single panel (solo flag)
+
+CONT_OPEN kind 5 now carries a solo byte (data[4]); 1 = the single-panel spectate
+view, 0 = the two-panel /Inventory view. Stored via IndevTest_NetContSolo /
+NetContIsSolo (reset in NetContOpen/CloseContainer). When solo, Screens.c draws one
+176-wide inventory.png panel (one flat panel in the no-texture fallback) with the
+TARGET's doll in it, and DisplayCount/DisplaySlot/HitSlot expose only the target's
+40 container cells (no viewer's-own storage/hotbar/craft/armor, no viewer doll).
+The two-panel /Inventory path is unchanged (solo=0). Verified in the rig via
+gdb injection: a single centered panel, target model + items, no viewer inventory.
