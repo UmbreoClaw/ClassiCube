@@ -5913,15 +5913,31 @@ static void SurvivalTest_TickNetArrows(void) {
 		a->prevPos = a->pos;
 		if (a->hasHit) continue; /* frozen in a block - waits for SURV_ARROW_REMOVE */
 
-		/* c0.30 Arrow.tick: drag + speed-scaled gravity, then move (per tick) */
-		a->velocity.x *= ARROW_DRAG;
-		a->velocity.y *= ARROW_DRAG;
-		a->velocity.z *= ARROW_DRAG;
-		a->velocity.y -= 0.02f * a->gravity;
+		/* Flight matches the SERVER (which branches on the map mode). c0.30 applies
+		    drag + speed-scaled gravity BEFORE the move; Indev moves first, then drag
+		    (0.99 air / 0.8 water) + a flat 0.03 gravity. Both must mirror the server
+		    exactly so the client's arc stays in lock-step until a STICK/REMOVE. */
+		if (!IndevTest_Enabled) {
+			a->velocity.x *= ARROW_DRAG;
+			a->velocity.y *= ARROW_DRAG;
+			a->velocity.z *= ARROW_DRAG;
+			a->velocity.y -= 0.02f * a->gravity;
+		}
 
 		a->pos.x += a->velocity.x;
 		a->pos.y += a->velocity.y;
 		a->pos.z += a->velocity.z;
+
+		if (IndevTest_Enabled) {
+			float drag = 0.99f;
+			if (World_Contains(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z)) &&
+				ST_IsWaterBlock(World_GetBlock(Math_Floor(a->pos.x), Math_Floor(a->pos.y), Math_Floor(a->pos.z))))
+				drag = 0.8f;
+			a->velocity.x *= drag;
+			a->velocity.y *= drag;
+			a->velocity.z *= drag;
+			a->velocity.y -= 0.03f;
+		}
 
 		len = Math_SqrtF(a->velocity.x * a->velocity.x + a->velocity.y * a->velocity.y + a->velocity.z * a->velocity.z);
 		if (len > 0.0001f) {
