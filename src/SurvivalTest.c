@@ -176,6 +176,13 @@ static int ST_MaxStack(cc_uint16 id) {
 static struct SurvivalSlot st_inv[SURVIVAL_INV_SLOTS];
 /* InventoryPlayer.armorInventory: [0] boots .. [3] helmet (piece = 3-index) */
 static struct SurvivalSlot st_armor[SURVIVAL_ARMOR_SLOTS];
+
+/* Remote players' streamed equipment (SURV_PLAYER_EQUIP), per Classic entity id
+    (0..ENTITIES_SELF_ID-1): the held item id + the 4 worn armor ids (0 = none,
+    boots..helmet). Applied to Entities.List[id] in the third-person render pass;
+    the LOCAL player renders its own equipment from st_armor / the held slot. */
+struct NetEquip { cc_uint16 held; cc_uint16 armor[4]; cc_bool set; };
+static struct NetEquip st_netEquip[ENTITIES_SELF_ID];
 /* EntityPlayer.damageRemainder - the sub-1HP carry of armor-scaled damage */
 static int st_damageRemainder;
 /* Bumped on every inventory change so the HUD knows to redraw counts. */
@@ -5478,6 +5485,14 @@ static void SurvivalTest_RenderMobFires(void) {
 	}
 }
 
+/* Draws a remote player's held block/item in third person (SURV_PLAYER_EQUIP).
+    TODO(phase 5, held-item render): a genuine third-person held-item renderer
+    does not exist in the engine yet - this lands with the armor pass. For now
+    the held id is streamed + stored but not drawn; armor renders fully. */
+static void SurvivalTest_RenderHeldItem(struct Entity* e, cc_uint16 id) {
+	(void)e; (void)id;
+}
+
 void SurvivalTest_RenderMobs(float delta, float t) {
 	struct Mob* m;
 	struct Entity* e;
@@ -5586,6 +5601,19 @@ void SurvivalTest_RenderMobs(float delta, float t) {
 	    armor on the first-person arm) */
 	if (IndevTest_Enabled && Camera.Active->isThirdPerson && Entities.CurPlayer) {
 		IndevArmor_Render(&Entities.CurPlayer->Base);
+	}
+
+	/* remote players' worn armor + held item (SURV_PLAYER_EQUIP): the same
+	    overlay hooks applied to each other player entity we've been sent equip
+	    for. Always third-person (you view other players from outside). */
+	if (IndevTest_Enabled) {
+		int id;
+		for (id = 0; id < ENTITIES_SELF_ID; id++) {
+			struct Entity* pe = Entities.List[id];
+			if (!pe || !st_netEquip[id].set) continue;
+			IndevArmor_RenderIds(pe, st_netEquip[id].armor);
+			SurvivalTest_RenderHeldItem(pe, st_netEquip[id].held);
+		}
 	}
 
 	SurvivalTest_RenderPaintings();
@@ -5895,6 +5923,18 @@ void SurvivalTest_NetSetArrowCount(int count) {
 	if (count < 0) count = 0;
 	if (count > ARROW_PLAYER_MAX) count = ARROW_PLAYER_MAX;
 	st_playerArrows = count;
+}
+
+/* SURV_PLAYER_EQUIP applier: stores a remote player's held id + 4 armor ids so
+    the render pass can draw them on Entities.List[entityId]. */
+void SurvivalTest_NetPlayerEquip(int entityId, int heldId, const cc_uint16* armor) {
+	struct NetEquip* eq;
+	int i;
+	if (entityId < 0 || entityId >= ENTITIES_SELF_ID) return;
+	eq = &st_netEquip[entityId];
+	eq->held = (cc_uint16)heldId;
+	for (i = 0; i < 4; i++) eq->armor[i] = armor[i];
+	eq->set = true;
 }
 
 /* MP flight tick for server-owned arrows: the SAME c0.30 drag+gravity+move as
@@ -8329,6 +8369,14 @@ static void SurvivalTest_ResetState(void) {
 		st_armor[i].id = BLOCK_AIR;
 		st_armor[i].count = 0;
 		st_armor[i].damage = 0;
+	}
+	/* remote players' streamed equipment doesn't survive a map change (entity ids
+	    are per-map); the server re-sends everyone's equip on the new map's join */
+	for (i = 0; i < ENTITIES_SELF_ID; i++) {
+		st_netEquip[i].set = false;
+		st_netEquip[i].held = 0;
+		st_netEquip[i].armor[0] = st_netEquip[i].armor[1] = 0;
+		st_netEquip[i].armor[2] = st_netEquip[i].armor[3] = 0;
 	}
 	st_damageRemainder = 0;
 	/* SurvivalGameMode.apply(Player): the player always starts with 10 TNT */

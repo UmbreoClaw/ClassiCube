@@ -16,6 +16,9 @@ void IndevArmor_Register(void);
 /* Draws the local player's worn armor onto the given humanoid entity
    (the third-person player, or the inventory paperdoll). */
 void IndevArmor_Render(struct Entity* e);
+/* Draws worn armor from an explicit id set (ids[0] boots .. ids[3] helmet,
+   0 = empty) - used for remote players' streamed SURV_PLAYER_EQUIP armor. */
+void IndevArmor_RenderIds(struct Entity* e, const cc_uint16* ids);
 
 CC_END_HEADER
 #endif

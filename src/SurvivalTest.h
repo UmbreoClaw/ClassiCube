@@ -72,6 +72,11 @@ void SurvivalTest_NetArrowStick(int netId, Vec3 pos);
 void SurvivalTest_NetArrowRemove(int netId);
 void SurvivalTest_NetSetArrowCount(int count);
 
+/* MP equipment (phase 5) - SurvivalNet's PLAYER_EQUIP applier. Stores a remote
+    player's held id + 4 worn armor ids (boots..helmet, 0 = none) keyed by Classic
+    entity id, drawn onto Entities.List[id] in the third-person render pass. */
+void SurvivalTest_NetPlayerEquip(int entityId, int heldId, const cc_uint16* armor);
+
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */
 /*  completely unaffected. This MUST be checked before any survival logic. */

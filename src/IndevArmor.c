@@ -239,15 +239,19 @@ static int IndevArmor_RenderIndex(int id) {
 	return local / 4;
 }
 
-void IndevArmor_Render(struct Entity* e) {
+/* Renders the four armor overlay passes from an explicit set of worn ids -
+    ids[0] boots .. ids[3] helmet (the InventoryPlayer.armorInventory order), 0 =
+    empty. Shared by the local player (fed from st_armor) and remote players (fed
+    from the streamed SURV_PLAYER_EQUIP armor[4]). */
+void IndevArmor_RenderIds(struct Entity* e, const cc_uint16* ids) {
 	int pass, slot, id, texIdx;
 	if (!IndevTest_Enabled || !e) return;
 
 	for (pass = 0; pass < 4; pass++) {
 		slot = 3 - pass; /* genuine shouldRenderPass: armorInventory[3 - pass] */
-		if (SurvivalTest_ArmorCount(slot) <= 0) continue;
+		id   = ids[slot];
+		if (id == 0) continue; /* streamed ids have no count - present == non-zero */
 
-		id     = SurvivalTest_ArmorId(slot);
 		texIdx = IndevArmor_RenderIndex(id);
 		if (texIdx < 0) continue;
 
@@ -255,4 +259,12 @@ void IndevArmor_Render(struct Entity* e) {
 		armor_texIdx = texIdx;
 		Model_Render(pass == 2 ? &armor2_model : &armor1_model, e);
 	}
+}
+
+void IndevArmor_Render(struct Entity* e) {
+	cc_uint16 ids[4];
+	int i;
+	for (i = 0; i < 4; i++)
+		ids[i] = SurvivalTest_ArmorCount(i) > 0 ? (cc_uint16)SurvivalTest_ArmorId(i) : 0;
+	IndevArmor_RenderIds(e, ids);
 }

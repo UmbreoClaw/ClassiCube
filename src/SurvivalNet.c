@@ -377,6 +377,20 @@ static void SurvivalNet_HandleArrowAmmo(cc_uint8* data) {
 	SurvivalTest_NetSetArrowCount(count);
 }
 
+static void SurvivalNet_HandlePlayerEquip(cc_uint8* data) {
+	/* [id][entityId][heldId:u16][armor[4]:u16 each] - a remote player's worn
+	   armor + held item, all as item ids (the client owns every model/texture). */
+	int entityId = data[1];
+	int heldId   = ((int)data[2] << 8) | data[3];
+	cc_uint16 armor[4];
+	int i;
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	for (i = 0; i < 4; i++)
+		armor[i] = (cc_uint16)(((int)data[4 + i * 2] << 8) | data[5 + i * 2]);
+	SurvivalTest_NetPlayerEquip(entityId, heldId, armor);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -403,8 +417,9 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_ARROW_STICK: SurvivalNet_HandleArrowStick(data); break;
 	case SURV_ARROW_REMOVE:SurvivalNet_HandleArrowRemove(data);break;
 	case SURV_ARROW_AMMO:  SurvivalNet_HandleArrowAmmo(data);  break;
-	/* Remaining server->client messages (blockmeta 0x40, equip 0x50) are
-	   reserved in SurvivalNet.h and land with the rest of phase 5. */
+	case SURV_PLAYER_EQUIP: SurvivalNet_HandlePlayerEquip(data); break;
+	/* Remaining server->client message (blockmeta 0x40) is reserved in
+	   SurvivalNet.h and lands with the growth/random-tick work. */
 	default: break;
 	}
 }
