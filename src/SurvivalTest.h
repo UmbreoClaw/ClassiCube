@@ -72,6 +72,13 @@ void SurvivalTest_NetArrowStick(int netId, Vec3 pos);
 void SurvivalTest_NetArrowRemove(int netId);
 void SurvivalTest_NetSetArrowCount(int count);
 
+/* MP primed TNT - SurvivalNet's TNT_SPAWN/REMOVE appliers. The server owns each
+    primed TNT's fuse and detonation; the client seeds an st_tnt entry and
+    simulates the same PrimedTnt hop/smoke/flash from pos+vel, removing it (with
+    the detonation particle burst) on TNT_REMOVE - it never explodes locally. */
+void SurvivalTest_NetTntSpawn(int netId, Vec3 pos, Vec3 vel, int fuse);
+void SurvivalTest_NetTntRemove(int netId, int detonated);
+
 /* MP equipment (phase 5) - SurvivalNet's PLAYER_EQUIP applier. Stores a remote
     player's held id + 4 worn armor ids (boots..helmet, 0 = none) keyed by Classic
     entity id, drawn onto Entities.List[id] in the third-person render pass. */

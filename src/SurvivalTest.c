@@ -1645,6 +1645,8 @@ struct TntFuse {
 	int  ticksLeft; /* PrimedTnt.life */
 	cc_bool active;
 	cc_bool onGround;
+	cc_bool net;    /* streamed in by the server (SurvivalTest_NetTntSpawn) */
+	int     netId;  /* server tnt id (wire key) - 0 for local SP entities */
 };
 static struct TntFuse st_tnt[TNT_MAX];
 
@@ -2032,6 +2034,7 @@ static cc_bool SurvivalTest_TryDefuseTnt(Vec3 eyePos, Vec3 dir, float reach) {
 	for (i = 0; i < TNT_MAX; i++) {
 		tnt = &st_tnt[i];
 		if (!tnt->active) continue;
+		if (tnt->net) continue; /* MP: the server owns the fuse - no local defuse */
 
 		min.x = tnt->pos.x - TNT_HALF; max.x = tnt->pos.x + TNT_HALF;
 		min.y = tnt->pos.y - TNT_HALF; max.y = tnt->pos.y + TNT_HALF;
@@ -2121,6 +2124,82 @@ static void SurvivalTest_TickTnt(void) {
 		coords.y = Math_Floor(tnt->pos.y);
 		coords.z = Math_Floor(tnt->pos.z);
 		Particles_BreakBlockEffect(coords, BLOCK_TNT, BLOCK_AIR);
+	}
+}
+
+/* ==================== MP primed TNT (server-driven) ==================== */
+/* Like drops/arrows, the server owns each primed TNT's fuse and detonation; the
+   client seeds an st_tnt entry and simulates the SAME PrimedTnt physics for the
+   hop/smoke/flash, then removes it on SURV_TNT_REMOVE - never exploding locally. */
+
+static struct TntFuse* SurvivalTest_FindNetTnt(int netId) {
+	int i;
+	for (i = 0; i < TNT_MAX; i++) {
+		if (st_tnt[i].active && st_tnt[i].net && st_tnt[i].netId == netId)
+			return &st_tnt[i];
+	}
+	return NULL;
+}
+
+void SurvivalTest_NetTntSpawn(int netId, Vec3 pos, Vec3 vel, int fuse) {
+	struct TntFuse* t = SurvivalTest_FindNetTnt(netId);
+	int i, slot = -1;
+	if (!t) {
+		for (i = 0; i < TNT_MAX; i++) { if (!st_tnt[i].active) { slot = i; break; } }
+		if (slot < 0) return; /* pool full - the server caps the chain at 128 anyway */
+		t = &st_tnt[slot];
+	}
+	Mem_Set(t, 0, sizeof(struct TntFuse));
+	t->pos       = pos;
+	t->prevPos   = pos; /* seed so the first frame doesn't lerp in from (0,0,0) */
+	t->vel       = vel;
+	t->ticksLeft = fuse;
+	t->active    = true;
+	t->net       = true;
+	t->netId     = netId;
+	/* BlockTNT.onBlockDestroyedByPlayer plays random.fuse when a full-fuse TNT is
+	    primed (mined / fire); the partial-fuse chain arms stay silent, like genuine. */
+	if (fuse >= 80)
+		SurvivalTest_PlaySoundAtBlock((int)pos.x, (int)pos.y, (int)pos.z, MOBSND_FUSE, 1.0f, 1.0f);
+}
+
+void SurvivalTest_NetTntRemove(int netId, int detonated) {
+	struct TntFuse* t = SurvivalTest_FindNetTnt(netId);
+	IVec3 coords;
+	if (!t) return;
+	t->active = false;
+	if (detonated) {
+		/* PrimedTnt.tick's post-blast 100-particle burst - the blast's actual
+		    block destruction streams in separately as authoritative SetBlocks. */
+		coords.x = Math_Floor(t->pos.x);
+		coords.y = Math_Floor(t->pos.y);
+		coords.z = Math_Floor(t->pos.z);
+		Particles_BreakBlockEffect(coords, BLOCK_TNT, BLOCK_AIR);
+	}
+}
+
+/* MP counterpart of SurvivalTest_TickTnt: runs each server-owned primed TNT's
+    LOCAL physics + smoke + flash, but NEVER detonates (the server owns the fuse
+    and sends SURV_TNT_REMOVE). ticksLeft still counts down - clamped at 0 - to
+    drive the flashing overlay speeding up as the fuse nears its end. */
+static void SurvivalTest_TickNetTnt(void) {
+	struct TntFuse* t;
+	int i;
+
+	SurvivalTest_TickTntSmoke();
+
+	for (i = 0; i < TNT_MAX; i++) {
+		t = &st_tnt[i];
+		if (!t->active || !t->net) continue;
+
+		t->prevPos = t->pos;
+		SurvivalTest_TntPhysics(t);
+
+		if (t->ticksLeft > 0) {
+			t->ticksLeft--;
+			SurvivalTest_SpawnTntSmoke(t->pos.x,
+				t->pos.y + (IndevTest_Enabled ? 0.5f : 0.6f), t->pos.z);
+		}
 	}
 }
 
@@ -8284,6 +8363,7 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 		SurvivalTest_TickPuppetMobs(delta);
 		SurvivalTest_TickNetDrops(delta);
 		SurvivalTest_TickNetArrows();
+		SurvivalTest_TickNetTnt();
 	}
 
 	/* World.randomDisplayUpdates (Indev client ambience: fire crackle + */

@@ -377,6 +377,38 @@ static void SurvivalNet_HandleArrowAmmo(cc_uint8* data) {
 	SurvivalTest_NetSetArrowCount(count);
 }
 
+/* --- primed TNT (0x37-0x38) --- */
+/* Positions int16 coord*32; velocity int16 blocks/TICK*1024 (per-tick, like
+   arrows). The client seeds an st_tnt entry and simulates the same PrimedTnt
+   physics from the spawn state; the server owns the fuse + detonation. */
+
+static Vec3 SurvivalNet_ReadTntVel(cc_uint8* data) {
+	Vec3 vel;
+	vel.x = SurvivalNet_I16(data)     / 1024.0f;
+	vel.y = SurvivalNet_I16(data + 2) / 1024.0f;
+	vel.z = SurvivalNet_I16(data + 4) / 1024.0f;
+	return vel;
+}
+
+static void SurvivalNet_HandleTntSpawn(cc_uint8* data) {
+	/* [id][tntId:u16][pos:3xi16][vel:3xi16][fuse:u16] */
+	int  tntId = ((int)data[1] << 8) | data[2];
+	Vec3 pos   = SurvivalNet_ReadPos(data + 3);
+	Vec3 vel   = SurvivalNet_ReadTntVel(data + 9);
+	int  fuse  = ((int)data[15] << 8) | data[16];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetTntSpawn(tntId, pos, vel, fuse);
+}
+
+static void SurvivalNet_HandleTntRemove(cc_uint8* data) {
+	/* [id][tntId:u16][reason(0 detonate/1 defuse)] */
+	int tntId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetTntRemove(tntId, data[3] == 0);
+}
+
 static void SurvivalNet_HandlePlayerEquip(cc_uint8* data) {
 	/* [id][entityId][heldId:u16][armor[4]:u16 each] - a remote player's worn
 	   armor + held item, all as item ids (the client owns every model/texture). */
@@ -417,6 +449,8 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_ARROW_STICK: SurvivalNet_HandleArrowStick(data); break;
 	case SURV_ARROW_REMOVE:SurvivalNet_HandleArrowRemove(data);break;
 	case SURV_ARROW_AMMO:  SurvivalNet_HandleArrowAmmo(data);  break;
+	case SURV_TNT_SPAWN:   SurvivalNet_HandleTntSpawn(data);   break;
+	case SURV_TNT_REMOVE:  SurvivalNet_HandleTntRemove(data);  break;
 	case SURV_PLAYER_EQUIP: SurvivalNet_HandlePlayerEquip(data); break;
 	/* Remaining server->client message (blockmeta 0x40) is reserved in
 	   SurvivalNet.h and lands with the growth/random-tick work. */

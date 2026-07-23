@@ -44,6 +44,8 @@ enum SurvNetMsg {
 	SURV_ARROW_STICK  = 0x34, /* arrowId, pos (snap + freeze) */
 	SURV_ARROW_REMOVE = 0x35, /* arrowId, reason (despawn/hit/pickup) */
 	SURV_ARROW_AMMO   = 0x36, /* player's quiver count (HUD) */
+	SURV_TNT_SPAWN    = 0x37, /* tntId, pos, vel, fuse */
+	SURV_TNT_REMOVE   = 0x38, /* tntId, reason (0 detonate/1 defuse) */
 	SURV_BLOCKMETA    = 0x40, /* xyz, meta nibble */
 	SURV_PLAYER_EQUIP = 0x50, /* entityId, heldId, armor[4] */
 
