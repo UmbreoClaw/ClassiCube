@@ -87,3 +87,45 @@ jobs:
             cc-w64-ogl.exe
             cc-w64-d3d11.exe
           retention-days: 14
+
+#============================================
+# =============== 64 BIT MACOS ==============
+# ===========================================
+# Native Cocoa builds (no -Werror here: the mingw jobs above are the strict
+# compile gate; a clang-only warning must not block getting a Mac artifact).
+# The arm64 slice is ad-hoc signed by the linker, which Apple Silicon
+# requires; lipo preserves per-slice signatures.
+  build-mac64:
+    name: macOS 64-bit (clang)
+    timeout-minutes: 15
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compile 64 bit macOS builds
+        shell: bash
+        env:
+          LIBS: "-framework Security -framework Cocoa -framework OpenGL -framework IOKit -lobjc"
+          SRCS: "src/*.c src/Window_cocoa.m third_party/bearssl/*.c"
+          FLAGS: "-O1 -fno-stack-protector -fno-math-errno -Qn -fvisibility=hidden -rdynamic"
+          ARM64_FLAGS: "-DCC_GFX_BACKEND=CC_GFX_BACKEND_GL2 -arch arm64"
+          INTEL64_FLAGS: "-arch x86_64"
+        run: |
+          LATEST_FLAG=-DCC_COMMIT_SHA=\"$(git rev-parse --short "$GITHUB_SHA")\"
+
+          clang ${{ env.SRCS }} ${{ env.FLAGS }} ${{ env.INTEL64_FLAGS }} $LATEST_FLAG -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL2 -o cc-mac64-gl2-x64 ${{ env.LIBS }}
+          clang ${{ env.SRCS }} ${{ env.FLAGS }} ${{ env.ARM64_FLAGS }}   $LATEST_FLAG -o cc-mac64-gl2-arm64 ${{ env.LIBS }}
+
+      - name: Generate combined Intel + ARM64 build
+        shell: bash
+        run: |
+          lipo -create -output cc-mac64-gl2 cc-mac64-gl2-x64 cc-mac64-gl2-arm64
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-SurvivalTest-mac64
+          path: |
+            cc-mac64-gl2
+            cc-mac64-gl2-arm64
+          retention-days: 14
