@@ -1,0 +1,70 @@
+name: Build survival macOS client
+# Builds a universal (Apple Silicon arm64 + Intel x86_64) macOS .app of this
+# survival-test fork on GitHub's macOS runners (which carry the Apple SDK), and
+# uploads it as a downloadable artifact. Runs on demand or on pushes to the
+# survival branch.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/mock-survival-server-33jx1q
+
+concurrency:
+  group: ${{ github.ref }}-mac-survival
+  cancel-in-progress: true
+
+jobs:
+  build:
+    timeout-minutes: 15
+    runs-on: macOS-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compile universal macOS binary (ModernGL)
+        shell: bash
+        env:
+          LIBS:  "-framework Security -framework Cocoa -framework OpenGL -framework IOKit -lobjc"
+          SRCS:  "src/*.c src/Window_cocoa.m third_party/bearssl/*.c"
+          FLAGS: "-O1 -s -fno-stack-protector -fno-math-errno -Qn -fvisibility=hidden -rdynamic -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL2"
+        run: |
+          SHA_FLAG=-DCC_COMMIT_SHA=\"$(git rev-parse --short "$GITHUB_SHA")\"
+
+          # Apple Silicon slice (min macOS 11) and Intel slice (min macOS 10.9)
+          clang $SRCS $FLAGS $SHA_FLAG -arch arm64  -o cc-arm64 $LIBS
+          MACOSX_DEPLOYMENT_TARGET=10.9 clang $SRCS $FLAGS $SHA_FLAG -arch x86_64 -o cc-x64 $LIBS
+
+          # fuse into one universal binary
+          lipo -create -output ClassiCube cc-arm64 cc-x64
+          lipo -info ClassiCube
+
+      - name: Assemble ClassiCube.app bundle
+        shell: bash
+        run: |
+          APP=ClassiCube.app
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp ClassiCube               "$APP/Contents/MacOS/ClassiCube"
+          cp misc/macOS/info.plist    "$APP/Contents/Info.plist"
+          cp misc/macOS/appicon.icns  "$APP/Contents/Resources/appicon.icns"
+          chmod +x "$APP/Contents/MacOS/ClassiCube"
+
+          # Ad-hoc code signature - REQUIRED for the binary to run on Apple Silicon
+          # at all, and reduces (does not remove) Gatekeeper friction on Intel.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --verbose "$APP" || true
+
+          # ditto preserves the bundle layout + exec bit inside the zip
+          ditto -c -k --keepParent "$APP" ClassiCube-survival-macOS.zip
+
+      - name: Upload .app bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-survival-macOS-app
+          path: ClassiCube-survival-macOS.zip
+          if-no-files-found: error
+
+      - name: Upload raw universal binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-survival-macOS-binary
+          path: ClassiCube
+          if-no-files-found: error
