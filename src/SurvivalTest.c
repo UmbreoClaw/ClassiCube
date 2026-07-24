@@ -2051,6 +2051,33 @@ static cc_bool SurvivalTest_TryDefuseTnt(Vec3 eyePos, Vec3 dir, float reach) {
 	return true;
 }
 
+/* MP counterpart of TryDefuseTnt: the nearest server-owned primed TNT the melee */
+/*  ray hits within reach, returned as its netId (or -1). The defuse itself is a */
+/*  SURV_ATTACK intent - the client never removes a net TNT or spawns its drop. */
+static int SurvivalTest_FindNetTntHit(Vec3 eyePos, Vec3 dir, float reach) {
+	struct TntFuse* tnt;
+	Vec3 invDir, min, max;
+	float t0, t1, bestT = 1.0e30f;
+	int i, best = -1;
+
+	invDir.x = Math_SafeDiv(1.0f, dir.x);
+	invDir.y = Math_SafeDiv(1.0f, dir.y);
+	invDir.z = Math_SafeDiv(1.0f, dir.z);
+
+	for (i = 0; i < TNT_MAX; i++) {
+		tnt = &st_tnt[i];
+		if (!tnt->active || !tnt->net) continue;
+
+		min.x = tnt->pos.x - TNT_HALF; max.x = tnt->pos.x + TNT_HALF;
+		min.y = tnt->pos.y - TNT_HALF; max.y = tnt->pos.y + TNT_HALF;
+		min.z = tnt->pos.z - TNT_HALF; max.z = tnt->pos.z + TNT_HALF;
+		if (!Intersection_RayIntersectsBox(eyePos, invDir, min, max, &t0, &t1)) continue;
+		if (t0 > reach) continue;
+		if (t0 < bestT) { bestT = t0; best = i; }
+	}
+	return best < 0 ? -1 : st_tnt[best].netId;
+}
+
 /* PrimedTnt.tick()'s physics: gravity, a swept move with real block collision, */
 /*  then air drag. Entity.move() zeroes each velocity axis it clips, so genuine */
 /*  primed TNT lands dead and stops against walls - the yd *= -0.5 "bounce" */
@@ -5737,9 +5764,21 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/*  mob. Only if it's closer than the best mob though (cap the reach at that */
 	/*  mob's distance), so whichever the crosshair actually lands on wins. */
 	if (!IndevTest_Enabled && /* Indev primed TNT cannot be punched out */
+		!SurvivalNet_ServerDriven() &&
 		SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
 		HeldBlockRenderer_ClickAnim(true);
 		return true;
+	}
+	/* MP c0.30: primed TNT is server-owned, so a hit leaves as an attack intent
+	    (targetKind 2) - the server removes it and drops the TNT back. Closest
+	    target under the crosshair wins (reach capped at any nearer mob). */
+	if (SurvivalNet_ServerDriven() && !IndevTest_Enabled) {
+		int tntId = SurvivalTest_FindNetTntHit(eyePos, dir, best ? bestT : p->ReachDistance);
+		if (tntId >= 0) {
+			HeldBlockRenderer_ClickAnim(true);
+			SurvivalNet_SendAttack(2, tntId);
+			return true;
+		}
 	}
 	/* paintings are attackable too (EntityPainting.attackEntityFrom pops
 	    them off as an item on ANY hit) - closest target wins */
@@ -7527,7 +7566,8 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 	if (SurvivalNet_ServerDriven()) {
 		int heldId = st_inv[Inventory.SelectedIndex].id;
 		cc_bool container = IndevTest_IsWorkbench(block) || IndevTest_IsContainerBlock(block);
-		cc_bool itemUse   = IndevTest_IsHoe(heldId) || heldId == 256 + 39; /* Seeds */
+		cc_bool itemUse   = IndevTest_IsHoe(heldId) || heldId == 256 + 39  /* Seeds */
+		                 || heldId == 256 + 3; /* Flint & steel -> server places fire */
 		if (!container && !itemUse) return false;
 		SurvivalNet_SendUseItem(Inventory.SelectedIndex, pos.x, pos.y, pos.z,
 		                        (int)Game_SelectedPos.closest);

@@ -493,7 +493,7 @@ void SurvivalNet_SendAttack(int targetKind, int targetId) {
 	cc_uint8 payload[64] = { 0 };
 	if (!SurvivalNet_ServerDriven()) return;
 	payload[0] = SURV_ATTACK;
-	payload[1] = (cc_uint8)targetKind;           /* 0 mob / 1 player */
+	payload[1] = (cc_uint8)targetKind;           /* 0 mob / 1 player / 2 primed TNT */
 	payload[2] = (cc_uint8)(targetId >> 8);      /* target id, u16 BE */
 	payload[3] = (cc_uint8)targetId;
 	SurvivalNet_Send(payload);
