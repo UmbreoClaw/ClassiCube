@@ -5740,8 +5740,8 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	struct Mob* best = NULL;
 	struct Mob* m;
 	Vec3 eyePos, dir;
-	float t0, t1, bestT = 1.0e30f;
-	int i;
+	float t0, t1, bestT = 1.0e30f, capT;
+	int i, pvpId = -1;
 
 	if (!SurvivalTest_Enabled) return false;
 	p = Entities.CurPlayer;
@@ -5758,22 +5758,36 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 		if (t0 > p->ReachDistance) continue;
 		if (t0 < bestT) { bestT = t0; best = m; }
 	}
+	capT = best ? bestT : p->ReachDistance;
+
+	/* PvP (MP only, and only when the server flagged this map PvP - HELLO bit2):
+	    other players' bodies are attackable exactly like mobs. The swing leaves
+	    as SURV_ATTACK targetKind 1 with the per-viewer entity id; the server
+	    resolves + validates it. Closest target under the crosshair wins. */
+	if (SurvivalNet_ServerDriven() && (SurvivalNet_ActiveFlags() & 0x04)) {
+		for (i = 0; i < ENTITIES_MAX_COUNT; i++) {
+			struct Entity* ent = Entities.List[i];
+			if (!ent || i == ENTITIES_SELF_ID) continue;
+			if (!Intersection_RayIntersectsRotatedBox(eyePos, dir, ent, &t0, &t1)) continue;
+			if (t0 > capT) continue;
+			capT = t0; pvpId = i;
+		}
+	}
 
 	/* PrimedTnt is pickable too (PrimedTnt.isPickable()), so a melee swing can */
 	/*  hit a lit TNT and defuse it (hurt() with a Player attacker) instead of a */
-	/*  mob. Only if it's closer than the best mob though (cap the reach at that */
-	/*  mob's distance), so whichever the crosshair actually lands on wins. */
+	/*  mob. Only if it's closer than the best mob/player though (reach capped at */
+	/*  that target's distance), so whichever the crosshair actually lands on wins. */
 	if (!IndevTest_Enabled && /* Indev primed TNT cannot be punched out */
 		!SurvivalNet_ServerDriven() &&
-		SurvivalTest_TryDefuseTnt(eyePos, dir, best ? bestT : p->ReachDistance)) {
+		SurvivalTest_TryDefuseTnt(eyePos, dir, capT)) {
 		HeldBlockRenderer_ClickAnim(true);
 		return true;
 	}
 	/* MP c0.30: primed TNT is server-owned, so a hit leaves as an attack intent
-	    (targetKind 2) - the server removes it and drops the TNT back. Closest
-	    target under the crosshair wins (reach capped at any nearer mob). */
+	    (targetKind 2) - the server removes it and drops the TNT back. */
 	if (SurvivalNet_ServerDriven() && !IndevTest_Enabled) {
-		int tntId = SurvivalTest_FindNetTntHit(eyePos, dir, best ? bestT : p->ReachDistance);
+		int tntId = SurvivalTest_FindNetTntHit(eyePos, dir, capT);
 		if (tntId >= 0) {
 			HeldBlockRenderer_ClickAnim(true);
 			SurvivalNet_SendAttack(2, tntId);
@@ -5783,8 +5797,14 @@ cc_bool SurvivalTest_TryAttackMob(void) {
 	/* paintings are attackable too (EntityPainting.attackEntityFrom pops
 	    them off as an item on ANY hit) - closest target wins */
 	if (IndevTest_Enabled &&
-		SurvivalTest_TryPunchPainting(eyePos, dir, best ? bestT : p->ReachDistance)) {
+		SurvivalTest_TryPunchPainting(eyePos, dir, capT)) {
 		HeldBlockRenderer_ClickAnim(true);
+		return true;
+	}
+	/* the PvP victim won the closest-target contest */
+	if (pvpId >= 0) {
+		HeldBlockRenderer_ClickAnim(true);
+		SurvivalNet_SendAttack(1, pvpId);
 		return true;
 	}
 	if (!best) return false;
