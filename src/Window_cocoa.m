@@ -265,6 +265,13 @@ static void RefreshWindowBounds(void) {
 @implementation CCWindowDelegate
 - (void)windowDidResize:(NSNotification *)notification {
 	RefreshWindowBounds();
+#if CC_GFX_BACKEND_IS_GL()
+	/* NSOpenGLContext must be told its view's frame changed, same as in
+	    windowDidMove below - without this the GL drawable keeps its OLD size,
+	    so after enlarging the window the game renders into a stale-sized
+	    rectangle in the bottom-left corner (GL origin) of the window. */
+	GLContext_Update();
+#endif
 	Event_RaiseVoid(&WindowEvents.Resized);
 }
 
