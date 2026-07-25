@@ -48,6 +48,7 @@ enum SurvNetMsg {
 	SURV_TNT_REMOVE   = 0x38, /* tntId, reason (0 detonate/1 defuse) */
 	SURV_BLOCKMETA    = 0x40, /* xyz, meta nibble */
 	SURV_PLAYER_EQUIP = 0x50, /* entityId, heldId, armor[4] */
+	SURV_PLAYER_HURT  = 0x51, /* entityId - a landed hit on that player (hurt roll) */
 
 	/* --- client -> server (intents; server validates every one) --- */
 	SURV_ATTACK       = 0x80, /* targetKind(0 mob/1 player), targetId */

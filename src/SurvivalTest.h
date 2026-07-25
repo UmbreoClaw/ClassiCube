@@ -8,6 +8,7 @@ CC_BEGIN_HEADER
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 struct IGameComponent;
+struct Entity;
 extern struct IGameComponent SurvivalTest_Component;
 
 /* The three mutually-exclusive gamemodes, stored as ONE option value so the
@@ -92,6 +93,12 @@ void SurvivalTest_NetTntRemove(int netId, int detonated);
     player's held id + 4 worn armor ids (boots..helmet, 0 = none) keyed by Classic
     entity id, drawn onto Entities.List[id] in the third-person render pass. */
 void SurvivalTest_NetPlayerEquip(int entityId, int heldId, const cc_uint16* armor);
+/* SURV_PLAYER_HURT applier: arms the 10-tick hurt body-roll on the remote
+    player entity (and voices the hit at their body). */
+void SurvivalTest_NetPlayerHurt(int entityId);
+/* Render-time hurt roll (degrees) for a remote player entity - 0 when idle.
+    NetPlayer_RenderModel adds it to the frame's freshly-lerped RotZ. */
+float SurvivalTest_RemoteHurtRoll(struct Entity* e, float t);
 
 /* Whether survival test mode is currently active. */
 /* NOTE: When false, every function here is a no-op and creative mode is */

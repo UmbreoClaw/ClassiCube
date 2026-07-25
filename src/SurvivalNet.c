@@ -423,6 +423,14 @@ static void SurvivalNet_HandlePlayerEquip(cc_uint8* data) {
 	SurvivalTest_NetPlayerEquip(entityId, heldId, armor);
 }
 
+static void SurvivalNet_HandlePlayerHurt(cc_uint8* data) {
+	/* [id][entityId] - a LANDED hit on a remote player: rock their body with
+	   the standard hurt roll. The server never sends the viewer's own id -
+	   the local hurt presentation rides the SURV_HEALTH drop instead. */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	SurvivalTest_NetPlayerHurt(data[1]);
+}
+
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
 	if (!SurvivalNet_Active())        return;
 	if (channel != SURVNET_CHANNEL)   return;
@@ -452,6 +460,7 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_TNT_SPAWN:   SurvivalNet_HandleTntSpawn(data);   break;
 	case SURV_TNT_REMOVE:  SurvivalNet_HandleTntRemove(data);  break;
 	case SURV_PLAYER_EQUIP: SurvivalNet_HandlePlayerEquip(data); break;
+	case SURV_PLAYER_HURT:  SurvivalNet_HandlePlayerHurt(data);  break;
 	/* Remaining server->client message (blockmeta 0x40) is reserved in
 	   SurvivalNet.h and lands with the growth/random-tick work. */
 	default: break;

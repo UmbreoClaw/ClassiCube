@@ -6068,6 +6068,32 @@ void SurvivalTest_NetSetArrowCount(int count) {
 	st_playerArrows = count;
 }
 
+/* SURV_PLAYER_HURT applier: a remote player took a LANDED hit. Arm the same
+    10-tick hurt roll the mob puppets keel with (rendered by the RemoteHurtRoll
+    hook in NetPlayer_RenderModel) and voice the hit at their body. The server
+    never sends the viewer's own id - the local presentation (camera tilt +
+    sound) rides the SURV_HEALTH drop instead. */
+void SurvivalTest_NetPlayerHurt(int entityId) {
+	struct Entity* e;
+	if (entityId < 0 || entityId >= ENTITIES_SELF_ID) return;
+	e = Entities.List[entityId];
+	if (!e) return;
+	e->NetHurtTicks = HURT_TILT_TICKS;
+	Indev_PlaySoundAt(e->Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+}
+
+/* Render-time hurt roll for a remote player: sin((t/10)^4 * pi) * 14 degrees,
+    the exact wobble the mob puppets use, interpolated within the tick. Returns
+    0 when idle so the hook is free for untouched entities. */
+float SurvivalTest_RemoteHurtRoll(struct Entity* e, float t) {
+	float remaining;
+	if (!e->NetHurtTicks) return 0.0f;
+	remaining = (float)e->NetHurtTicks - t;
+	if (remaining <= 0.0f) return 0.0f;
+	remaining /= (float)HURT_TILT_TICKS;
+	return Math_SinF(remaining * remaining * remaining * remaining * MATH_PI) * HURT_TILT_MAX_DEG;
+}
+
 /* SURV_PLAYER_EQUIP applier: stores a remote player's held id + 4 armor ids so
     the render pass can draw them on Entities.List[entityId]. */
 void SurvivalTest_NetPlayerEquip(int entityId, int heldId, const cc_uint16* armor) {
@@ -8233,9 +8259,17 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	struct LocalPlayer* p;
 	struct Entity* e;
 	cc_bool onGround, inLava, inWater, headInWater;
+	int ei;
 	float delta = (float)task->interval;
 
 	if (!SurvivalTest_Enabled || !World.Loaded) return;
+	/* Remote players' hurt-roll timers (SURV_PLAYER_HURT) decay a flat 1 per
+	    tick like every Mob.hurtTime - even while we're dead or in a menu, so
+	    a wobble never freezes mid-roll on someone else's body. */
+	for (ei = 0; ei < ENTITIES_SELF_ID; ei++) {
+		struct Entity* re = Entities.List[ei];
+		if (re && re->NetHurtTicks) re->NetHurtTicks--;
+	}
 	p = Entities.CurPlayer;
 	if (!p) return;
 	e = &p->Base;

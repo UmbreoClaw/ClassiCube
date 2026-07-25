@@ -141,6 +141,10 @@ struct Entity {
 	GfxResourceID ModelVB;
 
 	float PushStrength;
+	/* Survival MP: remaining ticks of the hurt body-roll for a REMOTE player
+	    (armed by SURV_PLAYER_HURT, decays 1/tick like Mob.hurtTime). Applied
+	    at render time on top of the frame's freshly-lerped RotZ. */
+	cc_uint8 NetHurtTicks;
 };
 typedef cc_bool (*Entity_TouchesCondition)(BlockID block);
 

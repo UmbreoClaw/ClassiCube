@@ -23,6 +23,7 @@
 #include "Utils.h"
 #include "EntityRenderers.h"
 #include "Protocol.h"
+#include "SurvivalTest.h"
 
 const char* const NameMode_Names[NAME_MODE_COUNT]   = { "None", "Hovered", "All", "AllHovered", "AllUnscaled" };
 const char* const ShadowMode_Names[SHADOW_MODE_COUNT] = { "None", "SnapToBlock", "Circle", "CircleAll" };
@@ -1144,6 +1145,9 @@ static void NetPlayer_Tick(struct Entity* e, float delta) {
 static void NetPlayer_RenderModel(struct Entity* e, float delta, float t) {
 	Vec3_Lerp(&e->Position, &e->prev.pos, &e->next.pos, t);
 	Entity_LerpAngles(e, t);
+	/* Survival MP: a freshly-hurt remote player rocks with the mob puppets'
+	    hurt roll. Added AFTER LerpAngles rebuilds RotZ, so it never stacks. */
+	e->RotZ += SurvivalTest_RemoteHurtRoll(e, t);
 
 	AnimatedComp_GetCurrent(e, t);
 	e->ShouldRender = Model_ShouldRender(e);
