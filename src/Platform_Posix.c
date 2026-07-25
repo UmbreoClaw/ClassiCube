@@ -1669,7 +1669,33 @@ cc_result Platform_SetDefaultCurrentDirectory(int argc, char **argv) {
 	#endif
 
 	path[len] = '\0';
-	return chdir(path) == -1 ? errno : 0;
+	if (chdir(path) == -1) return errno;
+
+	#ifdef CC_BUILD_MACOS
+	/* Gatekeeper's App Translocation runs a quarantined .app from a read-only
+	    randomized mount, so the folder beside the bundle can't hold our files
+	    (fontscache/options/texpacks all fail with EROFS). Probe the chosen
+	    directory; if it isn't writable, fall back to the user's data folder. */
+	{
+		char probe[NATIVE_STR_LEN];
+		const char* home;
+		int fd;
+
+		fd = open(".cc_write_test", O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (fd >= 0) { close(fd); unlink(".cc_write_test"); return 0; }
+		if (errno != EROFS && errno != EACCES && errno != EPERM) return 0;
+
+		home = getenv("HOME");
+		if (!home || !home[0]) return 0;
+
+		snprintf(probe, sizeof(probe), "%s/Library/Application Support/ClassiCube", home);
+		mkdir(probe, 0755); /* Library + Application Support always exist on macOS */
+		Platform_LogConst("Data folder is read-only (App Translocation?) - using ~/Library/Application Support/ClassiCube");
+		return chdir(probe) == -1 ? errno : 0;
+	}
+	#else
+	return 0;
+	#endif
 }
 #endif
 #endif
