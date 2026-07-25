@@ -819,6 +819,19 @@ void GLContext_Create(void) {
 	ctxHandle = [ctxHandle initWithFormat:fmt shareContext:Nil];
 	if (!ctxHandle) Process_Abort("Failed to create OpenGL context");
 
+	/* Apps linked against the macOS 10.15+ SDK get a Retina-resolution (2x)
+	    GL surface by default - but the engine sizes its viewport and mouse
+	    input in points (1x), so on a Retina display the game rendered into
+	    the bottom-left QUARTER of the window. Opt out so the surface stays
+	    1x point-sized, the same behavior as builds linked on older SDKs
+	    (AppKit scales it up; proper HiDPI rendering is a separate project). */
+	if ([viewHandle respondsToSelector:@selector(setWantsBestResolutionOpenGLSurface:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		[viewHandle setWantsBestResolutionOpenGLSurface:NO];
+#pragma clang diagnostic pop
+	}
+
 	[ctxHandle setView:viewHandle];
 	[ctxHandle makeCurrentContext];
 	[ctxHandle update];
