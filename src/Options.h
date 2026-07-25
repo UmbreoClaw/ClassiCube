@@ -89,6 +89,9 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_SURVIVAL_ENHANCED "survival-enhanced"
 #define OPT_INDEV_CREATIVE "indev-creative"
 #define OPT_INDEV_MODE "indev-mode"
+/* On servers WITHOUT the survival plugin: open the survival inventory screen
+/*  (as a local block stash) on its bind, instead of only the classic picker. */
+#define OPT_PLAIN_SURV_INVENTORY "survival-plain-inventory"
 /* THE authoritative gamemode key (0 off, 1 c0.30 survival, 2 indev). The two
 /*  legacy booleans above are only written for downgrade compat and only read
 /*  as a one-time migration when this key is absent. */

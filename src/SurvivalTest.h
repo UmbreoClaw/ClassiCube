@@ -72,6 +72,15 @@ void SurvivalTest_NetArrowStick(int netId, Vec3 pos);
 void SurvivalTest_NetArrowRemove(int netId);
 void SurvivalTest_NetSetArrowCount(int count);
 
+/* Plain-server local inventory: on servers WITHOUT the survival plugin, the
+    survival inventory screen can still open (default I) as a LOCAL block stash -
+    the hotbar row mirrors the engine hotbar (changes written through), the 27
+    main slots are a client-side stash, and the classic block table (default B)
+    stays the picker for the server's full block set. Pure storage UI - no
+    survival simulation runs. Toggled by OPT_PLAIN_SURV_INVENTORY (default on). */
+cc_bool SurvivalTest_PlainInvActive(void);
+void SurvivalTest_PlainInvOpen(void);
+
 /* MP primed TNT - SurvivalNet's TNT_SPAWN/REMOVE appliers. The server owns each
     primed TNT's fuse and detonation; the client seeds an st_tnt entry and
     simulates the same PrimedTnt hop/smoke/flash from pos+vel, removing it (with

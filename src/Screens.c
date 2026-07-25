@@ -1830,6 +1830,13 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 		    inventory bind (default I); Classic/creative keeps the engine's
 		    block-list bind (default B). SurvivalInvScreen_Show routes to the
 		    creative grid outside survival and no-ops in plain c0.30-s. */
+		if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return true; }
+		SurvivalInvScreen_Show();
+	} else if (SurvivalTest_PlainInvActive() &&
+			InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device)) {
+		/* Plain servers: the survival bind (default I) ALSO works, opening
+		    the local block stash; B above keeps the classic picker (needed
+		    for servers with big custom-block sets). */
 		SurvivalInvScreen_Show();
 	} else {
 		return false;
@@ -3853,7 +3860,13 @@ void SurvivalInvScreen_Show(void) {
 	/*  block-grid picker. Indev creative opens THIS screen - the genuine Indev */
 	/*  GuiInventory panel - just like survival (PlayerControllerCreative opened */
 	/*  the same GuiInventory; blocks come from the palette hotbar, not a picker). */
-	if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return; }
+	if (!SurvivalTest_Enabled) {
+		/* Plain servers: the survival screen can still open as a LOCAL block
+		    stash (c0.30-storage layout, no crafting/items) - the classic
+		    table (default B) stays the picker for the server's block set. */
+		if (!SurvivalTest_PlainInvActive()) { InventoryScreen_Show(); return; }
+		SurvivalTest_PlainInvOpen();
+	}
 	/* On a server-driven survival map the inventory is SERVER state, streamed
 	    via INV_FULL/INV_SLOT/CURSOR (phase 4) - the same survival screen
 	    renders it, with clicks leaving as intents (see the click handler). */
@@ -3862,7 +3875,7 @@ void SurvivalInvScreen_Show(void) {
 	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */
 	/*  inventory (Indev's whole point is the 2x2 grid), so both open it; plain */
 	/*  c0.30-s keeps the authentic no-op. */
-	if (!SurvivalTest_Enhanced && !IndevTest_Enabled) return;
+	if (SurvivalTest_Enabled && !SurvivalTest_Enhanced && !IndevTest_Enabled) return;
 	/* Workbench (3x3) and chest/furnace open via a right-click on the block, so
 	    that right-click leaks in as the first CCMOUSE_R - swallow it (see KeyDown).
 	    The pocket inventory opens via the inventory key, so it has no leaked click. */

@@ -195,6 +195,8 @@ static RNGState st_mobRng;
 /*  dropped-item pickup logic below can hand picked-up blocks to it. */
 static cc_bool SurvivalTest_AddItem(cc_uint16 id);
 #define SurvivalTest_AddBlock(block) SurvivalTest_AddItem(block)
+/* Plain-server local stash (defined near the creative palette code) */
+static void SurvivalTest_PlainWriteThrough(const cc_uint16* prev);
 /* /client debug commands (bottom of file) - registered while survival is on. */
 static void SurvivalTest_RegisterCommands(void);
 static void SurvivalTest_UnregisterCommands(void);
@@ -7180,6 +7182,11 @@ cc_bool SurvivalTest_CanPlace(BlockID block) {
 /*  hotbar widget and held block renderer reflect the survival inventory. */
 static void SurvivalTest_SyncHotbar(void) {
 	int i;
+	/* Plain-server stash: NEVER blanket-write the engine hotbar - an extended
+	    block (id >= 256) mirrors as an empty survival slot, and syncing that
+	    would wrongly clear it. Changed slots write through per-click instead
+	    (SurvivalTest_PlainWriteThrough). */
+	if (!SurvivalTest_Enabled) { st_invVersion++; return; }
 	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
 		Inventory_Set(i, ST_ID_BLOCK(st_inv[i].id)); /* items render separately (later) */
 	}
@@ -7230,8 +7237,13 @@ int SurvivalTest_CursorCount(void) { return st_cursor.count; }
 void SurvivalTest_SlotClick(int idx, cc_bool rightClick) {
 	struct SurvivalSlot* p;
 	struct SurvivalSlot tmp;
-	int space, moved;
-	if (!SurvivalTest_Enabled) return;
+	cc_uint16 prev[SURVIVAL_HOTBAR_SLOTS];
+	int space, moved, i;
+	cc_bool plain = SurvivalTest_PlainInvActive();
+	if (!SurvivalTest_Enabled && !plain) return;
+	/* plain mode: engine hotbar is the authority - capture the row so only
+	    slots this click actually changed get written through afterwards */
+	if (plain) { for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) prev[i] = st_inv[i].id; }
 
 	/* SlotArmor.isItemValid: an armor slot only ACCEPTS its matching piece
 	    (array index 0 boots .. 3 helmet, piece type = 3 - index). Taking
@@ -7276,6 +7288,7 @@ void SurvivalTest_SlotClick(int idx, cc_bool rightClick) {
 	}
 	st_invVersion++;
 	SurvivalTest_SyncHotbar();
+	if (plain) SurvivalTest_PlainWriteThrough(prev);
 }
 
 /* SlotCrafting pickup: crafting yields the result onto the CURSOR (stacking */
@@ -7299,10 +7312,16 @@ void SurvivalTest_ResultClick(void) {
 
 /* Returns the cursor stack to the inventory - screen close must never eat it */
 void SurvivalTest_CursorReturn(void) {
+	cc_uint16 prev[SURVIVAL_HOTBAR_SLOTS];
+	int i;
+	cc_bool plain = SurvivalTest_PlainInvActive();
+	if (plain) { for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) prev[i] = st_inv[i].id; }
+
 	while (st_cursor.count > 0 && SurvivalTest_AddItem(st_cursor.id)) st_cursor.count--;
 	if (st_cursor.count <= 0) { st_cursor.id = BLOCK_AIR; st_cursor.damage = 0; }
 	st_invVersion++;
 	SurvivalTest_SyncHotbar();
+	if (plain) SurvivalTest_PlainWriteThrough(prev);
 }
 
 /*########################################################################################################################*
@@ -8677,6 +8696,52 @@ static void SurvivalTest_OnNewMap(void) {
     cobblestone, brick, dirt, planks, log, leaves, torch, slab); existing slots
     (e.g. a reloaded creative world) are kept. Creative placement never depletes
     these, so one of each is a genuine infinite palette. */
+/* ==================== plain-server local inventory ==================== */
+/* On servers WITHOUT the survival plugin, the survival screen still opens as a
+    LOCAL block stash (the c0.30-storage 27+9 layout - crafting/items stay off
+    with IndevTest disabled, so no simulation can leak onto someone else's
+    server). The engine inventory remains the placement authority: the hotbar
+    row mirrors it on open, and click changes write through slot-by-slot. */
+
+cc_bool SurvivalTest_PlainInvActive(void) {
+	if (SurvivalTest_Enabled || Server.IsSinglePlayer) return false;
+	return Options_GetBool(OPT_PLAIN_SURV_INVENTORY, true);
+}
+
+/* Mirrors the engine hotbar into the survival hotbar row on screen open.
+    Extended blocks (id >= 256, from BlockDefinitions) cannot live in the
+    survival id space (256+ means ITEMS there) - those slots show empty, and
+    write-through only touches slots the player actually changed, so an
+    untouched extended-block slot survives intact. */
+void SurvivalTest_PlainInvOpen(void) {
+	int i;
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		BlockID b = Inventory_Get(i);
+		if (b != BLOCK_AIR && b < 256) {
+			st_inv[i].id = b; st_inv[i].count = 1; st_inv[i].damage = 0;
+		} else {
+			st_inv[i].id = BLOCK_AIR; st_inv[i].count = 0; st_inv[i].damage = 0;
+		}
+	}
+	/* items from an earlier singleplayer survival session mean nothing on a
+	    plain server - strip them from the stash (block stacks may stay) */
+	for (i = SURVIVAL_HOTBAR_SLOTS; i < SURVIVAL_INV_SLOTS; i++) {
+		if (ST_ID_IS_BLOCK(st_inv[i].id)) continue;
+		st_inv[i].id = BLOCK_AIR; st_inv[i].count = 0; st_inv[i].damage = 0;
+	}
+	st_cursor.id = BLOCK_AIR; st_cursor.count = 0; st_cursor.damage = 0;
+	st_invVersion++;
+}
+
+/* Writes hotbar-row slots whose id changed through to the engine hotbar. */
+static void SurvivalTest_PlainWriteThrough(const cc_uint16* prev) {
+	int i;
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		if (st_inv[i].id == prev[i]) continue;
+		Inventory_Set(i, ST_ID_BLOCK(st_inv[i].id));
+	}
+}
+
 static void SurvivalTest_CreativeFillPalette(void) {
 	static const cc_uint16 pal[SURVIVAL_HOTBAR_SLOTS] = {
 		BLOCK_STONE, BLOCK_COBBLE, BLOCK_BRICK, BLOCK_DIRT, BLOCK_WOOD,
