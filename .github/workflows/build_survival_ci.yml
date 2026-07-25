@@ -15,6 +15,10 @@ concurrency:
   group: ${{ github.ref }}-survival-ci
   cancel-in-progress: true
 
+# needed to move the rolling release tag + upload its assets
+permissions:
+  contents: write
+
 jobs:
 #============================================
 # ============== 32 BIT WINDOWS =============
@@ -52,6 +56,32 @@ jobs:
             cc-w32-d3d11.exe
           retention-days: 14
 
+      # rolling release (see build_mac_survival.yml for the pattern rationale)
+      - name: Move rolling release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        run: |
+          git tag -f survival-latest
+          git push -f origin survival-latest
+
+      - name: Publish to rolling release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: survival-latest
+          name: SurvivalTest client - latest branch build
+          prerelease: true
+          body: |
+            Rolling build of the survival branch - updated automatically on every
+            push. Assets are replaced as each platform's workflow finishes, so all
+            assets match the newest push once its runs complete.
+            macOS: unzip, then right-click > Open the app the first time
+            (unsigned build). Windows: pick the exe for your renderer
+            (d3d9 is the safe default).
+          files: |
+            cc-w32-d3d9.exe
+            cc-w32-ogl.exe
+            cc-w32-d3d11.exe
+
 #============================================
 # ============== 64 BIT WINDOWS =============
 # ===========================================
@@ -87,3 +117,29 @@ jobs:
             cc-w64-ogl.exe
             cc-w64-d3d11.exe
           retention-days: 14
+
+      # rolling release (see build_mac_survival.yml for the pattern rationale)
+      - name: Move rolling release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        run: |
+          git tag -f survival-latest
+          git push -f origin survival-latest
+
+      - name: Publish to rolling release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: survival-latest
+          name: SurvivalTest client - latest branch build
+          prerelease: true
+          body: |
+            Rolling build of the survival branch - updated automatically on every
+            push. Assets are replaced as each platform's workflow finishes, so all
+            assets match the newest push once its runs complete.
+            macOS: unzip, then right-click > Open the app the first time
+            (unsigned build). Windows: pick the exe for your renderer
+            (d3d9 is the safe default).
+          files: |
+            cc-w64-d3d9.exe
+            cc-w64-ogl.exe
+            cc-w64-d3d11.exe
