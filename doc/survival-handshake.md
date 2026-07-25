@@ -1,5 +1,11 @@
 # Survival multiplayer handshake — client foundation
 
+> **See also:** `doc/survival-protocol.md` — the complete, up-to-date wire
+> specification of the whole sub-protocol (every message id, byte layout,
+> validation rule, and a build-order for implementing a compatible server).
+> This file is the earlier focused record of the handshake *foundation* and
+> its rationale; layouts here cover only the first four messages.
+
 *Companion to `doc/networking-plan.md` (the full plan). This doc is the focused
 record of the **client-side handshake foundation** that actually landed in the
 repo, why it's shaped the way it is, and exactly what the MCGalaxy server session
