@@ -6,6 +6,7 @@
 #include "Chat.h"
 #include "String_.h"
 #include "Logger.h"
+#include "Platform.h"
 #include "Inventory.h"
 #include "SurvivalTest.h"
 #include "IndevTest.h"
@@ -63,18 +64,19 @@ static void SurvivalNet_HandleHello(cc_uint8* data) {
 	cc_uint8 mode  = data[1];
 	cc_uint8 flags = data[2];
 	cc_uint8 proto = data[3];
-	cc_string msg; char buf[STRING_SIZE];
-	String_InitArray(msg, buf);
 
 	if (mode > 2) {
 		/* Unknown mode from a newer server revision - treat as off rather than
-		   half-activating a sim we don't understand. */
+		   half-activating a sim we don't understand. This one stays in chat:
+		   it's an actionable mismatch, not join noise. */
+		cc_string msg; char buf[STRING_SIZE];
+		String_InitArray(msg, buf);
 		String_Format1(&msg, "&c[survival] unknown mode %b in HELLO - staying in classic mode", &mode);
 		Chat_Add(&msg);
 		mode = 0;
 	} else {
-		String_Format3(&msg, "&7[survival] hello: mode=%b flags=%b proto=%b", &mode, &flags, &proto);
-		Chat_Add(&msg);
+		/* debug detail belongs in the log file, not the player's chat */
+		Platform_Log3("survival: hello mode=%b flags=%b proto=%b", &mode, &flags, &proto);
 	}
 
 	net_mode  = mode;
@@ -94,8 +96,6 @@ static void SurvivalNet_HandleWorldInfo(cc_uint8* data) {
 	   v1 layout (legacy servers): same fields with ground/water as u8. */
 	int ground, water;
 	cc_uint8 fluid, theme, flags;
-	cc_string msg; char buf[STRING_SIZE];
-	String_InitArray(msg, buf);
 
 	if (Server.SurvivalExtVersion >= 2) {
 		ground = (cc_int16)(((cc_uint16)data[1] << 8) | data[2]);
@@ -111,9 +111,9 @@ static void SurvivalNet_HandleWorldInfo(cc_uint8* data) {
 		flags  = data[5];
 	}
 
-	String_Format4(&msg, "&7[survival] worldinfo: ground=%i water=%i theme=%b flags=%b",
-	               &ground, &water, &theme, &flags);
-	Chat_Add(&msg);
+	/* debug detail belongs in the log file, not the player's chat */
+	Platform_Log4("survival: worldinfo ground=%i water=%i theme=%b flags=%b",
+	              &ground, &water, &theme, &flags);
 
 	/* The OOB horizon planes only exist in the Indev sim (genuine Indev draws
 	   ground/fluid planes, no walls - Indev_ApplySurroundings). */
