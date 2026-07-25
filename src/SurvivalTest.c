@@ -8262,14 +8262,16 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	int ei;
 	float delta = (float)task->interval;
 
-	if (!SurvivalTest_Enabled || !World.Loaded) return;
 	/* Remote players' hurt-roll timers (SURV_PLAYER_HURT) decay a flat 1 per
-	    tick like every Mob.hurtTime - even while we're dead or in a menu, so
-	    a wobble never freezes mid-roll on someone else's body. */
+	    tick like every Mob.hurtTime - BEFORE the enabled gate, since a mode-0
+	    HELLO can land mid-wobble: the render hook is unconditional, so a
+	    ticker frozen by the gate would rock that player forever (the exact
+	    freeze st_hurtTicks once had - see the death-branch comment below). */
 	for (ei = 0; ei < ENTITIES_SELF_ID; ei++) {
 		struct Entity* re = Entities.List[ei];
 		if (re && re->NetHurtTicks) re->NetHurtTicks--;
 	}
+	if (!SurvivalTest_Enabled || !World.Loaded) return;
 	p = Entities.CurPlayer;
 	if (!p) return;
 	e = &p->Base;
