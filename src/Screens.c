@@ -2624,6 +2624,16 @@ static struct SurvivalInvScreen {
 	cc_bool skipOpenRClick;
 } SurvivalInvScreen_Instance CC_BIG_VAR;
 
+/* STYLING predicate: draw the genuine textured Indev GuiInventory panel */
+/*  (inventory.png, 176x166 grid, paperdoll window). True in Indev mode AND */
+/*  for the plain-server local stash - the GUI textures are texture-pack */
+/*  entries, so they exist on any server. BEHAVIOR gates (crafting, items, */
+/*  armor, containers, durability) stay on IndevTest_Enabled: the texture's */
+/*  craft/armor boxes render on plain servers but hold nothing and do nothing. */
+static cc_bool SurvivalInv_UseIndevUI(void) {
+	return IndevTest_Enabled || SurvivalTest_PlainInvActive();
+}
+
 /* Returns the pixel origin (top-left corner) of an inventory slot: hotbar */
 /*  slots (0-8) sit on their own row below the storage grid, GuiInventory */
 /*  style, so stacks can be moved between hotbar and storage/crafting. */
@@ -2944,7 +2954,7 @@ static void SurvivalInv_RenderDollAt(struct SurvivalInvScreen* s, struct Entity*
 		if (s->mouseX < 0) {
 			/* no PointerMove yet - look straight ahead */
 			dx = 0.0f; dy = 0.0f;
-		} else if (IndevTest_Enabled && s->texF > 0.0f) {
+		} else if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
 			/* genuine anchors: dx from (guiLeft+51), dy from (guiTop+25)
 			    (= 75 - 50), both in genuine GUI px (mouse / texF) */
 			dx = ((float)boxX + 25.0f * s->texF - (float)s->mouseX) / s->texF;
@@ -2995,7 +3005,7 @@ static void SurvivalInv_RenderDollAt(struct SurvivalInvScreen* s, struct Entity*
 	    x+y flip: it maps the y-up model into y-down GUI space while
 	    preserving triangle winding (and mirrors the doll horizontally,
 	    which is also genuine). Reproduced via the view matrix below. */
-	if (IndevTest_Enabled && s->texF > 0.0f) {
+	if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
 		aspect = 30.0f * s->texF; /* genuine glScalef 30 in panel px */
 	} else {
 		aspect = 30.0f * (float)(boxH - 2) / 70.0f; /* our classic box approximation */
@@ -3012,7 +3022,7 @@ static void SurvivalInv_RenderDollAt(struct SurvivalInvScreen* s, struct Entity*
 		    ortho range. The whole-scene pitch tilt (genuine's pre-render
 		    glRotatef about X) rides on top, so vertical mouse movement
 		    tips the CAMERA over the doll rather than bending the body. */
-		if (IndevTest_Enabled && s->texF > 0.0f) {
+		if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
 			px = ((float)boxX + 25.0f * s->texF) - (float)(boxX + 1);
 			py = ((float)s->panelY + 75.0f * s->texF) - (float)(boxY + 1);
 		} else {
@@ -3096,8 +3106,8 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 	/*  iso pictures - genuine renderBlockOnInventory blocks are big too), */
 	/*  centred on the cell centre (item origin + 8 texture units). */
 	{
-	float itemHalf = IndevTest_Enabled ? s->texF * 7.0f : halfSize;
-	int   ictr     = IndevTest_Enabled ? (int)(s->texF * 8.0f) : s->slotSize / 2;
+	float itemHalf = SurvivalInv_UseIndevUI() ? s->texF * 7.0f : halfSize;
+	int   ictr     = SurvivalInv_UseIndevUI() ? (int)(s->texF * 8.0f) : s->slotSize / 2;
 
 	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
 	/*  (item ids draw as flat sprites in the render pass instead). */
@@ -3134,7 +3144,7 @@ static void SurvivalInvScreen_BuildMesh(void* screen) {
 			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
 			/* Indev: count sits at the 16px item's bottom (slotY+16*f), not */
 			/*  the 18px cell bottom; classic keeps its slotSize-relative spot. */
-			if (IndevTest_Enabled) {
+			if (SurvivalInv_UseIndevUI()) {
 				/* renderItemOverlayIntoGUI right-aligns the count with its right */
 				/*  edge at x+17 (drawString at x + 19 - 2 - stringWidth). NOTE: */
 				/*  width must come from the atlas' per-glyph widths - offset is */
@@ -3196,7 +3206,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
 
 	{
-	if (IndevTest_Enabled && guiTex) {
+	if (SurvivalInv_UseIndevUI() && guiTex) {
 		/* Genuine look: the whole panel IS the 176-wide GUI texture (slot */
 		/*  bevels, craft arrow, and - for the pocket inventory - the armor */
 		/*  boxes and doll window). crafting.png for the workbench, */
@@ -3333,7 +3343,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 
 	/* "Inventory" title above the panel (Indev's textured panel is self- */
 	/*  contained, so no floating title there). */
-	if (s->titleTex.ID && !(IndevTest_Enabled && (IndevTest_InvGuiTex() || IndevTest_CraftGuiTex()))) {
+	if (s->titleTex.ID && !(SurvivalInv_UseIndevUI() && (IndevTest_InvGuiTex() || IndevTest_CraftGuiTex()))) {
 		s->titleTex.x = s->panelX + (s->panelW - s->titleTex.width) / 2;
 		s->titleTex.y = s->panelY - s->titleTex.height - 4;
 		Texture_Render(&s->titleTex);
@@ -3428,7 +3438,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	/* GuiContainer's mouse-over highlight: translucent white over the 16px
 	    slot area under the cursor - AFTER the slot item + count (the
 	    highlight tints them), BEFORE the held stack. */
-	if (IndevTest_Enabled && guiTex) {
+	if (SurvivalInv_UseIndevUI() && guiTex) {
 		int hover = SurvivalInv_HitSlot(s, s->mouseX, s->mouseY);
 		int inner = (int)(16 * s->texF);
 		if (hover >= 0 && hover != SURVINV_RESULT_HIT) {
@@ -3479,7 +3489,7 @@ static void SurvivalInvScreen_Render(void* screen, float delta) {
 	    coordinates: chest "Chest"(8,6) + "Inventory"(8,74); furnace
 	    "Furnace"(60,6) + "Inventory"(8,72); workbench "Crafting"(28,6) +
 	    "Inventory"(8,72); pocket inventory "Crafting"(86,16). */
-	if (IndevTest_Enabled && guiTex) {
+	if (SurvivalInv_UseIndevUI() && guiTex) {
 		struct Texture* name = NULL;
 		int nx = 8, ny = 6, invY = 72;
 		if (contKind == INDEV_CONTAINER_CHEST) {
@@ -3653,7 +3663,7 @@ static void SurvivalInvScreen_Layout(void* screen) {
 	gap = (int)(SURVINV_GAP_BASE * Gui_GetInventoryScale());
 	pad = (int)(SURVINV_PAD_BASE * Gui_GetInventoryScale());
 
-	if (IndevTest_Enabled) {
+	if (SurvivalInv_UseIndevUI()) {
 		/* Genuine GuiInventory: a 176x166 texture panel, slots on its fixed */
 		/*  18px grid - craft 2x2 at (88,26), result (144,36), storage (8,84), */
 		/*  hotbar (8,142), doll window (26,8)-(74,78). texF scales it all. */
