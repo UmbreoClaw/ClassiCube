@@ -145,6 +145,10 @@ struct Entity {
 	    (armed by SURV_PLAYER_HURT, decays 1/tick like Mob.hurtTime). Applied
 	    at render time on top of the frame's freshly-lerped RotZ. */
 	cc_uint8 NetHurtTicks;
+	/* Survival MP: ticks since a REMOTE player DIED (SURV_PLAYER_HURT state 1;
+	    0 = alive). Counts UP each tick and drives the mob-style death keel-over
+	    until the revive state (or the server's dwell despawn) clears it. */
+	cc_uint8 NetDeathTicks;
 };
 typedef cc_bool (*Entity_TouchesCondition)(BlockID block);
 

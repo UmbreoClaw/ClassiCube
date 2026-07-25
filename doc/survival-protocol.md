@@ -386,17 +386,26 @@ every model/texture and renders them onto the entity. Sent when the equip
 changes and when an entity spawns into view; deduplicated server-side.
 
 ### 0x51 `SURV_PLAYER_HURT`
-`[1] entityId (as the receiving viewer sees the victim)`
+`[1] entityId (as the receiving viewer sees the victim), [2] state`
 
-A player took a **landed** hit (one absorbed by the invulnerability window or
-armor is not broadcast). The client rocks that entity with the standard hurt
-body-roll — `sin((t/10)⁴·π) × 14°` about the model Z axis over 10 ticks, the
-same wobble mob puppets use — and, in Indev mode, voices the hit at their
-body (c0.30 has no entity voices, so the roll is silent there). Broadcast to
-every *other* survival watcher on the victim's level; the victim's own client
-is never sent it (its hurt presentation — camera tilt + sound — derives from
-the `SURV_HEALTH` drop). Additive message: clients that predate it ignore the
-unknown id, so no extension version bump.
+State 0: the player took a **landed** hit (one absorbed by the invulnerability
+window or armor is not broadcast). The client rocks that entity with the
+standard hurt body-roll — `sin((t/10)⁴·π) × 14°` about the model Z axis over
+10 ticks, the same wobble mob puppets use — and, in Indev mode, voices the
+hit at their body (c0.30 has no entity voices, so the roll is silent there).
+
+State 1: the player **died** — the client plays the killing blow's wobble and
+keels the body over like a dying mob (`deathTicks² × 2` degrees, capped 90).
+The server unloads the corpse entity for all viewers (classic clients too)
+about a second later and keeps it unloaded for the death dwell, respawning it
+fresh on revive. State 2: **revived** — clear the keel (normally moot, since
+the entity was despawned and respawns fresh).
+
+Broadcast to every *other* survival watcher on the victim's level; the
+victim's own client is never sent it (its presentation derives from the
+`SURV_HEALTH` stream). Additive message: clients that predate it ignore the
+unknown id, and clients that predate the state byte read only the entity id
+(a death shows as a plain wobble there), so no extension version bump.
 
 ## 5. Client → server intents
 

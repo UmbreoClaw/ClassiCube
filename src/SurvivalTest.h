@@ -96,6 +96,9 @@ void SurvivalTest_NetPlayerEquip(int entityId, int heldId, const cc_uint16* armo
 /* SURV_PLAYER_HURT applier: arms the 10-tick hurt body-roll on the remote
     player entity (and voices the hit at their body). */
 void SurvivalTest_NetPlayerHurt(int entityId);
+/* SURV_PLAYER_HURT states 1/2: the remote player died (keel their body over
+    like a dying mob) or revived (stand back up). */
+void SurvivalTest_NetPlayerDeathState(int entityId, cc_bool died);
 /* Render-time hurt roll (degrees) for a remote player entity - 0 when idle.
     NetPlayer_RenderModel adds it to the frame's freshly-lerped RotZ. */
 float SurvivalTest_RemoteHurtRoll(struct Entity* e, float t);

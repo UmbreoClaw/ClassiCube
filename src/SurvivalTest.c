@@ -6082,16 +6082,48 @@ void SurvivalTest_NetPlayerHurt(int entityId) {
 	Indev_PlaySoundAt(e->Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
 }
 
+/* SURV_PLAYER_HURT state 1/2 applier: the remote player died or revived. Death
+    arms the killing blow's wobble + the mob-style keel-over ramp (the server
+    unloads the entity ~1s later for the dwell, so the keel is what viewers see
+    between the hit and the vanish); revive clears both. The hurt voice plays
+    only if a landed-hit wobble isn't already fresh - melee kills broadcast the
+    hurt AND the death, and one hit is one voice. */
+void SurvivalTest_NetPlayerDeathState(int entityId, cc_bool died) {
+	struct Entity* e;
+	if (entityId < 0 || entityId >= ENTITIES_SELF_ID) return;
+	e = Entities.List[entityId];
+	if (!e) return;
+	if (died) {
+		if (!e->NetHurtTicks) Indev_PlaySoundAt(e->Position, MOBSND_HURT, 1.0f, Mob_SndPitch());
+		e->NetHurtTicks  = HURT_TILT_TICKS;
+		e->NetDeathTicks = 1;
+	} else {
+		e->NetHurtTicks  = 0;
+		e->NetDeathTicks = 0;
+	}
+}
+
 /* Render-time hurt roll for a remote player: sin((t/10)^4 * pi) * 14 degrees,
-    the exact wobble the mob puppets use, interpolated within the tick. Returns
-    0 when idle so the hook is free for untouched entities. */
+    the exact wobble the mob puppets use, interpolated within the tick - plus,
+    once dead, the mob death keel (deathT^2 * 2, i.e. (t/20)^2*800 simplified),
+    the pair capped at 90 like the puppets. Returns 0 when idle so the hook is
+    free for untouched entities. */
 float SurvivalTest_RemoteHurtRoll(struct Entity* e, float t) {
-	float remaining;
-	if (!e->NetHurtTicks) return 0.0f;
-	remaining = (float)e->NetHurtTicks - t;
-	if (remaining <= 0.0f) return 0.0f;
-	remaining /= (float)HURT_TILT_TICKS;
-	return Math_SinF(remaining * remaining * remaining * remaining * MATH_PI) * HURT_TILT_MAX_DEG;
+	float roll = 0.0f, remaining, deathT;
+	if (!e->NetHurtTicks && !e->NetDeathTicks) return 0.0f;
+
+	if (e->NetHurtTicks) {
+		remaining = (float)e->NetHurtTicks - t;
+		if (remaining > 0.0f) {
+			remaining /= (float)HURT_TILT_TICKS;
+			roll = Math_SinF(remaining * remaining * remaining * remaining * MATH_PI) * HURT_TILT_MAX_DEG;
+		}
+	}
+	if (e->NetDeathTicks) {
+		deathT = (float)e->NetDeathTicks - 1.0f + t;
+		roll  += deathT * deathT * 2.0f;
+	}
+	return roll > 90.0f ? 90.0f : roll;
 }
 
 /* SURV_PLAYER_EQUIP applier: stores a remote player's held id + 4 armor ids so
@@ -8269,7 +8301,10 @@ static void SurvivalTest_Tick(struct ScheduledTask* task) {
 	    freeze st_hurtTicks once had - see the death-branch comment below). */
 	for (ei = 0; ei < ENTITIES_SELF_ID; ei++) {
 		struct Entity* re = Entities.List[ei];
-		if (re && re->NetHurtTicks) re->NetHurtTicks--;
+		if (!re) continue;
+		if (re->NetHurtTicks) re->NetHurtTicks--;
+		/* death keel ramps UP (saturating well past the 90-degree cap) */
+		if (re->NetDeathTicks && re->NetDeathTicks < 200) re->NetDeathTicks++;
 	}
 	if (!SurvivalTest_Enabled || !World.Loaded) return;
 	p = Entities.CurPlayer;

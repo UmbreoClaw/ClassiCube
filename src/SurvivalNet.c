@@ -424,11 +424,18 @@ static void SurvivalNet_HandlePlayerEquip(cc_uint8* data) {
 }
 
 static void SurvivalNet_HandlePlayerHurt(cc_uint8* data) {
-	/* [id][entityId] - a LANDED hit on a remote player: rock their body with
-	   the standard hurt roll. The server never sends the viewer's own id -
-	   the local hurt presentation rides the SURV_HEALTH drop instead. */
+	/* [id][entityId][state] - a remote player's hurt/death presentation.
+	   state 0 = a LANDED hit (standard hurt roll), 1 = they DIED (keel the
+	   body over like a dying mob; the server unloads the entity a second
+	   later for the death dwell), 2 = REVIVED (clear the keel). The server
+	   never sends the viewer's own id - the local presentation rides the
+	   SURV_HEALTH stream instead. */
 	if (SurvivalNet_ActiveMode() == 0) return;
-	SurvivalTest_NetPlayerHurt(data[1]);
+	switch (data[2]) {
+	case 1:  SurvivalTest_NetPlayerDeathState(data[1], true);  break;
+	case 2:  SurvivalTest_NetPlayerDeathState(data[1], false); break;
+	default: SurvivalTest_NetPlayerHurt(data[1]);              break;
+	}
 }
 
 static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* data) {
