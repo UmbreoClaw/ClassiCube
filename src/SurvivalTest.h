@@ -88,6 +88,10 @@ void SurvivalTest_PlainInvOpen(void);
     the detonation particle burst) on TNT_REMOVE - it never explodes locally. */
 void SurvivalTest_NetTntSpawn(int netId, Vec3 pos, Vec3 vel, int fuse);
 void SurvivalTest_NetTntRemove(int netId, int detonated);
+/* SURV_PAINT_SPAWN/REMOVE appliers: server-owned paintings (the server did the
+    wall validation + art roll; the client derives the genuine geometry). */
+void SurvivalTest_NetPaintSpawn(int id, int x, int y, int z, int dir, int art);
+void SurvivalTest_NetPaintRemove(int id);
 
 /* MP equipment (phase 5) - SurvivalNet's PLAYER_EQUIP applier. Stores a remote
     player's held id + 4 worn armor ids (boots..helmet, 0 = none) keyed by Classic

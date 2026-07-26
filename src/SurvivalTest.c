@@ -6833,6 +6833,7 @@ struct PaintingEntity {
 	Vec3 pos;               /* genuine posX/Y/Z - the painting centre */
 	struct AABB bb;
 	int tickCounter;
+	cc_uint16 netId;        /* MP: the server's painting id (0 in SP) */
 };
 static struct PaintingEntity st_paintings[PAINTING_MAX];
 
@@ -7023,7 +7024,13 @@ static cc_bool SurvivalTest_TryPunchPainting(Vec3 eyePos, Vec3 dir, float maxDis
 		if (t < bestT) { bestT = t; best = &st_paintings[i]; }
 	}
 	if (!best) return false;
-	Painting_PopOff(best);
+	/* MP: the punch is an intent - the server validates reach, pops the
+	    painting authoritatively and streams the removal + dropped item back */
+	if (SurvivalNet_ServerDriven()) {
+		SurvivalNet_SendAttack(3, best->netId);
+	} else {
+		Painting_PopOff(best);
+	}
 	return true;
 }
 
@@ -7038,6 +7045,46 @@ static cc_bool SurvivalTest_ArrowHitPainting(Vec3 pos) {
 		return true;
 	}
 	return false;
+}
+
+/* SURV_PAINT_SPAWN applier: hang a server-owned painting. The server did the
+    wall validation and the art roll - the client just derives the genuine
+    geometry from the tile + direction + art, exactly like its own placement.
+    Idempotent on the server id (a handshake resend reuses the entry). */
+void SurvivalTest_NetPaintSpawn(int id, int x, int y, int z, int dir, int art) {
+	struct PaintingEntity* pt = NULL;
+	int i, freeSlot = -1;
+	if (dir < 0 || dir > 3 || art < 0 || art >= (int)Array_Elems(paintingArts)) return;
+
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (st_paintings[i].active) {
+			if (st_paintings[i].netId == (cc_uint16)id) { pt = &st_paintings[i]; break; }
+		} else if (freeSlot < 0) { freeSlot = i; }
+	}
+	if (!pt) {
+		if (freeSlot < 0) return;
+		pt = &st_paintings[freeSlot];
+	}
+
+	Mem_Set(pt, 0, sizeof(*pt));
+	pt->netId = (cc_uint16)id;
+	pt->dir   = (cc_uint8)dir;
+	pt->art   = (cc_uint8)art;
+	pt->tileX = (cc_int16)x; pt->tileY = (cc_int16)y; pt->tileZ = (cc_int16)z;
+	Painting_SetDirection(pt);
+	pt->tickCounter = 101; /* the wall check is the SERVER's job in MP */
+	pt->active      = true;
+}
+
+/* SURV_PAINT_REMOVE applier: the server popped/invalidated it - no local drop
+    (the dropped painting item arrives as a normal SURV_DROP_SPAWN). */
+void SurvivalTest_NetPaintRemove(int id) {
+	int i;
+	for (i = 0; i < PAINTING_MAX; i++) {
+		if (!st_paintings[i].active || st_paintings[i].netId != (cc_uint16)id) continue;
+		st_paintings[i].active = false;
+		return;
+	}
 }
 
 /* .mclevel: iterate live paintings / restore one */

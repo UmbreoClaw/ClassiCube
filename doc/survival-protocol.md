@@ -370,6 +370,28 @@ The client simulates the PrimedTnt hop/smoke/flash locally.
 plays the burst; the actual block destruction arrives as authoritative
 standard SetBlock packets.
 
+### 0x39 `SURV_PAINT_SPAWN`
+| Off | Size | Field |
+|---|---|---|
+| 1 | 2 | paintId u16 |
+| 3 | 6 | wall tile x, y, z: 3 × i16 (whole blocks) |
+| 9 | 1 | dir: 0..3 (facing, yaw = dir × 90°) |
+| 10 | 1 | art id (index into the genuine 19-entry kz.png art table) |
+
+A hung painting. The client derives the full genuine geometry (centre,
+bounding box, the 0.5 re-centring quirk for 32px+ art) from tile + dir + art,
+exactly as its own singleplayer placement does. Sent on placement and in the
+handshake burst for each existing painting. Placement itself rides the normal
+`SURV_USE_ITEM` with the painting item held — the server validates the wall
+(side faces only, interior blocks, every 16px cell backed by solid, no
+overlap) and rolls a random fitting art, matching `ItemPainting.onItemUse`.
+
+### 0x3A `SURV_PAINT_REMOVE`
+`[1] paintId u16` — popped (punched, arrow-hit, or failed the genuine
+once-at-100-ticks wall check) or otherwise removed. The dropped painting item
+arrives separately as a normal `SURV_DROP_SPAWN`. Paintings persist in the
+level sidecar.
+
 ### 0x40 `SURV_BLOCKMETA` — reserved
 Reserved for block metadata (growth stages etc.); not currently sent. The
 reference implementation drives visible growth through block changes.
@@ -416,7 +438,7 @@ trust. Intents from sessions that did not negotiate `SurvivalTest` are
 dropped outright.
 
 ### 0x80 `SURV_ATTACK`
-`[1] targetKind (0 mob / 1 player / 2 primed TNT), [2] targetId u16`
+`[1] targetKind (0 mob / 1 player / 2 primed TNT / 3 painting), [2] targetId u16`
 
 Server validation (reference implementation):
 - sender alive, map active;
@@ -425,6 +447,8 @@ Server validation (reference implementation):
 - kind 1 (PvP) additionally requires the map's pvp flag; target must be a
   survival player on the same map, alive;
 - kind 2 defuses the TNT entity (c0.30 melee defuse) if in reach.
+- kind 3 pops the painting off as a drop entity (any landed hit, genuine
+  `EntityPainting.attackEntityFrom`) if in reach.
 - damage is computed **server-side** from the server-known held item
   (c0.30: flat 4; Indev: fist 1, tools by tier, swords 4+tier×2), then armor
   absorption, invulnerability windows, knockback, aggro.

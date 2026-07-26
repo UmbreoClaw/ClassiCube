@@ -46,12 +46,14 @@ enum SurvNetMsg {
 	SURV_ARROW_AMMO   = 0x36, /* player's quiver count (HUD) */
 	SURV_TNT_SPAWN    = 0x37, /* tntId, pos, vel, fuse */
 	SURV_TNT_REMOVE   = 0x38, /* tntId, reason (0 detonate/1 defuse) */
+	SURV_PAINT_SPAWN  = 0x39, /* paintId, wall tile xyz, dir, art */
+	SURV_PAINT_REMOVE = 0x3A, /* paintId (the popped drop arrives as DROP_SPAWN) */
 	SURV_BLOCKMETA    = 0x40, /* xyz, meta nibble */
 	SURV_PLAYER_EQUIP = 0x50, /* entityId, heldId, armor[4] */
 	SURV_PLAYER_HURT  = 0x51, /* entityId - a landed hit on that player (hurt roll) */
 
 	/* --- client -> server (intents; server validates every one) --- */
-	SURV_ATTACK       = 0x80, /* targetKind(0 mob/1 player), targetId */
+	SURV_ATTACK       = 0x80, /* targetKind(0 mob/1 player/2 tnt/3 painting), targetId */
 	SURV_USE_ITEM     = 0x81, /* heldSlot, targetBlock xyz, face */
 	SURV_SLOT_CLICK   = 0x82, /* slotIdx(u16 extended), button(0 L/1 R) */
 	SURV_RESULT_CLICK = 0x83, /* take craft result */

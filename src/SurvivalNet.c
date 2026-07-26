@@ -423,6 +423,28 @@ static void SurvivalNet_HandlePlayerEquip(cc_uint8* data) {
 	SurvivalTest_NetPlayerEquip(entityId, heldId, armor);
 }
 
+static void SurvivalNet_HandlePaintSpawn(cc_uint8* data) {
+	/* [id][paintId:u16][tileX:i16][tileY:i16][tileZ:i16][dir][art] - the server
+	   validated the wall + rolled the art; the client derives the genuine
+	   geometry from the tile + dir + art, same as its own SP placement. */
+	int paintId = ((int)data[1] << 8) | data[2];
+	int x = SurvivalNet_I16(data + 3);
+	int y = SurvivalNet_I16(data + 5);
+	int z = SurvivalNet_I16(data + 7);
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetPaintSpawn(paintId, x, y, z, data[9], data[10]);
+}
+
+static void SurvivalNet_HandlePaintRemove(cc_uint8* data) {
+	/* [id][paintId:u16] - popped or invalidated; any dropped painting item
+	   arrives separately as a normal SURV_DROP_SPAWN */
+	int paintId = ((int)data[1] << 8) | data[2];
+	if (SurvivalNet_ActiveMode() == 0) return;
+
+	SurvivalTest_NetPaintRemove(paintId);
+}
+
 static void SurvivalNet_HandlePlayerHurt(cc_uint8* data) {
 	/* [id][entityId][state] - a remote player's hurt/death presentation.
 	   state 0 = a LANDED hit (standard hurt roll), 1 = they DIED (keel the
@@ -466,6 +488,8 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_ARROW_AMMO:  SurvivalNet_HandleArrowAmmo(data);  break;
 	case SURV_TNT_SPAWN:   SurvivalNet_HandleTntSpawn(data);   break;
 	case SURV_TNT_REMOVE:  SurvivalNet_HandleTntRemove(data);  break;
+	case SURV_PAINT_SPAWN: SurvivalNet_HandlePaintSpawn(data); break;
+	case SURV_PAINT_REMOVE:SurvivalNet_HandlePaintRemove(data);break;
 	case SURV_PLAYER_EQUIP: SurvivalNet_HandlePlayerEquip(data); break;
 	case SURV_PLAYER_HURT:  SurvivalNet_HandlePlayerHurt(data);  break;
 	/* Remaining server->client message (blockmeta 0x40) is reserved in
