@@ -1609,7 +1609,19 @@ static void Indev_TickDayNight(void) {
 	    linear 0.267). Each Env change triggers a full relight, so only
 	    apply when the eased level actually moves. */
 	light = Indev_SkyLight();
-	if (indev_lastSkyLight < 0)          indev_lastSkyLight = light;
+	if (indev_lastSkyLight < 0) {
+		indev_lastSkyLight = light;
+	} else if (indev_lastSkyLight - light > 1 || light - indev_lastSkyLight > 1) {
+		/* A multi-step delta can ONLY be an explicit time JUMP (/SurvTime, a
+		    server TIME snap) - natural cycling moves the target one level at
+		    a time, so the genuine 1-step ease below is untouched for dusk/
+		    dawn. Easing a jump meant up to 11 back-to-back FULL-MAP chunk
+		    remeshes; on a huge map each takes minutes at the per-frame chunk
+		    budget, so far chunks were perpetually re-queued and never showed
+		    the new light (user-reported: "midnight but distant blocks still
+		    daytime"). Snap jumps in ONE relight instead. */
+		indev_lastSkyLight = light;
+	}
 	else if (indev_lastSkyLight > light) indev_lastSkyLight--;
 	else if (indev_lastSkyLight < light) indev_lastSkyLight++;
 	else return;
