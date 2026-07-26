@@ -7711,7 +7711,8 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 		int heldId = st_inv[Inventory.SelectedIndex].id;
 		cc_bool container = IndevTest_IsWorkbench(block) || IndevTest_IsContainerBlock(block);
 		cc_bool itemUse   = IndevTest_IsHoe(heldId) || heldId == 256 + 39  /* Seeds */
-		                 || heldId == 256 + 3; /* Flint & steel -> server places fire */
+		                 || heldId == 256 + 3    /* Flint & steel -> server places fire */
+		                 || heldId == 256 + 65;  /* Painting -> server validates + hangs it */
 		if (!container && !itemUse) return false;
 		SurvivalNet_SendUseItem(Inventory.SelectedIndex, pos.x, pos.y, pos.z,
 		                        (int)Game_SelectedPos.closest);
