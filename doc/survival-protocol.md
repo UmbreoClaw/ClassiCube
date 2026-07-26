@@ -566,6 +566,12 @@ consume): skip `SURV_INV_FULL`/`SURV_CURSOR` in the handshake — the client
 keeps its local palette hotbar — and reject container/item-use sync. The
 creative flag rides HELLO bit1.
 
+The flag is per-**player**, not just per-map: a server may force it on for an
+individual observer (the reference server does this for referees) by
+re-sending the handshake with the flag set, and later clear it with another
+re-send followed by the usual inventory stream. The client treats every
+handshake as authoritative, so no extra protocol is needed for the switch.
+
 ### 6.5 Echo-only inventory (no prediction)
 
 The client never mutates inventory locally in MP. Click → intent → server
