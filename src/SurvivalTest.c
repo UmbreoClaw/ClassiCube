@@ -8875,6 +8875,29 @@ static void SurvivalTest_PlainWriteThrough(const cc_uint16* prev) {
 	}
 }
 
+/* MP: entering creative mid-map (a referee toggle re-negotiates the
+    handshake) leaves the local slots holding a STALE copy of the streamed
+    survival inventory - the GuiInventory would show items that look real
+    but are a frozen mirror: no server echo ever updates them, and local
+    clicks appear to destroy them. Wipe all of it so creative starts from
+    the genuine empty-storage + palette-hotbar state; the REAL inventory is
+    safe server-side and streams back with the next survival handshake. */
+static void SurvivalTest_ClearLocalInventory(void) {
+	struct SurvivalSlot* s;
+	int i;
+	for (i = 0; i < SURVIVAL_CONTAINER_BASE; i++) {
+		s = SurvivalTest_SlotPtr(i);
+		s->id = BLOCK_AIR; s->count = 0; s->damage = 0;
+	}
+	for (i = SURVIVAL_ARMOR_BASE; i < SURVIVAL_ARMOR_BASE + SURVIVAL_ARMOR_SLOTS; i++) {
+		s = SurvivalTest_SlotPtr(i);
+		s->id = BLOCK_AIR; s->count = 0; s->damage = 0;
+	}
+	st_cursor.id = BLOCK_AIR; st_cursor.count = 0; st_cursor.damage = 0;
+	st_invVersion++;
+	SurvivalTest_SyncHotbar();
+}
+
 static void SurvivalTest_CreativeFillPalette(void) {
 	static const cc_uint16 pal[SURVIVAL_HOTBAR_SLOTS] = {
 		BLOCK_STONE, BLOCK_COBBLE, BLOCK_BRICK, BLOCK_DIRT, BLOCK_WOOD,
@@ -8967,8 +8990,11 @@ static void SurvivalTest_MapActivate(void) {
 	    creative map the server tracks no inventory at all, so the genuine
 	    palette fills locally either way (user request: MP Indev creative
 	    uses the Indev creative inventory, not the classic picker flow). */
-	if (SurvivalTest_CreativeActive())
+	if (SurvivalTest_CreativeActive()) {
+		/* MP only: SP creative storage legitimately persists across visits */
+		if (SurvivalNet_ServerDriven()) SurvivalTest_ClearLocalInventory();
 		SurvivalTest_CreativeFillPalette();
+	}
 
 	/* Server-driven maps: the (survival) inventory and mobs are the server's
 	    job - phases 4 and 3 stream them. Touching the classic hotbar or

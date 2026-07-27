@@ -3790,6 +3790,14 @@ static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bo
 		Gui_Remove((struct Screen*)s);
 		return;
 	}
+	/* MP creative (a referee observing): an open server container view -
+	    chest, furnace, or an /Inventory player mirror - is a read-only
+	    stream. The server ignores creative observers' clicks and echoes
+	    nothing back, so a local click would only appear to destroy items.
+	    Look, don't touch; palette juggling (no container open) stays local. */
+	if (SurvivalNet_ServerDriven() && SurvivalTest_CreativeActive() &&
+		IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return;
+
 	/* MP: clicks are intents - the server runs the click on its authoritative
 	    slots/cursor and echoes INV_SLOT + CURSOR back (echo-only v1, no local
 	    prediction). SP keeps mutating local state directly. */
