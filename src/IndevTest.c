@@ -3257,10 +3257,18 @@ static void IndevTest_MapActivate(void) {
 	}
 	IndevTest_ApplySurroundings();
 
-	indev_baseSky      = Env.SkyCol;
-	indev_baseFog      = Env.FogCol;
-	indev_baseClouds   = Env.CloudsCol;
-	indev_baseColsKnown = true;
+	/* Snapshot the full-daylight base ONCE per map. MapActivate also runs on
+	    every mid-session re-HELLO (referee toggles, live /Survival config
+	    edits re-negotiate the handshake) - by then the live colours are
+	    already time-of-day scaled, and re-snapshotting them at night made
+	    the scaler darken an already-dark base (pitch black clouds/sky).
+	    OnNewMap clears the flag, so a genuinely new map still snapshots. */
+	if (!indev_baseColsKnown) {
+		indev_baseSky      = Env.SkyCol;
+		indev_baseFog      = Env.FogCol;
+		indev_baseClouds   = Env.CloudsCol;
+		indev_baseColsKnown = true;
+	}
 	indev_lastSkyLight  = -1; /* reapply sun/shadow for the new map */
 
 	/* Level.initTransient: randId = random.nextInt() - without a per-map
