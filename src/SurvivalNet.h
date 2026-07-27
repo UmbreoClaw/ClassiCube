@@ -37,6 +37,7 @@ enum SurvNetMsg {
 	SURV_CONT_SLOT    = 0x23, /* slot, id, count, dmg */
 	SURV_FURN_PROG    = 0x24, /* burn, cook */
 	SURV_CURSOR       = 0x25, /* server-owned held stack: id, count, dmg */
+	SURV_ITEM_GIVE    = 0x26, /* deposit into the LOCAL creative palette: id, count */
 	SURV_DROP_SPAWN   = 0x30, /* dropId, itemId, count, pos, vel, rot0 */
 	SURV_DROP_PICKUP  = 0x31, /* dropId, pickerEntityId */
 	SURV_DROP_REMOVE  = 0x32, /* dropId, reason */

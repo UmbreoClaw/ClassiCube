@@ -233,6 +233,15 @@ static void SurvivalNet_HandleInvSlot(cc_uint8* data) {
 		(cc_int16)(((cc_uint16)data[5] << 8) | data[6]));
 }
 
+static void SurvivalNet_HandleItemGive(cc_uint8* data) {
+	/* [id][item:u16][count:u16] - deposit into the LOCAL creative palette
+	    inventory (/Give to a referee / creative-map player). No-op outside
+	    creative: in survival the server streams the inventory instead. */
+	if (SurvivalNet_ActiveMode() == 0) return;
+	SurvivalTest_NetItemGive(((int)data[1] << 8) | data[2],
+	                         ((int)data[3] << 8) | data[4]);
+}
+
 static void SurvivalNet_HandleCursor(cc_uint8* data) {
 	/* [id][id:u16][count][dmg:i16] - the server-owned held stack */
 	if (SurvivalNet_ActiveMode() == 0) return;
@@ -479,6 +488,7 @@ static void SurvivalNet_OnPluginMessage(void* obj, cc_uint8 channel, cc_uint8* d
 	case SURV_CONT_SLOT:   SurvivalNet_HandleContSlot(data);   break;
 	case SURV_FURN_PROG:   SurvivalNet_HandleFurnProg(data);   break;
 	case SURV_CURSOR:      SurvivalNet_HandleCursor(data);     break;
+	case SURV_ITEM_GIVE:   SurvivalNet_HandleItemGive(data);   break;
 	case SURV_DROP_SPAWN:  SurvivalNet_HandleDropSpawn(data);  break;
 	case SURV_DROP_PICKUP: SurvivalNet_HandleDropPickup(data); break;
 	case SURV_DROP_REMOVE: SurvivalNet_HandleDropRemove(data); break;

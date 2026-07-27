@@ -56,6 +56,7 @@ void SurvivalTest_NetMobDespawn(int id, int reason);
     The server owns every slot + the cursor; these write the echoed state. */
 void SurvivalTest_NetInvSlot(int idx, int id, int count, int dmg);
 void SurvivalTest_NetCursor(int id, int count, int dmg);
+void SurvivalTest_NetItemGive(int id, int count);
 
 /* MP dropped items (phase 5) - SurvivalNet's DROP_SPAWN/PICKUP/REMOVE appliers.
     The server owns each drop's id, pickup-delay countdown and collection; the

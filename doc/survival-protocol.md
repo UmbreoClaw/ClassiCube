@@ -312,6 +312,14 @@ for the open furnace GUI, sent while it changes.
 `[1] id u16, [3] count u8, [4] damage i16` — the server-owned held stack
 (what the mouse carries between clicks). Echoed after every click.
 
+### 0x26 `SURV_ITEM_GIVE`
+`[1] id u16, [3] count u16` — deposits items into the client's LOCAL
+creative palette inventory (a `/Give` to a referee or creative-map player).
+Only honored while the client is in creative mode; the server-side survival
+inventory is deliberately untouched, so nothing given in creative leaks
+into survival. Survival-mode clients ignore it (their inventory is the
+0x20/0x21 stream).
+
 ### 0x30 `SURV_DROP_SPAWN`
 | Off | Size | Field |
 |---|---|---|

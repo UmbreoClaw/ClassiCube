@@ -7633,6 +7633,21 @@ void SurvivalTest_DebugGiveItem(int id) {
 	SurvivalTest_AddItem((cc_uint16)id);
 }
 
+/* SURV_ITEM_GIVE: the server deposits items into the LOCAL creative palette
+    inventory (/Give to a referee or creative-map player - the server-side
+    survival inventory is deliberately untouched, so nothing leaks into it
+    from creative mode). Ignored outside creative: in survival the server
+    streams the real inventory instead. */
+void SurvivalTest_NetItemGive(int id, int count) {
+	int n;
+	if (!SurvivalTest_Enabled || !SurvivalTest_CreativeActive()) return;
+	if (id <= 0 || count <= 0) return;
+	for (n = 0; n < count; n++) {
+		if (!SurvivalTest_AddItem((cc_uint16)id)) break; /* inventory full */
+	}
+	st_invVersion++; /* redraw an open Indev inventory screen */
+}
+
 void SurvivalTest_CreativeGive(int id) {
 	int n, max;
 	if (!SurvivalTest_CreativeActive() || id == BLOCK_AIR) return;
