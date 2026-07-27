@@ -2702,6 +2702,7 @@ void SurvivalTest_RenderTnt(float delta, float t) {
 /*  of up to 9 mobs each. 256 slots comfortably covers the practical steady- */
 /*  state population (the old cap of 32 silently strangled both). */
 #define MOB_MAX            256
+#define MOB_NETQ           4   /* per-mob queue of pending server MOB_MOVE targets */
 #define MOB_MAX_HEALTH     20  /* Mob.java's default health - same scale as the player's */
 #define MOB_INVINC_TICKS   20  /* Mob.invulnerableDuration - the *full* window; equal-damage hits */
                                /*  are actually only blocked for half of it (see Mob_Hurt) */
@@ -2832,14 +2833,18 @@ struct Mob {
 
 	/* MP puppet (phase 3, networking-plan 15.1/17.5): the server runs
 	    AI/physics/damage and streams SURV_MOB_*; these fields key the slot to
-	    the server's mob id and latch the most recent movement target, which
-	    the puppet tick consumes so prev->next interpolation works exactly as
-	    for local mobs. netState pins fire/fuse/graze between STATE messages. */
+	    the server's mob id and queue pending movement targets, which the
+	    puppet tick consumes one per tick so prev->next interpolation works
+	    exactly as for local mobs. A QUEUE, not a latch: at low fps the 20 TPS
+	    game ticks batch per frame, and a single latch starved the catch-up
+	    ticks while frame-time arrivals overwrote each other - mob motion
+	    (knockback arcs especially) went mushy exactly when fps < tick rate
+	    (fullscreen on retina displays). netState pins fire/fuse/graze
+	    between STATE messages. */
 	cc_uint16 netId;
 	cc_uint8  netState;
-	cc_bool   netHasMove;
-	Vec3      netPos;
-	float     netYaw, netPitch;
+	struct MobNetMove { Vec3 pos; float yaw, pitch; } netQ[MOB_NETQ];
+	cc_uint8  netQHead, netQCount;
 };
 static struct Mob st_mobs[MOB_MAX];
 
@@ -5312,15 +5317,23 @@ void SurvivalTest_NetMobSpawn(int id, int type, Vec3 pos, float yaw, float pitch
 void SurvivalTest_NetMobMove(int id, Vec3 pos, float yaw, float pitch) {
 	int slot = Mob_FindByNetId(id);
 	struct Mob* m;
+	int tail;
 	if (slot < 0) return; /* MOVE for an unknown id - its SPAWN will come */
 
-	/* Latch the target; the puppet tick consumes it so the prev->next
-	    interpolation window advances exactly like a local mob's. */
+	/* Enqueue; the puppet tick consumes one per tick, so batched catch-up
+	    ticks (low fps) replay the stream in order instead of losing every
+	    move but the last. Overflow drops the OLDEST entry - the puppet
+	    snaps forward rather than falling behind the server. */
 	m = &st_mobs[slot];
-	m->netPos     = pos;
-	m->netYaw     = yaw;
-	m->netPitch   = pitch;
-	m->netHasMove = true;
+	if (m->netQCount == MOB_NETQ) {
+		m->netQHead = (cc_uint8)((m->netQHead + 1) % MOB_NETQ);
+		m->netQCount--;
+	}
+	tail = (m->netQHead + m->netQCount) % MOB_NETQ;
+	m->netQ[tail].pos   = pos;
+	m->netQ[tail].yaw   = yaw;
+	m->netQ[tail].pitch = pitch;
+	m->netQCount++;
 }
 
 void SurvivalTest_NetMobState(int id, int health, int flags) {
@@ -5436,11 +5449,12 @@ static void SurvivalTest_TickOnePuppet(struct Mob* m, float delta) {
 	/* Apply the latched movement target, running the same presentation the
 	    local tick would: walk animation, body-yaw easing, step sounds. */
 	oldPos = e->Position;
-	if (m->netHasMove) {
-		e->Position   = m->netPos;
-		e->Yaw        = m->netYaw;
-		e->Pitch      = m->netPitch;
-		m->netHasMove = false;
+	if (m->netQCount) {
+		e->Position = m->netQ[m->netQHead].pos;
+		e->Yaw      = m->netQ[m->netQHead].yaw;
+		e->Pitch    = m->netQ[m->netQHead].pitch;
+		m->netQHead = (cc_uint8)((m->netQHead + 1) % MOB_NETQ);
+		m->netQCount--;
 	}
 	AnimatedComp_Update(e, oldPos, e->Position, delta);
 	Mob_UpdateBodyYaw(m, oldPos);
