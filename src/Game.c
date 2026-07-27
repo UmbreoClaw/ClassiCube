@@ -240,6 +240,11 @@ void Game_UpdateBlock(int x, int y, int z, BlockID block) {
 
 void Game_ChangeBlock(int x, int y, int z, BlockID block) {
 	BlockID old = World_GetBlock(x, y, z);
+	/* Indev directional variants (wall torches) must be resolved BEFORE the
+	    send: the classic place packet carries no clicked face, so a canonical
+	    torch id makes the server neighbour-scan a mount - always the same
+	    wall of a tunnel, overriding the face the player actually clicked. */
+	block = IndevTest_PlacedVariant(x, y, z, block);
 	Game_UpdateBlock(x, y, z, block);
 	Server.SendBlock(x, y, z, old, block);
 }

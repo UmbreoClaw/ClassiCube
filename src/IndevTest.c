@@ -3051,6 +3051,23 @@ static int Indev_TorchFaceMeta(IVec3 pos) {
 	}
 }
 
+/* The id a player placement should enter the world - and the WIRE - as:
+    BlockTorch.onBlockPlaced resolves the clicked-face mount here, BEFORE
+    Game_ChangeBlock sends, so the directional variant rides the classic
+    place packet and the server honors the mount instead of re-deriving it
+    by neighbour scan (which always picked the same wall of a tunnel).
+    Non-torch ids pass through unchanged. */
+BlockID IndevTest_PlacedVariant(int x, int y, int z, BlockID block) {
+	IVec3 pos; int meta, q;
+	if (!IndevTest_Enabled || block != INDEV_BLOCK_TORCH) return block;
+	pos.x = x; pos.y = y; pos.z = z;
+	meta = Indev_TorchAutoMeta(pos);
+	q    = Indev_TorchFaceMeta(pos);
+	if (q) meta = q;
+	if (meta && meta != 5) return (BlockID)(INDEV_BLOCK_TORCH_W1 + meta - 1);
+	return block;
+}
+
 /* BlockTorch.onNeighborBlockChange for one position: a torch whose OWN
     support is no longer a normal cube pops off as a torch item. A wall
     torch only re-checks its wall (it never re-mounts elsewhere), a

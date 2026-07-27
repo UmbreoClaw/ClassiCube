@@ -196,6 +196,7 @@ void IndevTest_TrampleStep(float px, float feetY, float pz);
 /*  Round-trips through .mclevel's TimeOfDay/SkyBrightness tags. */
 int  IndevTest_WorldTime(void);
 void IndevTest_SetWorldTime(int t);
+BlockID IndevTest_PlacedVariant(int x, int y, int z, BlockID block);
 void IndevTest_SetSkyBrightness(int b);
 int  IndevTest_SkyBrightness(void);
 /* World.getBlockLightValue: combined sky+block light level (0-15). */

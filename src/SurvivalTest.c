@@ -7743,7 +7743,7 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 		                 || heldId == 256 + 3    /* Flint & steel -> server places fire */
 		                 || heldId == 256 + 65;  /* Painting -> server validates + hangs it */
 		if (!container && !itemUse) return false;
-		SurvivalNet_SendUseItem(Inventory.SelectedIndex, pos.x, pos.y, pos.z,
+		SurvivalNet_SendUseItem(Inventory.SelectedIndex, heldId, pos.x, pos.y, pos.z,
 		                        (int)Game_SelectedPos.closest);
 		return true;
 	}
@@ -7780,7 +7780,7 @@ cc_bool SurvivalTest_TryEat(void) {
 	if (SurvivalNet_ServerDriven()) {
 		slot = Inventory.SelectedIndex;
 		if (st_inv[slot].count > 0 && IndevTest_ItemFoodHeal(st_inv[slot].id) > 0) {
-			SurvivalNet_SendUseItem(slot, -1, -1, -1, 0xFF);
+			SurvivalNet_SendUseItem(slot, st_inv[slot].id, -1, -1, -1, 0xFF);
 			return true;
 		}
 		return false;

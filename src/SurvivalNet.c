@@ -549,7 +549,7 @@ void SurvivalNet_SendAttack(int targetKind, int targetId) {
 	SurvivalNet_Send(payload);
 }
 
-void SurvivalNet_SendUseItem(int heldSlot, int x, int y, int z, int face) {
+void SurvivalNet_SendUseItem(int heldSlot, int heldId, int x, int y, int z, int face) {
 	cc_uint8 payload[64] = { 0 };
 	if (!SurvivalNet_ServerDriven()) return;
 	payload[0] = SURV_USE_ITEM;
@@ -558,6 +558,10 @@ void SurvivalNet_SendUseItem(int heldSlot, int x, int y, int z, int face) {
 	payload[4] = (cc_uint8)(y >> 8); payload[5] = (cc_uint8)y;
 	payload[6] = (cc_uint8)(z >> 8); payload[7] = (cc_uint8)z;
 	payload[8] = (cc_uint8)face;
+	/* Declared held item id: in survival the server resolves the held item
+	    from its own inventory and ignores this; in CREATIVE the palette is
+	    client state, so this is what lets a /Give'd painting hang. */
+	payload[9] = (cc_uint8)(heldId >> 8); payload[10] = (cc_uint8)heldId;
 	SurvivalNet_Send(payload);
 }
 

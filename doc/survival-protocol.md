@@ -467,7 +467,15 @@ Server validation (reference implementation):
   units). Hits absorbed by the invulnerability window or armor do not shove.
 
 ### 0x81 `SURV_USE_ITEM`
-`[1] heldSlot u8, [2] x i16, [4] y i16, [6] z i16, [8] face u8`
+`[1] heldSlot u8, [2] x i16, [4] y i16, [6] z i16, [8] face u8,
+[9] declaredId u16`
+
+`declaredId` is the client's held **item id** (zero from older clients). In
+survival the server ignores it and resolves the held item from its own
+inventory (never trust the client); for a **creative-mode** player (referee
+or creative map) the palette is client state, so the declared id stands in —
+trusted only there (items are free in creative) and only for the painting,
+the one item-use creative supports.
 
 Right-click. Target `(-1,-1,-1)` + face `0xFF` is the "no target" sentinel =
 right-click air / eat. With a target: the server checks reach to the block,

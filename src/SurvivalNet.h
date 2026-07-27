@@ -101,7 +101,7 @@ void SurvivalNet_SendRespawn(void);                      /* SURV_RESPAWN   [id] 
 void SurvivalNet_SendHeldSlot(int slot);                 /* SURV_HELD_SLOT [id][slot] */
 void SurvivalNet_SendDropItem(int slot, cc_bool whole);  /* SURV_DROP_ITEM [id][slot][whole] */
 void SurvivalNet_SendAttack(int targetKind, int targetId);          /* SURV_ATTACK [id][kind][id:u16] */
-void SurvivalNet_SendUseItem(int heldSlot, int x, int y, int z, int face); /* SURV_USE_ITEM */
+void SurvivalNet_SendUseItem(int heldSlot, int heldId, int x, int y, int z, int face); /* SURV_USE_ITEM */
 void SurvivalNet_SendSlotClick(int slot, int button);    /* SURV_SLOT_CLICK [id][slot:u16][button] */
 void SurvivalNet_SendResultClick(void);                  /* SURV_RESULT_CLICK [id] */
 void SurvivalNet_SendContClose(void);                    /* SURV_CONT_CLOSE [id] */
