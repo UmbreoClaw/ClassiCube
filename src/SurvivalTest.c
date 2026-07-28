@@ -558,19 +558,30 @@ static void DropItem_BuildGlowCube(struct DropItem* d, Vec3 pos, float age, Pack
 }
 
 static int SurvivalTest_FindFreeDropSlot(void) {
-	int i, oldest = 0;
+	int i, oldest = -1;
 	float oldestAge = -1.0f;
 
 	for (i = 0; i < DROP_MAX; i++) {
 		if (!st_drops[i].active) return i;
 		/* Mid-pickup drops are moments from freeing themselves - never evict */
 		/*  those (their blocks were already added to the inventory). */
-		if (!st_drops[i].pickingUp && st_drops[i].age > oldestAge) {
+		if (st_drops[i].pickingUp) continue;
+		/* NEVER evict a server-owned drop: the server keeps simulating it and */
+		/*  will still hand it to whoever walks over it, so dropping our copy */
+		/*  leaves an item that is invisible right up until it teleports into */
+		/*  someone's inventory. Only locally-simulated (singleplayer) drops */
+		/*  may be recycled. */
+		if (st_drops[i].net) continue;
+		if (st_drops[i].age > oldestAge) {
 			oldestAge = st_drops[i].age;
 			oldest    = i;
 		}
 	}
-	/* Pool full: evict the longest-lived drop (it was nearest to its 5-minute */
+	/* Pool full of live server drops: refuse rather than desync. The server */
+	/*  caps a level at DROP_MAX for exactly this reason, so this is a */
+	/*  belt-and-braces path (an older server, or several maps' worth). */
+	if (oldest < 0) return -1;
+	/* Otherwise evict the longest-lived LOCAL drop (nearest its 5-minute */
 	/*  despawn anyway) - genuine never fails to spawn an item. */
 	st_drops[oldest].active = false;
 	return oldest;
@@ -586,7 +597,8 @@ static void SurvivalTest_SpawnDropAt(Vec3 pos, cc_uint16 block, int count) {
 }
 static struct DropItem* SurvivalTest_SpawnDropAtEx(Vec3 pos, cc_uint16 block, int count) {
 	struct DropItem* d;
-	int slot = SurvivalTest_FindFreeDropSlot(); /* always succeeds - evicts the oldest when full */
+	int slot = SurvivalTest_FindFreeDropSlot();
+	if (slot < 0) return NULL; /* pool full of live server drops */
 
 	d = &st_drops[slot];
 	Mem_Set(d, 0, sizeof(struct DropItem));
@@ -637,8 +649,11 @@ static struct DropItem* SurvivalTest_FindNetDrop(int netId) {
 void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0) {
 	struct DropItem* d = SurvivalTest_FindNetDrop(netId);
 	if (!d) {
-		/* new drop - claim a pool slot (evicts the oldest when full) */
-		d = &st_drops[SurvivalTest_FindFreeDropSlot()];
+		/* new drop - claim a pool slot (recycles the oldest LOCAL drop; never
+		    a live server one, see SurvivalTest_FindFreeDropSlot) */
+		int slot = SurvivalTest_FindFreeDropSlot();
+		if (slot < 0) return; /* pool full of live server drops - skip */
+		d = &st_drops[slot];
 	}
 	Mem_Set(d, 0, sizeof(struct DropItem));
 	d->position   = pos;
