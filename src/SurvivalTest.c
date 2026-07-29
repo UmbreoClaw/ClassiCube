@@ -5380,12 +5380,19 @@ void SurvivalTest_NetMobState(int id, int health, int flags) {
 		Mob_PlaySound(m, MOBSND_FUSE, 1.0f, 0.5f);
 	}
 
-	/* A visible shear: fur off + the furless model, drops are server state. */
-	if ((flags & SURV_MOBSTATE_NOFUR) && m->type == MOB_TYPE_SHEEP && m->hasFur) {
-		cc_string mdl = String_FromReadonly("sheep_nofur");
-		m->hasFur = false;
-		Entity_SetModel(&m->Base, &mdl);
-		Mob_ApplySize(m);
+	/* A visible shear: fur off + the furless model, drops are server state.
+	    The FALLING edge matters just as much - the server regrows wool after
+	    grazing and clears the flag, and without this the sheep stayed bald for
+	    the rest of the session: grazing, becoming shearable again, and dropping
+	    fresh wool off a skinned model. */
+	if (m->type == MOB_TYPE_SHEEP) {
+		cc_bool nofur = (flags & SURV_MOBSTATE_NOFUR) != 0;
+		if (nofur == m->hasFur) { /* state disagrees with what we render */
+			cc_string mdl = String_FromReadonly(nofur ? "sheep_nofur" : "sheep");
+			m->hasFur = !nofur;
+			Entity_SetModel(&m->Base, &mdl);
+			Mob_ApplySize(m);
+		}
 	}
 
 	m->grazing = (flags & SURV_MOBSTATE_GRAZE) != 0;
