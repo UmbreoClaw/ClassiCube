@@ -756,11 +756,23 @@ static int WR_LightOpacity(BlockRaw b) {
 	if (b == BLOCK_LEAVES) return 1;
 	return WR_Opaque(b) ? 255 : 0;
 }
+/* Block.lightValue = (int)(15.0F * setLightValue's argument), so the torch's
+    setLightValue(14/16) is (int)13.125 = 13, not 14. */
 static int WR_LightValue(BlockRaw b) {
 	if (b == BLOCK_LAVA || b == BLOCK_STILL_LAVA) return 15;
-	if (b == INDEV_BLOCK_TORCH)  return 14;
+	if (b == INDEV_BLOCK_TORCH)  return 13;
 	if (b == BLOCK_BROWN_SHROOM) return 1;
 	return 0;
+}
+
+/* BlockFire's setBurnRate table: a still liquid also wakes when the block that
+    changed beside it is flammable. Only planks, logs and leaves of this set are
+    ever generated; wool/bookshelf/TNT are listed because the genuine predicate
+    is the whole table. */
+static cc_bool WR_EncouragesFire(BlockRaw b) {
+	if (b == BLOCK_WOOD || b == BLOCK_LOG || b == BLOCK_LEAVES) return true;
+	if (b == BLOCK_TNT  || b == BLOCK_BOOKSHELF)                return true;
+	return b >= BLOCK_RED && b <= BLOCK_WHITE; /* clothRed + 0..15 */
 }
 
 /* World.getBlockId - out-of-range coordinates CLAMP to the map edge */
@@ -943,6 +955,9 @@ static void WR_StillLiquidCheck(BlockRaw self, int x, int y, int z, BlockRaw cha
 			return;
 		}
 	}
+	/* genuine checks the fire table AFTER the lava/water case, so a shoreline
+	    tree waking the sea beside it still counts */
+	if (WR_EncouragesFire(changed)) can = true;
 	if (can) WR_SetTileNoUpdate(x, y, z, isWater ? BLOCK_WATER : BLOCK_LAVA);
 }
 

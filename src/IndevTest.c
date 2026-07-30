@@ -847,14 +847,15 @@ static void IndevBlocks_Define(void) {
 
 	/* Torch: a thin 2/16-wide, 10/16-tall column (BlockTorch's stick model, */
 	/*  NOT a flower-style X sprite), walk-through, instant to break, and a */
-	/*  light source - Indev registers it with setLightValue(14/16). The */
-	/*  lamp (white) nibble drives fancy lighting's light propagation. */
+	/*  light source - Indev registers it with setLightValue(14/16), and */
+	/*  Block.lightValue is (int)(15.0F * that) = (int)13.125 = 13, not 14. */
+	/*  The lamp (white) nibble drives fancy lighting's light propagation. */
 	IndevBlock_Define(INDEV_BLOCK_TORCH, "Torch", 106, 106, 106, 106, SOUND_WOOD, 0);
 	Blocks.Collide[INDEV_BLOCK_TORCH]         = COLLIDE_NONE;
 	Blocks.ExtendedCollide[INDEV_BLOCK_TORCH] = COLLIDE_NONE;
 	Blocks.Draw[INDEV_BLOCK_TORCH]            = DRAW_TRANSPARENT;
 	Blocks.BlocksLight[INDEV_BLOCK_TORCH]     = false;
-	Blocks.Brightness[INDEV_BLOCK_TORCH]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	Blocks.Brightness[INDEV_BLOCK_TORCH]      = 13 << FANCY_LIGHTING_LAMP_SHIFT;
 	Vec3_Set(Blocks.MinBB[INDEV_BLOCK_TORCH],  7.0f/16.0f, 0.0f,        7.0f/16.0f);
 	Vec3_Set(Blocks.MaxBB[INDEV_BLOCK_TORCH],  9.0f/16.0f, 10.0f/16.0f, 9.0f/16.0f);
 	/* Wall torch variants: same tile/light as the standing torch, rendered
@@ -880,7 +881,7 @@ static void IndevBlocks_Define(void) {
 			Blocks.ExtendedCollide[id] = COLLIDE_NONE;
 			Blocks.Draw[id]            = DRAW_SPRITE;
 			Blocks.BlocksLight[id]     = false;
-			Blocks.Brightness[id]      = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+			Blocks.Brightness[id]      = 13 << FANCY_LIGHTING_LAMP_SHIFT;
 			Vec3_Set(Blocks.MinBB[id], wtMin[k][0], wtMin[k][1], wtMin[k][2]);
 			Vec3_Set(Blocks.MaxBB[id], wtMax[k][0], wtMax[k][1], wtMax[k][2]);
 			Block_DefineCustom(id, false);
@@ -893,10 +894,11 @@ static void IndevBlocks_Define(void) {
 	Block_Tex(INDEV_BLOCK_TORCH, FACE_YMAX) = 117;
 	Block_DefineCustom(INDEV_BLOCK_TORCH, false);
 
-	/* Lit furnaces also glow (BlockFurnace active: setLightValue(14/16)) */
-	Blocks.Brightness[INDEV_BLOCK_FURNACE_LIT] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+	/* Lit furnaces also glow - BlockFurnace active is setLightValue(14/16) too,
+	    so the same (int)13.125 = 13 the torch above lands on */
+	Blocks.Brightness[INDEV_BLOCK_FURNACE_LIT] = 13 << FANCY_LIGHTING_LAMP_SHIFT;
 	for (k = 0; k < 4; k++) {
-		Blocks.Brightness[INDEV_BLOCK_FURNL_V0 + k] = 14 << FANCY_LIGHTING_LAMP_SHIFT;
+		Blocks.Brightness[INDEV_BLOCK_FURNL_V0 + k] = 13 << FANCY_LIGHTING_LAMP_SHIFT;
 	}
 
 	/* Farmland: dirt sides/bottom, tilled top (tile 116 dry / 115 wet), */
