@@ -1449,14 +1449,21 @@ cc_bool IndevGen_ApplyPostLoad(struct LocationUpdate* update) {
 		indevgen_theme == 1 ? BLOCK_LAVA : BLOCK_WATER);
 	IndevTest_ApplySurroundings();
 
-	/* spawn inside the house, facing the genuine rotSpawn = 180.
-	    Genuine preparePlayerToSpawn puts the bounding box CENTRE at ySpawn,
-	    so the feet sit at ySpawn - 0.9 (0.1 above the house floor) */
+	/* Spawn inside the house, facing the doorway generateHouse cuts into the
+	    -Z wall (z == z1 - 3). Genuine preparePlayerToSpawn puts the bounding
+	    box CENTRE at ySpawn, so the feet sit at ySpawn - 0.9 (0.1 above the
+	    house floor).
+
+	    Genuine records rotSpawn = 180, but that number does NOT carry over:
+	    Minecraft's look vector is (-sin yaw, cos yaw) so its yaw 180 points at
+	    -Z, while Vec3_GetDirVector is (sin yaw, -cos yaw) so OUR yaw 180 points
+	    at +Z. Copying the literal 180 spawned players staring at the back
+	    wall - -Z is yaw 0 here. */
 	update->flags = LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH;
 	update->pos.x = indevgen_spawnX + 0.5f;
 	update->pos.y = indevgen_spawnY - 0.9f;
 	update->pos.z = indevgen_spawnZ + 0.5f;
-	update->yaw   = 180.0f;
+	update->yaw   = 0.0f;
 	update->pitch = 0.0f;
 
 	if (Entities.CurPlayer) {
