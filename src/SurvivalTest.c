@@ -5122,12 +5122,17 @@ static void Mob_IndevCountKinds(int* monsters, int* animals) {
 	}
 }
 
-static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
+/* avoidPos is the point candidates must stay 32 blocks clear of. Genuine reads
+    the player's position, but has an explicit else branch that uses the LEVEL
+    SPAWN when there is no player entity - which is the branch that runs during
+    generation, before the player exists. Ours always has a player, so the
+    caller has to say which one it means (see SurvivalTest_IndevInitialSpawn).
+    NULL disables the check entirely, as genuine's does with no spawn set. */
+static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current, Vec3* avoidPos) {
 	/* the monster type table for nextInt(5): 4 = no spawn (genuine) */
 	static const cc_int8 monsterRoll[5] = {
 		MOB_TYPE_SKELETON, MOB_TYPE_CREEPER, MOB_TYPE_SPIDER, MOB_TYPE_ZOMBIE, -1
 	};
-	struct LocalPlayer* p = Entities.CurPlayer;
 	int attempt, outer, inner, roll;
 	int x, y, z, cx, cy, cz, light;
 	cc_int8 type;
@@ -5191,11 +5196,11 @@ static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
 				candidate.y = (float)(cy + 1);
 				candidate.z = cz + 0.5f;
 
-				/* must be at least 32 blocks from the player */
-				if (p) {
-					dx = candidate.x - p->Base.Position.x;
-					dy = candidate.y - p->Base.Position.y;
-					dz = candidate.z - p->Base.Position.z;
+				/* must be at least 32 blocks from the avoid point */
+				if (avoidPos) {
+					dx = candidate.x - avoidPos->x;
+					dy = candidate.y - avoidPos->y;
+					dz = candidate.z - avoidPos->z;
 					if (dx * dx + dy * dy + dz * dz < 1024.0f) continue;
 				}
 
@@ -5205,7 +5210,7 @@ static void Mob_IndevSpawnPass(cc_bool monsters, int cap, int current) {
 	}
 }
 
-static void Mob_IndevSpawnerRun(void) {
+static void Mob_IndevSpawnerRun(Vec3* avoidPos) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
 	/* difficulty Normal (2): cap = vol*20/64^3 / 2 (the <<2)/4 is identity) */
 	int monsterCap = (int)(volume * 20 / 64 / 64 / 64) / 2;
@@ -5213,17 +5218,28 @@ static void Mob_IndevSpawnerRun(void) {
 	int monsters, animals;
 
 	Mob_IndevCountKinds(&monsters, &animals);
-	Mob_IndevSpawnPass(true,  monsterCap, monsters);
-	Mob_IndevSpawnPass(false, animalCap,  animals);
+	Mob_IndevSpawnPass(true,  monsterCap, monsters, avoidPos);
+	Mob_IndevSpawnPass(false, animalCap,  animals,  avoidPos);
 }
 
 /* LevelGenerator's "Spawning.." phase: 1000 MobSpawner.performSpawning
     passes populate a freshly generated world (mostly animals - monsters
-    only stick where it's already dark, i.e. the caves). */
+    only stick where it's already dark, i.e. the caves).
+
+    Anchored on the SPAWN, not the player. This runs from the generator's
+    post-load hook, and GeneratingScreen_EndGeneration only calls
+    LocalPlayers_MoveToSpawn once that hook has returned - so the player is
+    still standing in the PREVIOUS world here and its position says nothing
+    about this one. Genuine has no player at all at this point and measures
+    from xSpawn/ySpawn/zSpawn; CurPlayer->Spawn was assigned a few lines
+    earlier and is that same point. Without this the 32-block bubble was
+    cleared around a meaningless spot and nothing kept mobs off the new
+    spawn house. */
 void SurvivalTest_IndevInitialSpawn(void) {
+	struct LocalPlayer* p = Entities.CurPlayer;
 	int i;
 	if (!IndevTest_Enabled || !World.Blocks) return;
-	for (i = 0; i < 1000; i++) Mob_IndevSpawnerRun();
+	for (i = 0; i < 1000; i++) Mob_IndevSpawnerRun(p ? &p->Spawn : NULL);
 }
 
 /* SurvivalGameMode.spawnMob() - the periodic per-tick spawn gate. */
@@ -5235,7 +5251,7 @@ static void SurvivalTest_TrySpawnMobs(void) {
 
 	/* Indev replaces the classic spawn gate with MobSpawner's per-tick,
 	    light-ruled, capped passes. */
-	if (IndevTest_Enabled) { Mob_IndevSpawnerRun(); return; }
+	if (IndevTest_Enabled) { Mob_IndevSpawnerRun(&p->Base.Position); return; }
 
 	if (Random_Next(&st_mobRng, 100) < area && SurvivalTest_CountMobs() < area * 20) {
 		Mob_SpawnerRun(area, &p->Base.Position);
