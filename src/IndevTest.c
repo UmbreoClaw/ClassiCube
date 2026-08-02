@@ -3181,6 +3181,19 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 	IVec3 coords;
 	BlockID below;
 	if (!IndevTest_Enabled || !World.Loaded || !World.Blocks) return;
+
+	/* A fluid flipping between its own still and moving states is genuine
+	    setTileNoUpdate - it notifies NOBODY (BlockStationary wakes with it,
+	    the stagnation flood re-stills with it). Treating these flips as
+	    ordinary changes closed a feedback loop: a woken cell's conversion
+	    woke its neighbours, their eventual re-stilling woke it back, and the
+	    whole connected water body flickered still<->moving forever (visible
+	    as the entire ocean surface animating and the lighting pulsing with
+	    it - user-reported). */
+	if ((oldBlock == BLOCK_STILL_WATER && block == BLOCK_WATER)       ||
+		(oldBlock == BLOCK_WATER       && block == BLOCK_STILL_WATER) ||
+		(oldBlock == BLOCK_STILL_LAVA  && block == BLOCK_LAVA)        ||
+		(oldBlock == BLOCK_LAVA        && block == BLOCK_STILL_LAVA)) return;
 	/* validators mutate via Game_UpdateBlock themselves - cascades converge
 	    in genuine (everything ends at air), the cap bounds pathologies */
 	if (depth >= 8) return;
