@@ -1,17 +1,37 @@
 # Systematic Fidelity Audit — Findings Queue
 
 User delegated systematic auditing of everything (GUI placement/scale,
-gameplay, mob mechanics, all between) against the decompiled ground truths:
-`/tmp/indev_eagler` (in-20100223) and `/tmp/mcraft_client` (c0.30).
-Four domain audits were run; three completed, the fourth (entities +
-environment: drops/arrows/TNT/paintings/day-night/random ticks/fluids)
-was cut off by a usage limit and MUST BE RE-RUN next session.
+gameplay, mob mechanics, all between) against the decompiled ground truths.
+All the domain audits below are complete.
+
+### Getting the ground truths
+
+Both are reobtainable in minutes; do not trust a `/tmp` path from an older
+session, they do not survive.
+
+- **in-20100223** (Indev, the version this fork targets):
+  `git clone --depth 1 https://github.com/EaglerPorts/in-20100223` — readable
+  Java, the primary source.
+- **c0.30_01c** (Survival Test): pull the client jar from Mojang's
+  `piston-meta` version manifest and read it with `javap -p -c`. It is
+  obfuscated, but the classes that matter deobfuscate by inspection
+  (`com.mojang.minecraft.Entity`, `mob.Mob`, `level.Level`, `level.b` =
+  MobSpawner, `mob.Skeleton`, `item.Arrow`). Set `JAVA_TOOL_OPTIONS=` first
+  to silence the picked-up-options noise.
 
 Status legend: [V] = independently verified against the Java by the main
 session; [P] = pending verification (audit finding, not yet re-checked).
 Every [P] item must be verified against the genuine source before fixing.
 
 VERIFICATION RULE: subagent findings are leads, not verdicts.
+
+This is not a formality. A later mob audit reported that the client was the
+unfaithful side for giving mobs `StepSize = 0.5` and recommended deleting it.
+The jar says `Mob.<init>` sets `footSize = 0.5F`, and every mob — and the
+player — descends from Mob. The finding was exactly backwards: the client was
+right and the SERVER was missing the step-up entirely. Acting on it unchecked
+would have broken the faithful side to match the broken one. Verify first,
+every time.
 
 ---
 

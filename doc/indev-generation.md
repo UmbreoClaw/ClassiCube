@@ -270,6 +270,21 @@ For Floating worlds the terrain passes loop once per 48-block layer
     `preparePlayerToSpawn` semantics: Indev `posY` is the bounding-box
     centre, so feet = `ySpawn − 0.9` (0.1 above the house floor).
 
+    Two details that do not survive a literal transcription:
+
+    - **The population is anchored on the SPAWN, not the player.**
+      `MobSpawner` keeps candidates 32 blocks clear of the player entity, but
+      has an explicit else branch measuring from `xSpawn/ySpawn/zSpawn` when
+      there is none — and genuine has none at generation time. The port always
+      has a `LocalPlayer`, and during this phase its position is still the
+      *previous* world's (`LocalPlayers_MoveToSpawn` runs after the post-load
+      hook returns), so the avoid point has to be passed in explicitly.
+    - **`rotSpawn = 180` becomes yaw 0.** Minecraft's look vector is
+      `(−sin yaw, cos yaw)`, so its 180 faces −Z — the doorway.
+      `Vec3_GetDirVector` is `(sin yaw, −cos yaw)`, so the same number faces
+      +Z, the back wall. The conventions are opposed; only the *direction* is
+      genuine, never the constant.
+
 ### After generation: the surroundings
 
 Genuine Indev renders no border *walls*, but `RenderGlobal` draws infinite
@@ -310,7 +325,9 @@ Everything the port *knowingly* does differently:
 - **Lighting**: the engine's lighting system replaces genuine's
   10 000-round update pump; block arrays are unaffected.
 - **Mob population** is entities-only and runs post-load (entities are not
-  part of the block-array parity domain).
+  part of the block-array parity domain). It stops once both per-kind caps
+  are full rather than always burning all 1000 passes — the same end state,
+  reached sooner.
 - On cooperative-threading platforms (web), generation runs monolithically
   in one call — fine on desktop, would hitch in a browser.
 

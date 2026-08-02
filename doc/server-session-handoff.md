@@ -1,37 +1,51 @@
 # Handoff: MCGalaxy server session ← ClassiCube client session
 
-*Written by the client session for the Claude session working on
-`UmbreoClaw/mcgalaxy` (branch `survival-support`). It tells you exactly what the
-client implements, what was verified against your code, and what to build next.
-Read `doc/networking-plan.md` (§25 wire format, §20 gating) and
+*Originally written by the client session for the Claude session picking up
+`UmbreoClaw/mcgalaxy`. It tells you what the client implements, what was
+verified against the server, and what to build next. Read
+`doc/networking-plan.md` (§25 wire format, §20 gating) and
 `doc/survival-handshake.md` alongside this.*
 
-> **IMPORTANT — the client implementation described in §1 is PARKED, not in the
-> tree.** It was implemented, built and audited, then deliberately reverted so
-> it can be re-landed from a combined two-repo session able to integration-test
-> both sides live. It lives at commit **`ed604b6`** on `survival-test`; restore
-> with `git cherry-pick ed604b6` (or `git checkout ed604b6 -- src/`) as that
-> session's first step. What IS in the client tree today: the CPE capability +
-> HELLO/WORLDINFO parse/log foundation. The wire-contract corrections in §2
-> hold either way.
+> **HISTORICAL.** §0's standing rules still apply and §2's wire-contract notes
+> are still correct, but this document describes the two-repo split as it stood
+> at the handoff, and both sides have moved a long way past it. The current
+> state of the server work lives in the mcgalaxy repo's
+> `doc/survival-support/roadmap.md`; the client log is `SURVIVAL_TEST_NOTES.md`.
+>
+> In particular, §1's implementation is **no longer parked**. It was reverted
+> once so it could be re-landed from a combined two-repo session, and that
+> happened — it is in the tree. Do not cherry-pick `ed604b6`; you would be
+> re-applying work that is already there.
 
 ## 0. Session conventions (carry these over — they are standing rules)
 
-- **Ground truths**: clone both decompiles into /tmp and cross-reference EVERY
-  mechanic against the Java before changing behavior — fixes must be genuine
-  ports, not patches:
+- **Ground truths**: fetch them and cross-reference EVERY mechanic against the
+  Java before changing behavior — fixes must be genuine ports, not patches:
   ```
-  git clone --depth 1 https://github.com/EaglerPorts/in-20100223 /tmp/indev_eagler
-  git clone --depth 1 https://github.com/ManiaDevelopment/MCraft-Client /tmp/mcraft_client
+  git clone --depth 1 https://github.com/EaglerPorts/in-20100223
+  git clone --depth 1 https://github.com/ManiaDevelopment/MCraft-Client
   ```
-  (`/tmp` is ephemeral — re-clone whenever the container recycles.)
+  Put them somewhere that survives the session (the scratchpad, not `/tmp`),
+  and re-fetch whenever the container recycles — both are public.
+
+  For c0.30 there is a better source than the decompile: the **real
+  `c0.30_01c` client jar**, from Mojang's `piston-meta` version manifest, read
+  with `javap -p -c`. It is the actual shipped artifact rather than somebody's
+  reconstruction, so it settles arguments the decompiles cannot. Obfuscated,
+  but the classes that matter are identifiable by inspection
+  (`com.mojang.minecraft.Entity`, `mob.Mob`, `level.Level`, `level.b` =
+  MobSpawner, `mob.Skeleton`, `item.Arrow`). Export `JAVA_TOOL_OPTIONS=` first
+  to silence the picked-up-options banner. This is what proved `Mob.footSize
+  = 0.5F` and killed a backwards audit finding — see `AUDIT_FINDINGS.md`.
 - **c0.30 vs Indev isolation**: c0.30 Survival Test behavior must NEVER be
   altered by Indev features. Gate on `IndevTest_Enabled` / mode checks in SP;
   in MP gate ALL sim handover through `SurvivalNet_ServerDriven()`, never raw
   mode checks.
-- **Branches**: client work on `survival-test`, server work on
-  `survival-support`. Push with `git push -u origin <branch>`. Do NOT open
-  pull requests.
+- **Branches**: work on whatever branch the session names, in BOTH repos, and
+  never push to a different one without being asked. (`survival-test` /
+  `survival-support` were the original pair and are named here only so old
+  references make sense — do not assume them.) Push with
+  `git push -u origin <branch>`. Do NOT open pull requests unless asked.
 - **Logs**: session log in `SURVIVAL_TEST_NOTES.md`, audit results in
   `AUDIT_FINDINGS.md` (findings #1–#45 exist; continue numbering). Both are
   APPEND-ONLY — append via shell heredoc (`cat >> file << 'EOF'`), never
@@ -63,8 +77,8 @@ Your GitHub scope is the mcgalaxy repo, but this repo is public — clone it
 read-only for reference exactly like the client session did with yours:
 
 ```
-git clone --depth 1 --branch survival-test \
-    https://github.com/UmbreoClaw/ClassiCube /tmp/classicube_ro
+git clone --depth 1 --branch <the session's branch> \
+    https://github.com/UmbreoClaw/ClassiCube
 ```
 
 `src/SurvivalNet.h` is the wire contract; `src/SurvivalNet.c` is the reference
