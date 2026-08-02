@@ -893,3 +893,14 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: World.java:1638-1649 canBlockSeeTheSky: "if (this.heightMap[var1 + var3 * this.width] <= var2) { return true; } else { while (var2 < this.height) { if (Block.opaqueCubeLookup[this.getBlockId(var1, var2, var3)]) { return false; } ++var2; } }" - a plant under only NON-opaque cover
   - ours: Both ports substitute binary sky exposure: server FlowerStayCheck/TickCrops use IsLit (SurvivalGrowth.cs:434,538) where leaves/water shadow their own cell; client uses Lighting.IsLit (IndevTest.c:1783,2332) and its comment calls the gap 'ac
   - at: World.java:1638-1649; BlockFlower.java:41-45 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:434,536-538; ClassiCube/src/IndevTest.c:1778-1784,2330-2333
+
+### user-reported (2026-08-02, MP island map)
+- **[P]** (medium, client) Wall-mounted torch renders wrong on MP: mostly a thin
+  1px diagonal streak with the bright tip cap floating detached near the wall
+  top (screenshot: torch auto-mounted on a dirt ledge face, zoom fov 15).
+  Builder_DrawWallTorch and the wall-torch defs were NOT touched in the recent
+  rounds (git log confirms), so likely pre-existing and only now noticed while
+  testing torch-lit grass. Check: quad winding/backface of the side quads, the
+  full-tile side-quad span vs genuine renderBlockTorch's 2px-wide quads, and
+  whether the MP path renders the SERVER's CPE sprite def instead of the local
+  tilted builder (ordering of local redefine vs server BlockDefinitions).
