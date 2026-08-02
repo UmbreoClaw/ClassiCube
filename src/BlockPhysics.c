@@ -255,6 +255,40 @@ static void Physics_TickGrassC030(int index) {
 	}
 }
 
+/* Genuine c0.30 SaplingTile.tick (tile n.a, from the jar): the stay-check pops
+    the sapling unless it is lit AND rooted in dirt or grass; then a 1-in-5 gate;
+    then remove, try a tree of height nextInt(3)+4 = 4-6, and RESTORE the
+    sapling if the tree could not grow. The classic-creative handler
+    (Physics_HandleSapling) is inert on dirt, attempts every tick, grows 5-7
+    tall and never restores - all four axes wrong for survival. */
+static void Physics_TickSaplingC030(int index) {
+	IVec3 coords[TREE_MAX_COUNT];
+	BlockRaw blocks[TREE_MAX_COUNT];
+	int i, count, height, x, y, z;
+	BlockID below;
+	World_Unpack(index, x, y, z);
+
+	below = BLOCK_AIR;
+	if (y > 0) below = World.Blocks[index - World.OneY];
+	if (!Lighting.IsLit(x, y, z) || (below != BLOCK_DIRT && below != BLOCK_GRASS)) {
+		Game_UpdateBlock(x, y, z, BLOCK_AIR);
+		return;
+	}
+	if (Random_Next(&physics_rnd, 5) != 0) return;
+
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+	height = 4 + Random_Next(&physics_rnd, 3);
+	if (TreeGen_CanGrow(x, y, z, height)) {
+		count = TreeGen_Grow(x, y, z, height, coords, blocks);
+		for (i = 0; i < count; i++)
+		{
+			Game_UpdateBlock(coords[i].x, coords[i].y, coords[i].z, blocks[i]);
+		}
+	} else {
+		Game_UpdateBlock(x, y, z, BLOCK_SAPLING);
+	}
+}
+
 static void Physics_TickRandomBlocksC030(void) {
 	int shiftX = 1, shiftZ = 1;
 	int maskX, maskY, maskZ;
@@ -283,8 +317,14 @@ static void Physics_TickRandomBlocksC030(void) {
 		block = World.Blocks[index];
 		/* survival-only overrides: the shared OnRandomTick table keeps the
 		    classic-creative behaviour for the engine's own physics loop */
-		if (block == BLOCK_GRASS) { Physics_TickGrassC030(index); continue; }
-		if (block == BLOCK_DIRT)  continue; /* genuine dirt never ticks */
+		if (block == BLOCK_GRASS)   { Physics_TickGrassC030(index);   continue; }
+		if (block == BLOCK_DIRT)    continue; /* genuine dirt never ticks */
+		if (block == BLOCK_SAPLING) { Physics_TickSaplingC030(index); continue; }
+		/* Bush.tick returns immediately when Level.growTrees is true - and the
+		    survival gamemode sets growTrees = TRUE, so c0.30 Survival Test
+		    flowers are immortal (only creative pops dark/bad-soil flowers).
+		    Mushrooms (tile t) override tick WITHOUT the gate and keep popping. */
+		if (block == BLOCK_DANDELION || block == BLOCK_ROSE) continue;
 		tick  = Physics.OnRandomTick[block];
 		if (tick) tick(index, block);
 	}

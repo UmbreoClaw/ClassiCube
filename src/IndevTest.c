@@ -2469,10 +2469,15 @@ static void Indev_TickSapling(int index, BlockID block) {
 	stage = Indev_SaplingStage(index);
 	if (stage < 15) { Indev_SetSaplingStage(index, stage + 1); return; }
 
-	Indev_SetSaplingStage(index, 0);
 	Game_UpdateBlock(x, y, z, BLOCK_AIR);
-	if (!Indev_GrowTree(x, y, z)) {
+	if (Indev_GrowTree(x, y, z)) {
+		Indev_SetSaplingStage(index, 0); /* cell is no longer a sapling */
+	} else {
 		Game_UpdateBlock(x, y, z, BLOCK_SAPLING);
+		/* genuine restores via setTileNoUpdate, which never touches metadata:
+		    the stage STAYS 15, so the retry needs one successful roll (~50 s),
+		    not another 16-stage climb (~800 s) */
+		Indev_SetSaplingStage(index, 15);
 	}
 }
 
