@@ -5247,12 +5247,16 @@ static void SurvivalTest_TrySpawnMobs(void) {
 	cc_int64 volume = (cc_int64)World.Width * World.Height * World.Length;
 	int area = (int)(volume / 64 / 64 / 64);
 	struct LocalPlayer* p = Entities.CurPlayer;
-	if (!p || area <= 0) return;
+	if (!p) return;
 
 	/* Indev replaces the classic spawn gate with MobSpawner's per-tick,
-	    light-ruled, capped passes. */
+	    light-ruled, capped passes. It sits ABOVE the area gate: area is
+	    c0.30's spawn-roll input, Indev caps per-kind and never reads it -
+	    behind the gate, any map under 64^3 never spawned Indev mobs at all
+	    (a 64x32x64 world has genuine caps of 5 monsters + 1 animal). */
 	if (IndevTest_Enabled) { Mob_IndevSpawnerRun(&p->Base.Position); return; }
 
+	if (area <= 0) return;
 	if (Random_Next(&st_mobRng, 100) < area && SurvivalTest_CountMobs() < area * 20) {
 		Mob_SpawnerRun(area, &p->Base.Position);
 	}
