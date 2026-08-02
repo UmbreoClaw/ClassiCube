@@ -666,3 +666,230 @@ hurt pitch, absent eating/container sounds (genuine), liquid ambient dead code,
 c0.30 music timer, 16-block range; EntityItem physics/pickup/render constants,
 EntityArrow both-mode ports line-by-line, all HUD layout/flash/armor/bubble/
 jitter formulas, held-block transforms, c0.30 arrows counter.
+
+---
+
+## Domain 9: Physics fidelity sweep — explosions/TNT, fluids, fire, growth
+
+Run against the deobfuscated in-20100223 tree AND the real c0.30 jar (see the
+header for how to obtain both). Four domain finders completed; the adversarial
+verify pass got through the first five findings (all CONFIRMED, all fixed the
+same session) before hitting a usage limit — every remaining [P] item below is
+a LEAD that must be independently verified against the genuine source before
+acting on it. The verified-exact counts are the negative space: everything
+those finders checked that matched.
+
+Severity/side legend as reported by the finder: side = which port diverges
+(sp-mp-split = the two ports disagree with each other).
+
+### explosions (9 findings, 24 verified-exact)
+
+- **[V] FIXED** (critical, sp-mp-split) Server c0.30 explosions destroy blast-proof (non-explodable) blocks
+  - genuine: c0.30 Level.explode only destroys a tile if its explodable flag is set: bytecode `206: getstatic tile/a.b ... 212: invokevirtual com/mojang/minecraft/level/tile/a.i:()Z; 215: ifeq 264` (skip block). Tile.i() returns field `ap`, and tile/a's static initializer sets ap=false (`icon
+  - ours: The server's classic-mode sphere path marks EVERY in-radius cell and DestroyMarked clears every non-air marked block with no explodable filter - stone, cobblestone, ores, metal blocks, slabs, brick, obsidian and even bedrock/admincrete map
+  - at: c030 Level.class explode (offsets 190-264) + tile/a.class static{} ap=false sites (offsets 77-82, 154-159, 233-238, 416-421, 449-454, 482-487, 1091-1096, 1125-1130, 1156-1161, 1187-1192, 1219-1224, 1298-1303, 1331-1336) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalExplosions.cs:105-118 (sphere marks all) + 161-184 (DestroyMarked clears all non-air); client correct at /home/user/ClassiCube/src/SurvivalTest.c:16
+- **[V] FIXED** (medium, sp-mp-split) Server c0.30 explosion drops use the Indev drop table, not the c0.30 per-tile drops
+  - genuine: c0.30 Level.explode calls each tile's own drop routine with 0.3 chance: bytecode `231: ldc 0.3f; 233: invokevirtual tile/a.a:(L...Level;IIIF)V`. Per-tile c0.30 counts/ids differ from Indev, e.g. log tile e: `f(): nextInt(3)+3` (3-5 drops) and `g(): planks id` - an exploded log yi
+  - ours: SurvivalExplosions.DestroyMarked routes BOTH modes through the Indev-style ExplodeDrops table: log drops 1 LOG (not 3-5 planks), gravel rolls 1/10 for an Indev flint ITEM (id 256+62, nonexistent in c0.30), coal ore would drop the Indev coal
+  - at: c030 Level.class explode offsets 218-235; tile/e.class f()/g(); tile/g.class f() vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalExplosions.cs:186-225 (mode-blind Indev table); client correct at /home/user/ClassiCube/src/SurvivalTest.c:716-785 + 867-875
+- **[V] FIXED** (medium, sp-mp-split) MP explosions never knock players back (Indev velocity kick and c0.30 hurt knockback both missing)
+  - genuine: Indev World.java:1185-1188: `var36.attackEntityFrom(var1, (int) ((var43 * var43 + var43) / 2.0F * 8.0F * var5 + 1.0F)); var36.motionX += var26 * var43; var36.motionY += var39 * var43; var36.motionZ += var40 * var43;` - every entity in range, the player included, gets the dir*f ve
+  - ours: The client SP applies the kick faithfully (e->Velocity += d/dist * f). The server's ExplodeAt builds the kick only for MOBS (BlastHit.KX/KY/KZ, applied at line 969); players just get SurvivalNet.DamagePlayer - KnockbackPlayer (which already
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/level/World.java:1185-1188 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalMobs.cs:907-930 + 963-964 (players: damage only) vs 956/969 (mobs get KX/KY/KZ); KnockbackPlayer unused for blasts (/home/user/mcgalaxy/MCGalaxy/Net
+- **[V] FIXED** (medium, both) Indev explosions never damage item drops or pop paintings (both ports)
+  - genuine: World.createExplosion damages EVERY entity within 2r (World.java:1162-1189), and EntityItem.java:149-156 reads `public final boolean attackEntityFrom(Entity var1, int var2) { this.health -= var2; if(this.health <= 0) { this.setEntityDead(); } return false; }` (health 5, so any ne
+  - ours: Both ports damage only the player and mobs: client Indev_CreateExplosion iterates Entities.CurPlayer + st_mobs only; server ExplodeAt iterates online players + lm.Mobs only. Drop entities (SurvivalDrops / st_drops) and paintings are untouch
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/entity/misc/EntityItem.java:149-156; .../entity/EntityPainting.java:192-196; .../level/World.java:1162-1189 vs client /home/user/ClassiCube/src/SurvivalTest.c:3589-3641; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalMobs.cs:910-958
+- **[V] FIXED** (medium, sp-mp-split) MP explosions are silent - random.explode never reaches multiplayer clients
+  - genuine: Indev World.java:1103-1104: `this.playSoundAtPlayer(var2, var3, var4, "random.explode", 4.0F, (1.0F + (this.random.nextFloat() - this.random.nextFloat()) * 0.2F) * 0.7F);` - volume 4 makes the blast audible out to ~64 blocks, before any block is touched.
+  - ours: The client plays the sound only in its LOCAL sim paths (Indev_CreateExplosion and the c0.30 SurvivalTest_Explode), which are gated off in MP. The server sends no sound message for detonations, and the client's SURV_TNT_REMOVE handler (Survi
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/level/World.java:1103-1104 vs client /home/user/ClassiCube/src/SurvivalTest.c:2210-2223 (NetTntRemove: particles only) vs 3544-3545/3714-3715 (SP only); server: no sound sender anywhere in /home/user/mcgalaxy/MCGalaxy/Network/Surv
+- **[P]** (low, sp-mp-split) Server primed-TNT hop velocity is a corrected uniform direction, not the genuine double-converted drift
+  - genuine: EntityTNTPrimed.java:17-20: `float var5 = (float)(Math.random() * (double)((float)Math.PI) * 2.0D); this.motionX = -MathHelper.sin(var5 * (float)Math.PI / 180.0F) * 0.02F; this.motionY = 0.2F; this.motionZ = -MathHelper.cos(var5 * (float)Math.PI / 180.0F) * 0.02F;` - the radians
+  - ours: The client reproduces the bug verbatim (`-Math_SinF(ang * MATH_DEG2RAD) * 0.02f`). The server 'fixes' it: `VX = -Math.Sin(ang) * 0.02, VZ = -Math.Cos(ang) * 0.02` with ang in [0,2pi) - a uniformly random horizontal hop of magnitude 0.02 - a
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/entity/misc/EntityTNTPrimed.java:17-20 (c0.30: PrimedTnt.class ctor offsets 36-88) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalTnt.cs:128,134; client (correct) /home/user/ClassiCube/src/SurvivalTest.c:2026-2029
+- **[P]** (low, sp-mp-split) Server fire-ignited TNT always leaves air; genuine leaves FIRE in the cell 50% of the time
+  - genuine: BlockFire.java:114-127 tryToCatchBlockOnFire: `boolean var8 = var1.getBlockId(...) == Block.tnt.blockID; if (var6.nextInt(2) == 0) { var1.setBlockWithNotify(var2, var3, var4, this.blockID); } else { var1.setBlockWithNotify(var2, var3, var4, 0); } if (var8) { Block.tnt.onBlockDest
+  - ours: The client is faithful (Fire_TryCatch keeps the 50% fire-vs-air roll, then arms the TNT). The server special-cases TNT before the roll: `if (b == Block.TNT) { SetFire(lvl, x, y, z, Block.Air); SurvivalTnt.Ignite(lvl, x, y, z, DefaultFuse(lv
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/level/block/BlockFire.java:114-127 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:302-306; client (correct) /home/user/ClassiCube/src/IndevFire.c:166-185
+- **[P]** (low, client) Client c0.30 explosions play the Indev explosion sound; genuine c0.30 blasts are silent
+  - genuine: c0.30 Level.explode's full bytecode contains no playSound invocation (Level has playSound methods, but neither explode, PrimedTnt.tick's detonation branch, nor Creeper$1.beforeRemove calls one) - Survival Test explosions produce particles only, no sound.
+  - ours: SurvivalTest_Explode (the c0.30 path) plays MOBSND_EXPLODE at volume 4 with the INDEV pitch formula before the block loop - an extra rule imported from Indev's World.createExplosion into c0.30 mode.
+  - at: c030 Level.class explode (offsets 0-384, no audio call); PrimedTnt.class tick offsets 146-337; Creeper$1.class beforeRemove offsets 0-203 vs client /home/user/ClassiCube/src/SurvivalTest.c:3712-3715
+- **[P]** (low, both) Primed-TNT pool caps disagree between sides and change overflow outcomes
+  - genuine: Neither Indev nor c0.30 caps the number of primed TNT entities: BlockTNT.onBlockDestroyedByExplosion (Indev) / tile j.f (c0.30) unconditionally `spawnEntityInWorld`/`addEntity` a new PrimedTnt for every TNT block consumed by a blast.
+  - ours: The client pool is 64: overflow converts the TNT into a pickup item instead of priming it (documented fallback). The server cap is 128: overflow silently returns from Ignite AFTER the block was already cleared, so the TNT vanishes without e
+  - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/level/block/BlockTNT.java:22-26; c030 tile/j.class f(Level,III) vs client /home/user/ClassiCube/src/SurvivalTest.c:1998-2006 and 2193; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalTnt.cs:57,130
+
+### fluids (11 findings, 22 verified-exact)
+
+- **[P]** (critical, client) Client: physics-driven block changes never wake adjacent still fluids (no setBlockWithNotify equivalent for fluids)
+  - genuine: World.java:335-342 'public final boolean setBlockWithNotify(...) { if (this.setBlock(var1, var2, var3, var4)) { this.notifyBlocksOfNeighborChange(var1, var2, var3, var4); return true; }' — every fluid/fire/explosion write notifies all 6 neighbours, and BlockStationary.java:18-56
+  - ours: The client's notify hook IndevTest_BlockUpdated (IndevTest.c:3106-3153, run for every Game_UpdateBlock) handles crops/farmland/containers/fire/torches but never activates still fluids. IndevFluid_ActivateStill (IndevTest.c:2230) only runs v
+  - at: World.java:335-351 + BlockStationary.java:18-58 vs client /home/user/ClassiCube/src/IndevTest.c:3106-3153 (missing wake) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:154-160 (has it)
+- **[P]** (critical, client) Client: mining a sponge on an Indev map triggers the CLASSIC infinite water flood (waterQ leak)
+  - genuine: BlockSponge.java:25-34 'public final void onBlockRemoval(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... var1.notifyBlocksOfNeighborChange(var5, var6, var7, var1.getBlockId(var5, var6, var7)); } }' — removal just notifies the ±2 cube so the FINITE flui
+  - ours: Physics.OnDelete[BLOCK_SPONGE] = Physics_DeleteSponge stays registered on Indev maps (BlockPhysics.c:632; Indev_RegisterFarmTicks never overrides it). Physics_DeleteSponge (BlockPhysics.c:521-540) enqueues the ±3 shell's water into the clas
+  - at: BlockSponge.java:25-34 vs client /home/user/ClassiCube/src/BlockPhysics.c:632,658-659,521-540,454-477
+- **[P]** (medium, sp-mp-split) Server: sponge does not absorb water on placement and removal only wakes 6 direct neighbours (genuine notifies the ±2 cube)
+  - genuine: BlockSponge.java:12-23 'public final void onBlockAdded(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... if(var1.isWater(var5, var6, var7)) { var1.setBlock(var5, var6, var7, 0); } } }' absorbs all water-material blocks in the 5x5x5 cube on placement; onB
+  - ours: SurvivalPhysics has no sponge handling at all beyond the canFlow veto (SurvivalPhysics.cs:431-436): placing a sponge next to MP Indev water removes nothing (the water just sits inside the exclusion zone), and mining a sponge only fires Noti
+  - at: BlockSponge.java:12-34 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:431-436 (only the canFlow veto; no absorb) vs client /home/user/ClassiCube/src/BlockPhysics.c:503-519 (absorbs)
+- **[P]** (medium, both) Both: map-border shell is writable, so the edge ocean drains instead of being infinite and fluid spreads into cells genuine cannot touch
+  - genuine: World.java:297-298 'public final boolean setBlock(int var1, int var2, int var3, int var4) { if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {' — every runtime write to the outer shell silently fails. Consequently
+  - ours: Server SurvivalGrowth.SetView (SurvivalGrowth.cs:117) accepts the full 0..dim-1 range, and client Game_UpdateBlock has no shell guard, so FluidSpread2/FlowCheck donor removal (server SurvivalPhysics.cs:592,626; client IndevTest.c:2091,2137)
+  - at: World.java:297-298 + BlockFlowing.java:173-178 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:117 + SurvivalPhysics.cs:588-592; client /home/user/ClassiCube/src/IndevTest.c:2087-2091 + BlockPhysics.c:151-167
+- **[P]** (medium, both) Both: still-fluid petrify direction inverted for pre-existing water/lava contact (self petrifies instead of waking and petrifying the lava)
+  - genuine: BlockStationary.java:40-47 'if (var5 != 0) { Material var7 = Block.blocksList[var5].material; if (this.material == Material.water && var7 == Material.lava || var7 == Material.water && this.material == Material.lava) { var1.setBlockWithNotify(var2, var3, var4, Block.stone.blockID)
+  - ours: ActivateStill scans all 6 CURRENT neighbours and petrifies ITSELF when any is the opposite material (server SurvivalPhysics.cs:701-707; client IndevTest.c:2241-2249). With map-gen still water adjacent to still lava, mining an unrelated ston
+  - at: BlockStationary.java:40-47 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:701-707; client /home/user/ClassiCube/src/IndevTest.c:2241-2249
+- **[P]** (medium, server) Server: placed source block does not fill its 4 sides immediately (waits for a random tick, ~10 s average); client fills instantly
+  - genuine: BlockSource.java:16-33 'public final void onBlockAdded(World var1, ...) { super.onBlockAdded(...); if (var1.getBlockId(var2 - 1, var3, var4) == 0) { var1.setBlockWithNotify(var2 - 1, var3, var4, this.fluid); } ... }' — placing a spring floods the 4 horizontal air neighbours immed
+  - ours: Server Notify (SurvivalPhysics.cs:148-152) handles only FIRE/Water/Lava for newV; WATER_SRC/LAVA_SRC placement schedules nothing, so the source sits dry until the volume/200 random pass hits it (SurvivalGrowth.cs:378 → RandomTickSource). Th
+  - at: BlockSource.java:16-33 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:148-152 (missing) vs client /home/user/ClassiCube/src/IndevTest.c:2442-2443 (present)
+- **[P]** (low, both) Both: flammable-neighbour wake of still fluids restricted to lava (genuine applies it to still WATER too, and tests the changed block id, not a neighbour scan)
+  - genuine: BlockStationary.java:49-51 'if (Block.fire.getChanceOfNeighborsEncouragingFire(var5)) { var6 = true; }' — unconditional on material: a still WATER with no flow targets also wakes when a flammable block (planks, logs, leaves, wool, TNT, bookshelf) changes beside it, and its moving
+  - ours: Both ports gate the flammable check on lava only: server SurvivalPhysics.cs:712 'if (!wake && !water)' and client IndevTest.c:2254 'if (!wake && !water)'. Still water never wakes for a flammable placement, so e.g. an enclosed still-water po
+  - at: BlockStationary.java:49-51 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:712-718; client /home/user/ClassiCube/src/IndevTest.c:2254-2260
+- **[P]** (low, both) Both: fluid update period is one tick shorter for cascade-scheduled cells (5/25 vs genuine 6/26), and the genuine shared 200-entries-per-tick cap is absent for fluids
+  - genuine: World.java:553-556 'int var6 = this.tickList.size(); if (var6 > 200) { var6 = 200; }' snapshots the list size before processing, so entries scheduled during a tick get their first decrement the NEXT tick — with World.java:562-564 '--var8.scheduledTime; this.tickList.add(var8);' a
+  - ours: Both drivers iterate a growing list ('for (int i = 0; i < lp.Fluid.Count; )' SurvivalPhysics.cs:404; 'for (i = 0; i < indev_fluidSchedCount; )' IndevTest.c:2207), so entries appended mid-pass (the dominant flow-cascade case, since spread sc
+  - at: World.java:553-577 + 719-727 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:403-421; client /home/user/ClassiCube/src/IndevTest.c:2202-2216
+- **[P]** (low, both) Both: schedule dedup by cell index only, dropping genuine's per-blockID stale-entry semantics
+  - genuine: World.java:719-726 adds duplicate NextTickListEntry freely and World.java:571-573 'byte var9 = this.blocks[...]; if (var9 == var8.blockID && var9 > 0) { Block.blocksList[var9].updateTick(...); }' skips entries whose recorded block id no longer matches — a stale water entry never
+  - ours: Server dedups via FluidPending HashSet on index (SurvivalPhysics.cs:380) and client via a linear index scan (IndevTest.c:2054-2055), then both run whatever fluid currently sits there (SurvivalPhysics.cs:417-418; IndevTest.c:2213-2214). Cons
+  - at: World.java:571-573 + 719-727 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:379-385,415-419; client /home/user/ClassiCube/src/IndevTest.c:2051-2062,2213-2214
+- **[P]** (low, both) Both: map load schedules every moving-fluid cell in one burst (genuine has no load-time scan; setTickOnLoad only enables random ticks)
+  - genuine: World.java:589-592 'byte var15 = this.blocks[...]; if (Block.tickOnLoad[var15]) { Block.blocksList[var15].updateTick(this, var14, var13, var10, this.random); }' — tickOnLoad is consulted only by the random-update pass; there is no whole-map scheduling scan at load (pending update
+  - ours: Server EnsureLoaded (SurvivalPhysics.cs:193-206) and client IndevTest_FluidsOnMapLoaded (IndevTest.c:2274-2282) scan the whole volume and schedule every Water/Lava cell, so a freshly loaded map with many suspended moving cells (e.g. an in-p
+  - at: World.java:39,579-593 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:193-206; client /home/user/ClassiCube/src/IndevTest.c:2274-2282
+- **[P]** (low, both) Both: source blocks classified by their own fluid; genuine gives BOTH sources Material.water, changing several corner-case gates
+  - genuine: BlockSource.java:10-11 'protected BlockSource(int var1, int var2) { super(var1, Block.blocksList[var2].blockIndexInTexture, Material.water);' — the LAVA source is Material.water too. Hence (a) BlockFlowing.update's equalize gate 'var1.getBlockMaterial(var2, var3 - 1, var4) == thi
+  - ours: Both ports put each source in its own fluid class: server IsWaterMat/IsLavaMat (SurvivalPhysics.cs:52-53) and client Fluid_IsWaterMat/Fluid_IsLavaMat (IndevTest.c:1884-1889), used in the equalize gate (SurvivalPhysics.cs:618; IndevTest.c:21
+  - at: BlockSource.java:10-11 + BlockFlowing.java:43 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:52-53,618; client /home/user/ClassiCube/src/IndevTest.c:1884-1889,2126-2127
+
+### fire (9 findings, 29 verified-exact)
+
+- **[P]** (medium, server) Server: TNT consumed by fire never leaves a fire block behind (genuine does 50% of the time)
+  - genuine: BlockFire.tryToCatchBlockOnFire: "boolean var8 = var1.getBlockId(var2, var3, var4) == Block.tnt.blockID; if (var6.nextInt(2) == 0) { var1.setBlockWithNotify(var2, var3, var4, this.blockID); } else { var1.setBlockWithNotify(var2, var3, var4, 0); } if (var8) { Block.tnt.onBlockDest
+  - ours: Server FireTryCatch special-cases TNT before the coin flip: "if (b == Block.TNT) { SetFire(lvl, x, y, z, Block.Air); SurvivalTnt.Ignite(...); return; }" - the cell is always set to air, never fire. The client is correct (IndevFire.c:173-184
+  - at: BlockFire.java:114-129 (tryToCatchBlockOnFire) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:302-305 (wrong); client /home/user/ClassiCube/src/IndevFire.c:171-184 (correct)
+- **[P]** (medium, server) Server: fire-support test uses IsSolid instead of isOpaqueCube - fire can rest on glass/slabs
+  - genuine: World.isBlockNormalCube: "Block var4 = Block.blocksList[this.getBlockId(var1, var2, var3)]; return var4 == null ? false : var4.isOpaqueCube();" (World.java:399-402). Fire's support/burnout tests use it (BlockFire.java:64 "if (!var1.isBlockNormalCube(var2, var3 - 1, var4) || var6
+  - ours: Server NormalCube: "return CollideType.IsSolid(lvl.CollideType(lvl.GetBlock(...)))" (SurvivalPhysics.cs:129-132) - glass and slabs ARE solid-collide, so server-side fire on a glass/slab top with no flammable neighbour survives ~4-5 schedule
+  - at: World.java:399-402; BlockFire.java:64,154,158 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:129-132 (wrong); client /home/user/ClassiCube/src/IndevFire.c:136-139 (correct)
+- **[P]** (low, server) Server: onBlockAdded/onNeighborBlockChange fire validation is deferred ~1s instead of inline
+  - genuine: BlockFire.onNeighborBlockChange: "if (!var1.isBlockNormalCube(var2, var3 - 1, var4) && !this.canNeighborCatchFire(var1, var2, var3, var4)) { var1.setBlockWithNotify(var2, var3, var4, 0); }" (BlockFire.java:157-161), and onBlockAdded identically at 163-169 - both run synchronously
+  - ours: Server Notify only ENQUEUES a scheduled fire update (SurvivalPhysics.cs:140-162 NotifyNeighbour -> ScheduleFire with Time=20, :235-238), so server-authoritatively the fire persists ~21 ticks (~1.05s) before FireUpdate's support check remove
+  - at: BlockFire.java:157-169; World.java:310-316,335-342 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:140-162,235-238; client /home/user/ClassiCube/src/IndevFire.c:286-316 (correct)
+- **[P]** (low, both) Both: fire can spread into / burn blocks in the outermost boundary shell (genuine setBlock is interior-only)
+  - genuine: World.setBlock: "if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {...} else return false" (World.java:297-298) - every fire write (spread, burn-to-air, tryToCatchBlockOnFire) silently fails on cells with any coord
+  - ours: Both ports allow the full 0..dim-1 range: client Fire_Set gates on World_Contains only (IndevFire.c:157-161) and Fire_SpreadCheck returns false for out-of-range (IndevFire.c:387-394); server SetFire/In likewise (SurvivalPhysics.cs:117-122,
+  - at: World.java:297-298; BlockFire.java:271-281 vs client /home/user/ClassiCube/src/IndevFire.c:157-161,387-394; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:117-122,355-362
+- **[P]** (low, both) Both: flint & steel loses durability on world-boundary clicks (genuine does not)
+  - genuine: ItemFlintAndSteel.onItemUse: "if(var3 > 0 && var4 > 0 && var5 > 0 && var3 < var2.width - 1 && ...) { ... var1.damageItem(1); return true; } else { return false; }" (ItemFlintAndSteel.java:38-49) - damageItem(1) is INSIDE the interior-bounds branch; a click whose face-adjusted tar
+  - ours: Client: "SurvivalTest_DamageHeldItem(1); return true;" runs unconditionally after the bounds check (IndevFire.c:349-350); the comment at IndevFire.c:338-340 claims genuine "damages the item unconditionally", which is incorrect. Server match
+  - at: ItemFlintAndSteel.java:38-49 vs client /home/user/ClassiCube/src/IndevFire.c:336-350; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalInventory.cs:597-618
+- **[P]** (low, sp-mp-split) MP only: no "fire.ignite" sound when flint & steel places fire
+  - genuine: ItemFlintAndSteel.onItemUse: "var2.playSoundAtPlayer((float)var3 + 0.5F, ..., \"fire.ignite\", 1.0F, rand.nextFloat() * 0.4F + 0.8F);" (ItemFlintAndSteel.java:41) before setting the fire block.
+  - ours: SP client plays it (IndevFire.c:344-346). In MP the right-click leaves as SURV_USE_ITEM (SurvivalTest.c:7781-7790) and the server's UseFlintSteel places the fire with no sound packet (SurvivalInventory.cs:597-619), so nobody hears the ignit
+  - at: ItemFlintAndSteel.java:41 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalInventory.cs:597-619; client MP path /home/user/ClassiCube/src/SurvivalTest.c:7781-7790
+- **[P]** (low, server) Server: primed-TNT kick velocity skips Notch's double angle conversion (affects fire-ignited TNT)
+  - genuine: EntityTNTPrimed ctor: "float var5 = (float)(Math.random() * Math.PI * 2.0D); this.motionX = -MathHelper.sin(var5 * (float)Math.PI / 180.0F) * 0.02F; ... this.motionZ = -MathHelper.cos(var5 * (float)Math.PI / 180.0F) * 0.02F;" (EntityTNTPrimed.java:17-20) - the radians value is co
+  - ours: Server Ignite: "VX = -Math.Sin(ang) * 0.02, VY = 0.2, VZ = -Math.Cos(ang) * 0.02" (SurvivalTnt.cs:128-134) - a uniformly random horizontal direction at full 0.02 magnitude; its comment says the magnitude is what matters, but genuine's direc
+  - at: EntityTNTPrimed.java:17-20 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalTnt.cs:124-134 (wrong); client /home/user/ClassiCube/src/SurvivalTest.c:2022-2029 (correct)
+- **[P]** (low, server) Server: fire age (metadata nibble) is not persisted across map unload/save
+  - genuine: Fire age lives in the world's data nibble: "byte var6 = var1.getBlockMetadata(var2, var3, var4); if (var6 < 15) { var1.setBlockMetadata(var2, var3, var4, var6 + 1); ... }" (BlockFire.java:57-61), and the data array is part of the saved level, so a mid-burn fire resumes at its sav
+  - ours: Server FireAge is a plain in-memory byte[] referenced only inside SurvivalPhysics.cs (lines 62, 222-233); no sidecar/persistence code touches it, so unloading/reloading a level resets every burning fire to age 0 - it restarts its full 16-st
+  - at: BlockFire.java:57-61; World.java:810-858 (data nibble store) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:62,222-233 (memory only); client /home/user/ClassiCube/src/IndevTest.c:727,732 (persisted)
+- **[P]** (low, both) Both: scheduled-update queue is bounded at 8192 entries (genuine list is unbounded)
+  - genuine: World.scheduleBlockUpdate: "NextTickListEntry var5 = new NextTickListEntry(...); ... this.tickList.add(var5);" (World.java:719-727) - an unconditional add to an unbounded List; only PROCESSING is capped at 200/tick (World.java:553-556).
+  - ours: Both ports drop new schedules when 8192 entries are queued: client Fire_Schedule "if (fire_qCount >= FIRE_QUEUE_LEN) return;" (IndevFire.c:98-100) and the requeue guard at IndevFire.c:260; server ScheduleFire "if (lp.FireQueue.Count >= FIRE
+  - at: World.java:719-727,553-556 vs client /home/user/ClassiCube/src/IndevFire.c:93-105,258-264; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:82,235-238,245-247
+
+### growth (21 findings, 32 verified-exact)
+
+- **[P]** (critical, both) Grass spread gated on binary sky-exposure instead of light >= 9 source / >= 4 target: spreads at night, never by torchlight
+  - genuine: BlockGrass.java:25-33: "if (var1.getBlockLightValue(var2, var3 + 1, var4) >= 9) { var2 = var2 + var5.nextInt(3) - 1; ... if (var1.getBlockId(var2, var3, var4) == Block.dirt.blockID && var1.getBlockLightValue(var2, var3 + 1, var4) >= 4 && !var1.getBlockMaterial(var2, var3 + 1, var
+  - ours: Server SurvivalGrowth.cs TickGrass: 'if (!IsLit(lvl, x, y, z)) return;' for the source and 'if (!IsLit(lvl, tx, ty, tz)) return;' for the target - pure time-independent sky exposure, no LightLevel/CurrentSkyLight call at all. Client IndevTe
+  - at: BlockGrass.java:25-33, World.java:512-519, Light.java:251, Material.java:33-35 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:393-401; ClassiCube/src/IndevTest.c:2506-2515
+- **[P]** (critical, client) c0.30 grass handler: missing 1-in-4 gate, missing the 4-attempt spread, plus an invented spontaneous dirt-to-grass random tick
+  - genuine: c0.30 tile/q.a (GrassTile.tick, verified via javap): "0: aload 5; 2: iconst_4; 3: invokevirtual Random.nextInt; 6: ifeq 10; 9: return" (a 1-in-4 gate on the WHOLE tick), then unlit -> setTile dirt, else a loop "39: iload_0; 40: iconst_4; if_icmpge 136" doing FOUR spread attempts
+  - ours: Client BlockPhysics.c Physics_HandleGrass (356-363): unlit grass -> dirt on EVERY random tick (no 1/4 gate, ~4x faster die-back) and NO spread attempts at all; instead Physics_HandleDirt (347-354) makes any lit dirt anywhere spontaneously b
+  - at: c030 jar com/mojang/minecraft/level/tile/q.class method a(Level,int,int,int,Random); tile/c.class (no tick) vs ClassiCube/src/BlockPhysics.c:347-363, 620-622, 228-257
+- **[P]** (medium, sp-mp-split) Server grass die-back trigger conflates cover with darkness: grass under leaves dies (client keeps it, genuine keeps it)
+  - genuine: BlockGrass.java:19-23: "if (var1.getBlockLightValue(var2, var3 + 1, var4) < 4 && var1.getBlockMaterial(var2, var3 + 1, var4).getCanBlockGrass()) { if (var5.nextInt(4) == 0) { var1.setBlockWithNotify(var2, var3, var4, Block.dirt.blockID); } }". Leaves have lightOpacity 1 (Block.ja
+  - ours: Server SurvivalGrowth.cs TickGrass:388-391 rolls the 1/4 die-back whenever BlocksSky(above) is true, and BlocksSky (157-169) counts leaves (and water, farmland, containers) as blockers - so grass touching a leaf block above (sloped forest f
+  - at: BlockGrass.java:19-23; Block.java:496; Material.java:33 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:388-391,157-174; ClassiCube/src/IndevTest.c:2500-2504
+- **[P]** (medium, both) Grass under shallow water dies in both ports; genuine water opacity 3 keeps it alive under up to ~3 layers
+  - genuine: Block.java:462-463: "waterMoving = (new BlockFlowing(8, Material.water)).setHardness(100.0F).setLightOpacity(3); waterStill = ... .setLightOpacity(3);" - the Indev flood light engine (Light.java:253-304) attenuates by max(1, opacity) per cell, so the water cell above submerged gr
+  - ours: Both ports treat any water directly above as full darkness: server BlocksSky includes water (SurvivalGrowth.cs:157-174, only ShadesFromBelow special-cases it) so TickGrass:389 rolls the 1/4 revert; client Blocks.BlocksLight[water]=true (Blo
+  - at: Block.java:462-463; Light.java:253-304; BlockGrass.java:19-23 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:388-391; ClassiCube/src/IndevTest.c:2500-2504 with src/Block.c:52
+- **[P]** (medium, server) Server has no random-tick handler for flowers or mushrooms: no dark-pop, no bright-light mushroom pop, no soil check on MP
+  - genuine: BlockFlower.java:12 "this.setTickOnLoad(true)" with updateTick calling checkFlowerChange (BlockFlower.java:29-39): a flower pops (dropping itself) unless "(var1.getBlockLightValue(var2, var3, var4) >= 8 || var1.getBlockLightValue(var2, var3, var4) >= 4 && var1.canBlockSeeTheSky(v
+  - ours: SurvivalGrowth.Tick's dispatch (SurvivalGrowth.cs:364-379) has cases for grass/leaves/crops/farmland/sapling/fire/fluids only - Block.Rose, Block.Dandelion, Block.Mushroom, Block.RedMushroom never receive a handler, and SurvivalPhysics.Noti
+  - at: BlockFlower.java:12,29-45; BlockMushroom.java:15-24 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:364-379 (missing cases); ClassiCube/src/IndevTest.c:2339-2352 (present)
+- **[P]** (medium, server) Farmland trample missing entirely in multiplayer
+  - genuine: BlockFarmland.java:103-108: "public final void onEntityWalking(World var1, int var2, int var3, int var4) { if (var1.random.nextInt(4) == 0) { var1.setBlockWithNotify(var2, var3, var4, Block.dirt.blockID); } }" - fired from Entity.java:338-351 for every walking entity (players and
+  - ours: The client implements it (IndevTest_TrampleStep, IndevTest.c:1738-1750, fed by SurvivalTest.c:8472-8486 for the player and 4782-4797 for mobs) but the player feed is explicitly gated '!SurvivalNet_ServerDriven()' and the local mob sim is of
+  - at: BlockFarmland.java:103-108; Entity.java:336-351 vs ClassiCube/src/SurvivalTest.c:8472-8486; mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs (absent)
+- **[P]** (medium, both) Farmland moisture has one wet state instead of 8: dries ~7x too fast after water is removed
+  - genuine: BlockFarmland.java:63-72: with water in range "var1.setBlockMetadata(var2, var3, var4, 7)"; without, "byte var13 = var1.getBlockMetadata(var2, var3, var4); if (var13 > 0) { var1.setBlockMetadata(var2, var3, var4, var13 - 1); return; }" - moisture counts down 7,6,...,0 through SEV
+  - ours: Both ports model farmland as exactly two blocks (FARMLAND/FARMLAND_WET): server TickFarmland (SurvivalGrowth.cs:497-500) and client Indev_TickFarmland (IndevTest.c:1723-1726) drop from wet to fully dry in ONE successful 1/5 gate (~1000 game
+  - at: BlockFarmland.java:63-72; BlockCrops.java:47-51 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:493-501; ClassiCube/src/IndevTest.c:1719-1729
+- **[P]** (medium, both) Server sapling collapses the 16-stage counter into a memoryless 1/80 roll; failed-tree retry also 16x slower than genuine on both sides
+  - genuine: BlockSapling.java:14-24: "if (var1.getBlockLightValue(var2, var3 + 1, var4) >= 9 && var5.nextInt(5) == 0) { byte var6 = var1.getBlockMetadata(var2, var3, var4); if (var6 < 15) { var1.setBlockMetadata(var2, var3, var4, var6 + 1); return; } var1.setTileNoUpdate(var2, var3, var4, 0)
+  - ours: Server TickSapling (SurvivalGrowth.cs:522-530): 'if (g.Rng.Next(5) != 0) return; if (g.Rng.Next(16) != 0) return;' - same 80-roll mean but memoryless: a just-planted sapling can grow on its first random tick (genuine: impossible before 16),
+  - at: BlockSapling.java:12-27; World.java:353-365 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:517-530; ClassiCube/src/IndevTest.c:2422-2429
+- **[P]** (medium, client) c0.30 sapling handler wrong on every axis: inert on dirt, no 1-in-5 gate, tree height 5-7 vs 4-6, no restore on failed growth
+  - genuine: c0.30 tile/n.a (SaplingTile.tick via javap): stay-check pops the sapling unless isLit AND below is dirt(a.g) or grass(a.f); then "56: aload 5; 58: iconst_5; 59: invokevirtual Random.nextInt; 62: ifne 99" (1-in-5 gate) -> setTileNoUpdate(0) -> Level.maybeGrowTree -> restore saplin
+  - ours: Client Physics_HandleSapling (BlockPhysics.c:317-345), used by c0.30 survival at the genuine tick rate: 'if (below == BLOCK_DIRT) return;' (sapling on dirt never grows AND never pops even unlit); on grass+lit it removes the sapling and atte
+  - at: c030 jar com/mojang/minecraft/level/tile/n.class method a(...); Level.class maybeGrowTree vs ClassiCube/src/BlockPhysics.c:317-345
+- **[P]** (medium, client) c0.30 Survival Test flowers never pop in genuine (growTrees gate), but ours pops them
+  - genuine: c0.30 tile/r.a (Bush.tick via javap): "0: aload_1; 1: getfield Level.growTrees; 4: ifeq 8; 7: return" - when Level.growTrees is TRUE the whole stay-check is skipped. The survival gamemode class com/mojang/minecraft/d/b sets "1: iconst_0; putfield creativeMode; 6: iconst_1; putfie
+  - ours: Client Physics_HandleFlower (BlockPhysics.c:365-382) pops dandelion/rose when unlit or when below is not dirt/grass, and runs in c0.30 survival via the OnRandomTick table at the genuine volume/200 rate - flowers in player-built dark rooms o
+  - at: c030 jar com/mojang/minecraft/level/tile/r.class method a(...); com/mojang/minecraft/d/b.class vs ClassiCube/src/BlockPhysics.c:365-382,624-625
+- **[P]** (medium, server) c0.30 multiplayer survival maps get MCGalaxy classic physics, not genuine c0.30 growth
+  - genuine: c0.30 Level.tick (javap, offsets 246-291): "unprocessed += width*height*depth; var6 = unprocessed / 200; unprocessed -= var6 * 200" then the c*3+1013904223 LCG picks driving GrassTile/Bush/Sapling/Mushroom ticks - the same volume/200 growth engine as Indev, which a faithful c0.30
+  - ours: SurvivalGrowth.Tick is invoked only for Indev ('if (indev) SurvivalGrowth.Tick(lvl);' SurvivalMobs.cs:2255) and SurvivalGrowth.cs's header states 'Runs on Indev maps only - c0.30 keeps the classic engine physics'. So MP c0.30 survival growt
+  - at: c030 jar com/mojang/minecraft/level/Level.class tick() offsets 246-410 vs mcgalaxy/MCGalaxy/Network/SurvivalMobs.cs:2255; mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:25-34
+- **[P]** (low, both) Neighbor-change plant reactions deferred to random ticks: farmland solid-cover revert and soil-removal pops are delayed instead of instant
+  - genuine: BlockFarmland.java:110-117: "public final void onNeighborBlockChange(...) { Material var6 = var1.getBlockMaterial(var2, var3 + 1, var4); if (var6.isSolid()) { var1.setBlockWithNotify(var2, var3, var4, Block.dirt.blockID); } }" and BlockFlower.java:24-27 onNeighborBlockChange -> c
+  - ours: Neither port wires plant/farmland reactions to block-change notifications. Server: SurvivalPhysics.Notify (SurvivalPhysics.cs:140-162) schedules only fire/fluids; the solid-above farmland check was moved INSIDE the 1/5-gated random tick (Su
+  - at: BlockFarmland.java:110-117; BlockFlower.java:24-27; World.java:344-351 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:484-492; ClassiCube/src/IndevTest.c:1712-1717,2432-2465
+- **[P]** (low, both) Farmland hydration ignores spring blocks (52/53) - genuine BlockSource has Material.water for BOTH water and lava springs
+  - genuine: BlockFarmland.java:53 scans "if (var12.getBlockMaterial(var9, var10, var11) == Material.water)"; BlockSource.java:10-11: "protected BlockSource(int var1, int var2) { super(var1, Block.blocksList[var2].blockIndexInTexture, Material.water); }" - both the water spring (52) and even
+  - ours: Server WaterNear (SurvivalGrowth.cs:511-512) matches only 'b == Block.Water || b == Block.StillWater'; client Indev_WaterNear (IndevTest.c:1696-1697) only BLOCK_WATER/BLOCK_STILL_WATER. A farm whose only in-range water is the spring block i
+  - at: BlockFarmland.java:40-66; BlockSource.java:10-14 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:505-515; ClassiCube/src/IndevTest.c:1688-1702
+- **[P]** (low, sp-mp-split) Server tree canopy refuses to overwrite water/farmland; genuine (and client) replace any non-opaque-cube cell
+  - genuine: World.java:1055-1057: "if ((Math.abs(var12) != var9 || Math.abs(var11) != var9 || this.random.nextInt(2) != 0 && var8 != 0) && !Block.opaqueCubeLookup[this.getBlockId(var10, var13, var6)]) { this.setBlockWithNotify(var10, var13, var6, Block.leaves.blockID); }" - opaqueCubeLookup
+  - ours: Server GrowTree (SurvivalGrowth.cs:583, 597-601) gates on IsFullOpaque, which is BlocksSky-based and thus counts water and farmland as opaque - those cells are skipped. Client Indev_GrowTree (IndevTest.c:2394) uses Blocks.FullOpaque, false
+  - at: World.java:1050-1061; BlockFarmland.java:22-24 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:583,597-601; ClassiCube/src/IndevTest.c:2394
+- **[P]** (low, both) Server growth drops spawn at cell center instead of the genuine 0.15-0.85 scatter
+  - genuine: Block.java:282-284 (dropBlockAsItemWithChance): "float var10 = var1.random.nextFloat() * 0.7F + 0.15F;" on all three axes - popped plants, decayed-leaf saplings and popped mature crops spawn scattered inside the cell.
+  - ours: Server spawns at exact centers: SurvivalGrowth.cs:425-426 and 473-475 use 'x + 0.5, y + 0.5, z + 0.5'. Client is faithful (IndevTest.c:2316-2318, 2545-2547) except PopCrop's wheat uses y + 0.5f (IndevTest.c:1759). (The server's clear-before
+  - at: Block.java:275-292 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:423-426,472-477; ClassiCube/src/IndevTest.c:1755-1762
+- **[P]** (low, client) Client sapling stage side-store never cleared on pop/break: replanted sapling inherits the old stage
+  - genuine: World.java:297-309 setBlock: "this.blocks[...] = (byte) var4; this.setBlockMetadata(var1, var2, var3, 0);" - every block change zeroes metadata, so a freshly placed sapling always starts at stage 0.
+  - ours: The client's per-cell stage store (indev_saplingStage, IndevTest.c:2288-2304) is only written by metadata import and Indev_TickSapling; Indev_PopPlant (2314-2321) and player breaks never reset it. Replanting a sapling in a cell whose previo
+  - at: World.java:297-309 vs ClassiCube/src/IndevTest.c:2288-2304,2314-2321
+- **[P]** (low, client) c0.30 mushroom soil set missing gravel
+  - genuine: c0.30 tile/t.a (Mushroom.tick via javap): stays only when NOT lit and below is a.e, a.q or a.h - static init shows field e = tile id 1 (rock), field h = tile id 4 (stoneBrick/cobblestone), field q = tile id 13 (GRAVEL): mushrooms survive on stone, cobblestone or gravel.
+  - ours: Client Physics_HandleMushroom (BlockPhysics.c:395-397): 'if (!(below == BLOCK_STONE || below == BLOCK_COBBLE))' pops it - a c0.30 mushroom sitting on gravel pops in ours, stays in genuine. (The lit->pop half matches.)
+  - at: c030 jar com/mojang/minecraft/level/tile/t.class method a(...); tile/a.class static init offsets 59-88, 134-163, 370-392 vs ClassiCube/src/BlockPhysics.c:384-401
+- **[P]** (low, client) c0.30 sand/gravel random-tick falling is an extra rule (genuine c0.30 never random-ticks them)
+  - genuine: c0.30 tile/l (sand/gravel) constructor: "0: aload_0; 1: iload_1; 2: iload_2; 3: invokespecial a.<init>(II); 6: return" - it never calls the shouldTick setter a(Z) and has no tick override; sand/gravel fall only from the neighbor-change hooks b(...). Level.tick's random loop gates
+  - ours: BlockPhysics.c:617-618 registers 'Physics.OnRandomTick[BLOCK_SAND] = Physics_DoFalling' (and GRAVEL), and Physics_TickRandomBlocksC030 dispatches purely on that table - so floating sand left without any neighbor update eventually falls in o
+  - at: c030 jar com/mojang/minecraft/level/tile/l.class; Level.class tick() offsets 375-401 vs ClassiCube/src/BlockPhysics.c:613-618,244-256
+- **[P]** (low, sp-mp-split) Random-tick coordinate masks disagree between client and server on non-power-of-two maps
+  - genuine: World.java:583-588: "this.randId = this.randId * 3 + 1013904223; int var13 = this.randId >> 2; int var14 = var13 & var4;" with var4 = width-1 etc. (World.java:550-552) - genuine masks with dim-1, which is only uniform because genuine Indev/c0.30 dimensions are always powers of tw
+  - ours: Client copies genuine literally (IndevTest.c:2567 'maskX = World.Width - 1' - on an odd-sized import the AND knocks holes in the pattern so many cells are NEVER picked, acknowledged in its comment); server instead uses next-power-of-two mas
+  - at: World.java:540-552,583-593 vs ClassiCube/src/IndevTest.c:2565-2579; mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:339-362
+- **[P]** (low, both) Genuine border-shell setBlock immutability not replicated: growth can alter the outermost columns
+  - genuine: World.java:297-298: "public final boolean setBlock(int var1, int var2, int var3, int var4) { if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {" - every growth write (setBlockWithNotify) silently fails on the 1-blo
+  - ours: Server SetView (SurvivalGrowth.cs:116-123) and client Game_UpdateBlock write anywhere in bounds, so border-column grass spread/decay, leaf decay and farmland reverts all proceed normally. Edge-only cosmetic difference (and it 'fixes' the ge
+  - at: World.java:297-333; BlockLeaves.java:25-26 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:116-123; ClassiCube/src/IndevTest.c:2550
+- **[P]** (low, both) Crop/flower stay-check sky test approximated by heightmap IsLit instead of canBlockSeeTheSky's opaque-scan
+  - genuine: World.java:1638-1649 canBlockSeeTheSky: "if (this.heightMap[var1 + var3 * this.width] <= var2) { return true; } else { while (var2 < this.height) { if (Block.opaqueCubeLookup[this.getBlockId(var1, var2, var3)]) { return false; } ++var2; } }" - a plant under only NON-opaque cover
+  - ours: Both ports substitute binary sky exposure: server FlowerStayCheck/TickCrops use IsLit (SurvivalGrowth.cs:434,538) where leaves/water shadow their own cell; client uses Lighting.IsLit (IndevTest.c:1783,2332) and its comment calls the gap 'ac
+  - at: World.java:1638-1649; BlockFlower.java:41-45 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:434,536-538; ClassiCube/src/IndevTest.c:1778-1784,2330-2333

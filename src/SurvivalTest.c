@@ -205,6 +205,7 @@ static void SurvivalTest_RenderPaintings(void);
 static void SurvivalTest_TickPaintings(void);
 static cc_bool SurvivalTest_TryPunchPainting(Vec3 eyePos, Vec3 dir, float maxDist);
 static cc_bool SurvivalTest_ArrowHitPainting(Vec3 pos);
+static void SurvivalTest_BlastPaintings(Vec3 center, float diam);
 /* Defined in the Mining section - forward declared for the melee attack path */
 static void SurvivalTest_DamageHeldTool(int amount);
 static void SurvivalTest_ConsumeSelected(void);
@@ -2219,6 +2220,13 @@ void SurvivalTest_NetTntRemove(int netId, int detonated) {
 		coords.y = Math_Floor(t->pos.y);
 		coords.z = Math_Floor(t->pos.z);
 		Particles_BreakBlockEffect(coords, BLOCK_TNT, BLOCK_AIR);
+		/* createExplosion's random.explode (vol 4 = audible to 64 blocks) -
+		    the ONE piece of an MP detonation the sim handover dropped, since
+		    the sound normally plays inside the gated-off local explosion.
+		    Indev_PlaySoundAt no-ops in c0.30 mode, where genuine blasts are
+		    genuinely silent. */
+		Indev_PlaySoundAt(t->pos, MOBSND_EXPLODE, 4.0f,
+			(1.0f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f) * 0.7f);
 	}
 }
 
@@ -3460,27 +3468,31 @@ static cc_bool Indev_RayBlocked(Vec3 from, Vec3 to) {
 /* World.getBlockDensity: the fraction of grid samples over the entity's
     AABB with unobstructed line of sight to the blast centre (0 = fully
     shielded, 1 = fully exposed). Grid step = 1/(size*2+1) per axis. */
-static float Indev_BlockDensity(Vec3 center, struct Entity* e) {
-	struct AABB bb;
+static float Indev_BlockDensityBox(Vec3 center, const struct AABB* bb) {
 	Vec3 s;
 	float fx, fy, fz, sx, sy, sz;
 	int seen = 0, total = 0;
 
-	Entity_GetBounds(e, &bb);
-	sx = 1.0f / ((bb.Max.x - bb.Min.x) * 2.0f + 1.0f);
-	sy = 1.0f / ((bb.Max.y - bb.Min.y) * 2.0f + 1.0f);
-	sz = 1.0f / ((bb.Max.z - bb.Min.z) * 2.0f + 1.0f);
+	sx = 1.0f / ((bb->Max.x - bb->Min.x) * 2.0f + 1.0f);
+	sy = 1.0f / ((bb->Max.y - bb->Min.y) * 2.0f + 1.0f);
+	sz = 1.0f / ((bb->Max.z - bb->Min.z) * 2.0f + 1.0f);
 
 	for (fx = 0.0f; fx <= 1.0f; fx += sx)
 	for (fy = 0.0f; fy <= 1.0f; fy += sy)
 	for (fz = 0.0f; fz <= 1.0f; fz += sz) {
-		s.x = bb.Min.x + (bb.Max.x - bb.Min.x) * fx;
-		s.y = bb.Min.y + (bb.Max.y - bb.Min.y) * fy;
-		s.z = bb.Min.z + (bb.Max.z - bb.Min.z) * fz;
+		s.x = bb->Min.x + (bb->Max.x - bb->Min.x) * fx;
+		s.y = bb->Min.y + (bb->Max.y - bb->Min.y) * fy;
+		s.z = bb->Min.z + (bb->Max.z - bb->Min.z) * fz;
 		if (!Indev_RayBlocked(s, center)) seen++;
 		total++;
 	}
 	return total ? (float)seen / (float)total : 0.0f;
+}
+
+static float Indev_BlockDensity(Vec3 center, struct Entity* e) {
+	struct AABB bb;
+	Entity_GetBounds(e, &bb);
+	return Indev_BlockDensityBox(center, &bb);
 }
 
 /* dropBlockAsItemWithChance(..., 0.3F) through the INDEV idDropped table -
@@ -3639,6 +3651,44 @@ static void Indev_CreateExplosion(struct Entity* exploder, Vec3 center, float r)
 			e->Velocity.z += dz / dist * f;
 		}
 	}
+
+	/* Item drops are entities too (getEntities has no type filter):
+	    EntityItem.attackEntityFrom just decrements health (5) and dies at 0 -
+	    a blast vaporizes nearby loose items, which is why chained TNT eats
+	    the previous blast's drops. Survivors take the same dir * f kick,
+	    scaled x20 because drop velocity here is per-second. */
+	for (i = 0; i < DROP_MAX; i++) {
+		struct DropItem* dr = &st_drops[i];
+		struct AABB dbb;
+		if (!dr->active || dr->net || dr->pickingUp) continue;
+
+		dx = dr->position.x            - center.x;
+		dy = (dr->position.y + 0.125f) - center.y;
+		dz = dr->position.z            - center.z;
+		dist = Math_SqrtF(dx * dx + dy * dy + dz * dz);
+		d    = dist / diam;
+		if (d > 1.0f) continue;
+
+		/* EntityItem setSize(0.25, 0.25) - the density grid over its box */
+		dbb.Min.x = dr->position.x - 0.125f; dbb.Max.x = dr->position.x + 0.125f;
+		dbb.Min.y = dr->position.y;          dbb.Max.y = dr->position.y + 0.25f;
+		dbb.Min.z = dr->position.z - 0.125f; dbb.Max.z = dr->position.z + 0.125f;
+		dens = Indev_BlockDensityBox(center, &dbb);
+		f    = (1.0f - d) * dens;
+		dmg  = (int)((f * f + f) / 2.0f * 8.0f * diam + 1.0f);
+
+		dr->health = (cc_int8)(dr->health - dmg);
+		if (dr->health <= 0) { dr->active = false; continue; }
+		if (dist > 0.0001f) {
+			dr->velocity.x += dx / dist * f * 20.0f;
+			dr->velocity.y += dy / dist * f * 20.0f;
+			dr->velocity.z += dz / dist * f * 20.0f;
+		}
+	}
+
+	/* Paintings die from ANY attackEntityFrom (amount ignored) and pop off
+	    as an item - a blast in range knocks them off the wall. */
+	SurvivalTest_BlastPaintings(center, diam);
 
 	/* (c) destruction, in genuine reverse-TreeSet order (descending z, y, x):
 	    drops roll before the clear; consumed TNT arms a 10-29 tick fuse. */
@@ -5419,7 +5469,15 @@ void SurvivalTest_NetMobState(int id, int health, int flags) {
 
 	if ((health <= 0 || (flags & SURV_MOBSTATE_DEAD)) && wasAlive) {
 		/* Death anim starts; the keel-over roll + removal run in the puppet
-		    tick. Explosions/drops/score are all server events, not ours. */
+		    tick. Explosions/drops/score are all server events, not ours -
+		    EXCEPT the blast's own random.explode: a creeper that dies while
+		    its fuse was armed detonated, and no other message carries that
+		    event (TNT blasts ride SURV_TNT_REMOVE instead). */
+		if (m->type == MOB_TYPE_CREEPER &&
+			((flags | m->netState) & SURV_MOBSTATE_FUSE)) {
+			Indev_PlaySoundAt(m->Base.Position, MOBSND_EXPLODE, 4.0f,
+				(1.0f + (Random_Float(&st_mobRng) - Random_Float(&st_mobRng)) * 0.2f) * 0.7f);
+		}
 		m->health     = 0;
 		m->deathTicks = 0;
 	}
@@ -6976,6 +7034,24 @@ static cc_bool Painting_ValidSurface(struct PaintingEntity* pt) {
 static void Painting_PopOff(struct PaintingEntity* pt) {
 	pt->active = false;
 	SurvivalTest_SpawnDropAt(pt->pos, INDEV_ITEM_PAINTING, 1);
+}
+
+/* createExplosion damages every entity within 2r, and EntityPainting's
+    attackEntityFrom dies on ANY hit regardless of amount - so a blast in
+    range pops the painting off as an item. SP only; MP paintings are
+    server entities and pop via SURV_PAINT_REMOVE. */
+static void SurvivalTest_BlastPaintings(Vec3 center, float diam) {
+	float dx, dy, dz, dist;
+	int i;
+	for (i = 0; i < PAINTING_MAX; i++) {
+		struct PaintingEntity* pt = &st_paintings[i];
+		if (!pt->active || pt->netId) continue;
+		dx = pt->pos.x - center.x;
+		dy = pt->pos.y - center.y;
+		dz = pt->pos.z - center.z;
+		dist = Math_SqrtF(dx * dx + dy * dy + dz * dz);
+		if (dist / diam <= 1.0f) Painting_PopOff(pt);
+	}
 }
 
 /* ItemPainting.onItemUse: side faces only, interior blocks only; tries
