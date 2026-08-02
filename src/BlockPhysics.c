@@ -225,6 +225,36 @@ static void Physics_TickRandomBlocks(void) {
     (genuine gates on Block.physics[], the same block set). Masks assume
     power-of-two dims like genuine; the bounds check skips (biased) picks on
     odd-sized imports. Mirrors IndevTest_TickRandomBlocks. */
+/* Genuine c0.30 GrassTile.tick (tile q.a, from the jar): a 1-in-4 gate on the
+    WHOLE tick; an unlit grass block turns to dirt; a lit one makes FOUR spread
+    attempts at x+rand(3)-1, y+rand(5)-3, z+rand(3)-1, each converting a lit
+    dirt block to grass. "Lit" is Level.isLit = pure sky exposure (c0.30 has no
+    block light). The dirt tile has NO tick method at all - dirt only greens by
+    spread from adjacent grass, never spontaneously. The classic-creative
+    handlers below (Physics_HandleDirt/HandleGrass) mimic classic SERVER
+    physics instead and stay registered for that mode; c0.30 survival must not
+    use them (no 1/4 gate = 4x die-back, no spread, and spontaneous greening
+    ignores adjacency entirely). */
+static void Physics_TickGrassC030(int index) {
+	int x, y, z, i, xi, yi, zi;
+	World_Unpack(index, x, y, z);
+
+	if (Random_Next(&physics_rnd, 4) != 0) return;
+	if (!Lighting.IsLit(x, y, z)) {
+		Game_UpdateBlock(x, y, z, BLOCK_DIRT);
+		return;
+	}
+	for (i = 0; i < 4; i++) {
+		xi = x + Random_Next(&physics_rnd, 3) - 1;
+		yi = y + Random_Next(&physics_rnd, 5) - 3;
+		zi = z + Random_Next(&physics_rnd, 3) - 1;
+		if (!World_Contains(xi, yi, zi))                 continue;
+		if (World_GetBlock(xi, yi, zi) != BLOCK_DIRT)    continue;
+		if (!Lighting.IsLit(xi, yi, zi))                 continue;
+		Game_UpdateBlock(xi, yi, zi, BLOCK_GRASS);
+	}
+}
+
 static void Physics_TickRandomBlocksC030(void) {
 	int shiftX = 1, shiftZ = 1;
 	int maskX, maskY, maskZ;
@@ -251,6 +281,10 @@ static void Physics_TickRandomBlocksC030(void) {
 
 		index = World_Pack(x, y, z);
 		block = World.Blocks[index];
+		/* survival-only overrides: the shared OnRandomTick table keeps the
+		    classic-creative behaviour for the engine's own physics loop */
+		if (block == BLOCK_GRASS) { Physics_TickGrassC030(index); continue; }
+		if (block == BLOCK_DIRT)  continue; /* genuine dirt never ticks */
 		tick  = Physics.OnRandomTick[block];
 		if (tick) tick(index, block);
 	}

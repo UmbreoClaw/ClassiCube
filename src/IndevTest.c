@@ -2270,6 +2270,53 @@ static void IndevFluid_RandomMoving(int index, BlockID block) {
 	Indev_FluidUpdate(index, block);
 }
 
+/* BlockSponge.onBlockAdded: absorb every water-material block (moving, still,
+    and the water spring - BlockSource registers Material.water) in the 5x5x5
+    cube. The CLASSIC Physics_PlaceSponge did nearly the same, but its DELETE
+    half fed the classic infinite-flood waterQ - see IndevSponge_Delete. */
+static void IndevSponge_Place(int index, BlockID block) {
+	int x, y, z, xx, yy, zz;
+	World_Unpack(index, x, y, z);
+
+	for (yy = y - 2; yy <= y + 2; yy++)
+	for (zz = z - 2; zz <= z + 2; zz++)
+	for (xx = x - 2; xx <= x + 2; xx++) {
+		if (!World_Contains(xx, yy, zz)) continue;
+		block = World_GetBlock(xx, yy, zz);
+		if (block == BLOCK_WATER || block == BLOCK_STILL_WATER ||
+			block == INDEV_BLOCK_WATER_SOURCE) {
+			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
+		}
+	}
+}
+
+/* BlockSponge.onBlockRemoval: notifyBlocksOfNeighborChange over the whole +-2
+    cube - the six NEIGHBOURS of every cube cell react, which reaches the still
+    water standing at distance 3 (just past canFlow's sponge veto), so the dry
+    pocket refloods with the FINITE fluid. The classic handler instead enqueued
+    the +-3 shell into waterQ - the classic INFINITE flood - which on a finite-
+    fluid Indev map duplicated water volume out of nothing (mine a sponge within
+    2 of Indev water and the classic propagation took over). */
+static void IndevSponge_Delete(int index, BlockID block) {
+	int x, y, z, xx, yy, zz, n;
+	static const int SNX[6] = { -1, 1, 0, 0, 0, 0 };
+	static const int SNY[6] = { 0, 0, -1, 1, 0, 0 };
+	static const int SNZ[6] = { 0, 0, 0, 0, -1, 1 };
+	World_Unpack(index, x, y, z);
+
+	for (yy = y - 2; yy <= y + 2; yy++)
+	for (zz = z - 2; zz <= z + 2; zz++)
+	for (xx = x - 2; xx <= x + 2; xx++) {
+		for (n = 0; n < 6; n++) {
+			int nx = xx + SNX[n], ny = yy + SNY[n], nz = zz + SNZ[n];
+			if (!World_Contains(nx, ny, nz)) continue;
+			block = World_GetBlock(nx, ny, nz);
+			if (block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA)
+				IndevFluid_ActivateStill(World_Pack(nx, ny, nz), block);
+		}
+	}
+}
+
 /* setTickOnLoad: schedule every moving-fluid cell when a map arrives */
 void IndevTest_FluidsOnMapLoaded(void) {
 	int i;
@@ -2455,6 +2502,12 @@ static void Indev_RegisterFarmTicks(void) {
 	Physics.OnRandomTick[BLOCK_STILL_WATER] = IndevFluid_Noop;
 	Physics.OnRandomTick[BLOCK_STILL_LAVA]  = IndevFluid_Noop;
 
+	/* genuine BlockSponge replaces the CLASSIC sponge pair: the classic
+	    delete handler enqueues the classic INFINITE flood (waterQ), which on
+	    a finite-fluid Indev map duplicates water out of nothing */
+	Physics.OnPlace[BLOCK_SPONGE]  = IndevSponge_Place;
+	Physics.OnDelete[BLOCK_SPONGE] = IndevSponge_Delete;
+
 	/* genuine BlockFlower/BlockMushroom/BlockSapling ticks replace the
 	    classic handlers on Indev maps (c0.30 keeps the classic ones) */
 	Physics.OnRandomTick[BLOCK_SAPLING]      = Indev_TickSapling;
@@ -2477,41 +2530,56 @@ static void Indev_RegisterFarmTicks(void) {
 static int indev_updateLCG;
 static cc_uint32 indev_randId;
 
-/* genuine BlockGrass.updateTick: covered grass decays to dirt on a 1-in-4
-    roll; lit grass spreads to a random nearby dirt block (+-1, y -3..+1).
-    Genuine light thresholds (<4 decay, >=9 spread, >=4 target) are
-    approximated with the engine's binary sky lighting. Note dirt has NO
-    updateTick in Indev - it only becomes grass by spreading. */
+/* Material.getCanBlockGrass: TRUE by default - leaves, water, glass and cloth
+    all smother grass - and false only for MaterialTransparent (air, fire) and
+    MaterialLogic (plants, circuits: flowers/mushrooms/sapling/crops, torches,
+    gears). */
+static cc_bool IndevTest_CanBlockGrass(BlockID b) {
+	if (b == BLOCK_AIR) return false;
+	switch (b) {
+	case BLOCK_SAPLING: case BLOCK_ROSE: case BLOCK_DANDELION:
+	case BLOCK_BROWN_SHROOM: case BLOCK_RED_SHROOM: case BLOCK_ROPE:
+		return false;
+	}
+	if (IndevFire_IsFire(b)) return false;
+	if (b == INDEV_BLOCK_TORCH || b == INDEV_BLOCK_GEARS) return false;
+	if (b >= INDEV_BLOCK_CROPS_0  && b <= INDEV_BLOCK_CROPS_0 + 7)  return false;
+	if (b >= INDEV_BLOCK_TORCH_W1 && b <= INDEV_BLOCK_TORCH_W1 + 3) return false;
+	return true;
+}
+
+/* genuine BlockGrass.updateTick, both branches on REAL light levels
+    (getBlockLightValue = the eased sky/lamp nibble; the night sky floor is 4):
+      decay:  light(above) < 4 AND the material above blocks grass -> 1-in-4
+              roll -> dirt. Light < 4 can never happen under open sky (the
+              night floor IS 4), and grass under a single leaf/water layer
+              (light 12-14 up there) survives - the old any-blocker test
+              killed it. A torch keeps covered grass alive, like genuine.
+      spread: light(above) >= 9 - never at night (4 < 9), but a torch (13)
+              or lava (15) greens a cave, which the old sky test never could -
+              seeding one jittered nearby dirt whose own above-cell has
+              light >= 4 and does not block grass.
+    Note dirt has NO updateTick in Indev - it only becomes grass by spread. */
 static void IndevTest_TickGrass(int index) {
-	int x, y, z;
+	int x, y, z, la;
 	BlockID above;
 	World_Unpack(index, x, y, z);
 
-	/* Decay: genuine gates on `getBlockLightValue(x,y+1,z) < 4 &&
-	    canBlockGrass(x,y+1,z)`. canBlockGrass is FALSE for air/glass/sprites
-	    (transparent + logic materials) and true for opaque blocks - exactly
-	    the blocks that also cut the skylight below them, so BlocksLight of the
-	    block DIRECTLY above is a faithful stand-in. The key point: grass only
-	    reverts when a light-blocker sits right on top of it. Grass merely
-	    SHADOWED from afar (e.g. under a floating island, with open air above)
-	    is NOT covered, so it keeps its grass - matching genuine. (The old
-	    !IsLit test reverted any un-sky-lit grass, stripping every island's
-	    underside back to dirt.) */
+	la    = IndevTest_LightLevel(x, y + 1, z);
 	above = (y + 1 < World.Height) ? World_GetBlock(x, y + 1, z) : BLOCK_AIR;
-	if (Blocks.BlocksLight[above]) {
+	if (la < 4 && IndevTest_CanBlockGrass(above)) {
 		if (Random_Next(&indev_teRng, 4) == 0) Game_UpdateBlock(x, y, z, BLOCK_DIRT);
 		return;
 	}
+	if (la < 9) return;
 
-	/* Spread: a sky-lit grass block (approx. light >= 9) seeds a nearby sky-lit
-	    dirt block (approx. light >= 4, nothing blocking grass above it). */
-	if (!Lighting.IsLit(x, y, z)) return;
 	x += Random_Next(&indev_teRng, 3) - 1;
 	y += Random_Next(&indev_teRng, 5) - 3;
 	z += Random_Next(&indev_teRng, 3) - 1;
 	if (!World_Contains(x, y, z))              return;
 	if (World_GetBlock(x, y, z) != BLOCK_DIRT) return;
-	if (!Lighting.IsLit(x, y, z))              return;
+	above = (y + 1 < World.Height) ? World_GetBlock(x, y + 1, z) : BLOCK_AIR;
+	if (IndevTest_LightLevel(x, y + 1, z) < 4 || IndevTest_CanBlockGrass(above)) return;
 	Game_UpdateBlock(x, y, z, BLOCK_GRASS);
 }
 
@@ -3148,6 +3216,29 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 	Indev_TorchCheckPop(x, y + 1, z);
 	Indev_TorchCheckPop(x, y, z - 1);
 	Indev_TorchCheckPop(x, y, z + 1);
+
+	/* setBlockWithNotify: EVERY write wakes adjacent still fluids
+	    (BlockStationary.onNeighborBlockChange) - a flowing donor emptying
+	    itself, fire burning a dam away, an explosion carving next to a pond.
+	    Previously only direct player edits woke them (the classic
+	    Physics_ActivateNeighbours path), so a blast-cut channel in SP stayed
+	    dry while the same channel in MP flooded - the server has had this
+	    wake all along. Player edits waking twice is a no-op (a woken fluid
+	    is already the moving id). MP: the server owns fluids. */
+	if (!SurvivalNet_ServerDriven()) {
+		static const int WNX[6] = { -1, 1, 0, 0, 0, 0 };
+		static const int WNY[6] = { 0, 0, -1, 1, 0, 0 };
+		static const int WNZ[6] = { 0, 0, 0, 0, -1, 1 };
+		int wn;
+		BlockID wb;
+		for (wn = 0; wn < 6; wn++) {
+			int wx = x + WNX[wn], wy = y + WNY[wn], wz = z + WNZ[wn];
+			if (!World_Contains(wx, wy, wz)) continue;
+			wb = World_GetBlock(wx, wy, wz);
+			if (wb == BLOCK_STILL_WATER || wb == BLOCK_STILL_LAVA)
+				IndevFluid_ActivateStill(World_Pack(wx, wy, wz), wb);
+		}
+	}
 	depth--;
 }
 

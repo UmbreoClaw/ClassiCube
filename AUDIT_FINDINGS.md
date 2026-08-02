@@ -723,15 +723,15 @@ Severity/side legend as reported by the finder: side = which port diverges
 
 ### fluids (11 findings, 22 verified-exact)
 
-- **[P]** (critical, client) Client: physics-driven block changes never wake adjacent still fluids (no setBlockWithNotify equivalent for fluids)
+- **[V] FIXED** (critical, client) Client: physics-driven block changes never wake adjacent still fluids (no setBlockWithNotify equivalent for fluids)
   - genuine: World.java:335-342 'public final boolean setBlockWithNotify(...) { if (this.setBlock(var1, var2, var3, var4)) { this.notifyBlocksOfNeighborChange(var1, var2, var3, var4); return true; }' — every fluid/fire/explosion write notifies all 6 neighbours, and BlockStationary.java:18-56
   - ours: The client's notify hook IndevTest_BlockUpdated (IndevTest.c:3106-3153, run for every Game_UpdateBlock) handles crops/farmland/containers/fire/torches but never activates still fluids. IndevFluid_ActivateStill (IndevTest.c:2230) only runs v
   - at: World.java:335-351 + BlockStationary.java:18-58 vs client /home/user/ClassiCube/src/IndevTest.c:3106-3153 (missing wake) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:154-160 (has it)
-- **[P]** (critical, client) Client: mining a sponge on an Indev map triggers the CLASSIC infinite water flood (waterQ leak)
+- **[V] FIXED** (critical, client) Client: mining a sponge on an Indev map triggers the CLASSIC infinite water flood (waterQ leak)
   - genuine: BlockSponge.java:25-34 'public final void onBlockRemoval(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... var1.notifyBlocksOfNeighborChange(var5, var6, var7, var1.getBlockId(var5, var6, var7)); } }' — removal just notifies the ±2 cube so the FINITE flui
   - ours: Physics.OnDelete[BLOCK_SPONGE] = Physics_DeleteSponge stays registered on Indev maps (BlockPhysics.c:632; Indev_RegisterFarmTicks never overrides it). Physics_DeleteSponge (BlockPhysics.c:521-540) enqueues the ±3 shell's water into the clas
   - at: BlockSponge.java:25-34 vs client /home/user/ClassiCube/src/BlockPhysics.c:632,658-659,521-540,454-477
-- **[P]** (medium, sp-mp-split) Server: sponge does not absorb water on placement and removal only wakes 6 direct neighbours (genuine notifies the ±2 cube)
+- **[V] FIXED** (medium, sp-mp-split) Server: sponge does not absorb water on placement and removal only wakes 6 direct neighbours (genuine notifies the ±2 cube)
   - genuine: BlockSponge.java:12-23 'public final void onBlockAdded(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... if(var1.isWater(var5, var6, var7)) { var1.setBlock(var5, var6, var7, 0); } } }' absorbs all water-material blocks in the 5x5x5 cube on placement; onB
   - ours: SurvivalPhysics has no sponge handling at all beyond the canFlow veto (SurvivalPhysics.cs:431-436): placing a sponge next to MP Indev water removes nothing (the water just sits inside the exclusion zone), and mining a sponge only fires Noti
   - at: BlockSponge.java:12-34 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:431-436 (only the canFlow veto; no absorb) vs client /home/user/ClassiCube/src/BlockPhysics.c:503-519 (absorbs)
@@ -809,11 +809,11 @@ Severity/side legend as reported by the finder: side = which port diverges
 
 ### growth (21 findings, 32 verified-exact)
 
-- **[P]** (critical, both) Grass spread gated on binary sky-exposure instead of light >= 9 source / >= 4 target: spreads at night, never by torchlight
+- **[V] FIXED** (critical, both) Grass spread gated on binary sky-exposure instead of light >= 9 source / >= 4 target: spreads at night, never by torchlight
   - genuine: BlockGrass.java:25-33: "if (var1.getBlockLightValue(var2, var3 + 1, var4) >= 9) { var2 = var2 + var5.nextInt(3) - 1; ... if (var1.getBlockId(var2, var3, var4) == Block.dirt.blockID && var1.getBlockLightValue(var2, var3 + 1, var4) >= 4 && !var1.getBlockMaterial(var2, var3 + 1, var
   - ours: Server SurvivalGrowth.cs TickGrass: 'if (!IsLit(lvl, x, y, z)) return;' for the source and 'if (!IsLit(lvl, tx, ty, tz)) return;' for the target - pure time-independent sky exposure, no LightLevel/CurrentSkyLight call at all. Client IndevTe
   - at: BlockGrass.java:25-33, World.java:512-519, Light.java:251, Material.java:33-35 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:393-401; ClassiCube/src/IndevTest.c:2506-2515
-- **[P]** (critical, client) c0.30 grass handler: missing 1-in-4 gate, missing the 4-attempt spread, plus an invented spontaneous dirt-to-grass random tick
+- **[V] FIXED** (critical, client) c0.30 grass handler: missing 1-in-4 gate, missing the 4-attempt spread, plus an invented spontaneous dirt-to-grass random tick
   - genuine: c0.30 tile/q.a (GrassTile.tick, verified via javap): "0: aload 5; 2: iconst_4; 3: invokevirtual Random.nextInt; 6: ifeq 10; 9: return" (a 1-in-4 gate on the WHOLE tick), then unlit -> setTile dirt, else a loop "39: iload_0; 40: iconst_4; if_icmpge 136" doing FOUR spread attempts
   - ours: Client BlockPhysics.c Physics_HandleGrass (356-363): unlit grass -> dirt on EVERY random tick (no 1/4 gate, ~4x faster die-back) and NO spread attempts at all; instead Physics_HandleDirt (347-354) makes any lit dirt anywhere spontaneously b
   - at: c030 jar com/mojang/minecraft/level/tile/q.class method a(Level,int,int,int,Random); tile/c.class (no tick) vs ClassiCube/src/BlockPhysics.c:347-363, 620-622, 228-257
