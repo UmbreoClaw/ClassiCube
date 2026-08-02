@@ -2274,10 +2274,16 @@ static void IndevFluid_RandomMoving(int index, BlockID block) {
     and the water spring - BlockSource registers Material.water) in the 5x5x5
     cube. The CLASSIC Physics_PlaceSponge did nearly the same, but its DELETE
     half fed the classic infinite-flood waterQ - see IndevSponge_Delete. */
+static cc_bool indev_quietWrites; /* setBlock-class writes: notify nobody */
+
 static void IndevSponge_Place(int index, BlockID block) {
 	int x, y, z, xx, yy, zz;
 	World_Unpack(index, x, y, z);
 
+	/* genuine absorb is setBlock, NOT setBlockWithNotify: removing the water
+	    must not wake the ocean around the sponge (waking it redistributes the
+	    whole surface through donor pulls - user-reported patchy water) */
+	indev_quietWrites = true;
 	for (yy = y - 2; yy <= y + 2; yy++)
 	for (zz = z - 2; zz <= z + 2; zz++)
 	for (xx = x - 2; xx <= x + 2; xx++) {
@@ -2288,6 +2294,7 @@ static void IndevSponge_Place(int index, BlockID block) {
 			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
 		}
 	}
+	indev_quietWrites = false;
 }
 
 /* BlockSponge.onBlockRemoval: notifyBlocksOfNeighborChange over the whole +-2
@@ -3181,6 +3188,7 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 	IVec3 coords;
 	BlockID below;
 	if (!IndevTest_Enabled || !World.Loaded || !World.Blocks) return;
+	if (indev_quietWrites) return; /* setBlock-class write: no reactions */
 
 	/* A fluid flipping between its own still and moving states is genuine
 	    setTileNoUpdate - it notifies NOBODY (BlockStationary wakes with it,
