@@ -917,3 +917,14 @@ Severity/side legend as reported by the finder: side = which port diverges
   side and breaks specifically viewed from the UPPER-LEFT quadrant - the bug
   is camera-facing-dependent, which is the bank-facing hypothesis exactly.
   Fix: redistribute the side quads one per bank per facing (crops pattern).
+
+- **[P]** (medium, sp-mp-split) Creative-mode drops float midair on MP
+  (user screenshot: tossed workbenches hovering). Hypothesis: MP gates the
+  local drop sim to net drops only, but a creative toss never reaches the
+  server (no inventory consume path), so the client spawns a LOCAL drop
+  (netId 0) that nothing ticks - no gravity, no settle, no despawn. Check
+  SurvivalTest drop tick's ServerDriven gating vs the creative toss path;
+  fix is either routing creative tosses through SURV_DROP_ITEM like survival
+  ones (server spawns an ordinary net drop) or ticking local drops' physics
+  in MP. Genuine creative (growTrees mode) has no drops at all - decide
+  whether creative tossing should even spawn an entity, or just delete.
