@@ -735,7 +735,7 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: BlockSponge.java:12-23 'public final void onBlockAdded(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... if(var1.isWater(var5, var6, var7)) { var1.setBlock(var5, var6, var7, 0); } } }' absorbs all water-material blocks in the 5x5x5 cube on placement; onB
   - ours: SurvivalPhysics has no sponge handling at all beyond the canFlow veto (SurvivalPhysics.cs:431-436): placing a sponge next to MP Indev water removes nothing (the water just sits inside the exclusion zone), and mining a sponge only fires Noti
   - at: BlockSponge.java:12-34 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:431-436 (only the canFlow veto; no absorb) vs client /home/user/ClassiCube/src/BlockPhysics.c:503-519 (absorbs)
-- **[P] PROMOTED - top of queue** (medium, both) Both: map-border shell is writable, so the edge ocean drains instead of being infinite and fluid spreads into cells genuine cannot touch
+- **[V] FIXED** (medium, both) Both: map-border shell is writable, so the edge ocean drains instead of being infinite and fluid spreads into cells genuine cannot touch
   - genuine: World.java:297-298 'public final boolean setBlock(int var1, int var2, int var3, int var4) { if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {' — every runtime write to the outer shell silently fails. Consequently
   - ours: Server SurvivalGrowth.SetView (SurvivalGrowth.cs:117) accepts the full 0..dim-1 range, and client Game_UpdateBlock has no shell guard, so FluidSpread2/FlowCheck donor removal (server SurvivalPhysics.cs:592,626; client IndevTest.c:2091,2137)
   - at: World.java:297-298 + BlockFlowing.java:173-178 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:117 + SurvivalPhysics.cs:588-592; client /home/user/ClassiCube/src/IndevTest.c:2087-2091 + BlockPhysics.c:151-167
@@ -770,11 +770,11 @@ Severity/side legend as reported by the finder: side = which port diverges
 
 ### fire (9 findings, 29 verified-exact)
 
-- **[P]** (medium, server) Server: TNT consumed by fire never leaves a fire block behind (genuine does 50% of the time)
+- **[V] FIXED** (medium, server) Server: TNT consumed by fire never leaves a fire block behind (genuine does 50% of the time)
   - genuine: BlockFire.tryToCatchBlockOnFire: "boolean var8 = var1.getBlockId(var2, var3, var4) == Block.tnt.blockID; if (var6.nextInt(2) == 0) { var1.setBlockWithNotify(var2, var3, var4, this.blockID); } else { var1.setBlockWithNotify(var2, var3, var4, 0); } if (var8) { Block.tnt.onBlockDest
   - ours: Server FireTryCatch special-cases TNT before the coin flip: "if (b == Block.TNT) { SetFire(lvl, x, y, z, Block.Air); SurvivalTnt.Ignite(...); return; }" - the cell is always set to air, never fire. The client is correct (IndevFire.c:173-184
   - at: BlockFire.java:114-129 (tryToCatchBlockOnFire) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:302-305 (wrong); client /home/user/ClassiCube/src/IndevFire.c:171-184 (correct)
-- **[P]** (medium, server) Server: fire-support test uses IsSolid instead of isOpaqueCube - fire can rest on glass/slabs
+- **[V] FIXED** (medium, server) Server: fire-support test uses IsSolid instead of isOpaqueCube - fire can rest on glass/slabs
   - genuine: World.isBlockNormalCube: "Block var4 = Block.blocksList[this.getBlockId(var1, var2, var3)]; return var4 == null ? false : var4.isOpaqueCube();" (World.java:399-402). Fire's support/burnout tests use it (BlockFire.java:64 "if (!var1.isBlockNormalCube(var2, var3 - 1, var4) || var6
   - ours: Server NormalCube: "return CollideType.IsSolid(lvl.CollideType(lvl.GetBlock(...)))" (SurvivalPhysics.cs:129-132) - glass and slabs ARE solid-collide, so server-side fire on a glass/slab top with no flammable neighbour survives ~4-5 schedule
   - at: World.java:399-402; BlockFire.java:64,154,158 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:129-132 (wrong); client /home/user/ClassiCube/src/IndevFire.c:136-139 (correct)
