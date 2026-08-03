@@ -1585,13 +1585,13 @@ static void Indev_TickDayNight(void) {
 	float f;
 	int   light;
 
-	/* MP: the SERVER owns the clock (SURV_TIME sets indev_worldTime); only
-	    advance it locally when the sim is ours. The visual application below
-	    always runs, so server-pushed time still drives sun/sky/colours. */
-	if (!SurvivalNet_ServerDriven()) {
-		indev_worldTime++;
-		if (indev_worldTime >= 24000) indev_worldTime = 0;
-	}
+	/* The SERVER owns the MP clock, but its SURV_TIME arrives once a second
+	    with a +20 jump - gating the local advance on that made dusk STEP
+	    visibly instead of fading (user-reported). Free-run the 20 Hz tick in
+	    both modes; each SURV_TIME snap (SetWorldTime) corrects the at-most
+	    +-few-tick drift, far below the eye's threshold on the sky curve. */
+	indev_worldTime++;
+	if (indev_worldTime >= 24000) indev_worldTime = 0;
 	if (!indev_baseColsKnown || !World.Loaded) return;
 
 	/* getSkyColor: base * clamp01(cos*2 + 0.5) */
