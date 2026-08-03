@@ -867,18 +867,26 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: BlockFarmland.java:110-117: "public final void onNeighborBlockChange(...) { Material var6 = var1.getBlockMaterial(var2, var3 + 1, var4); if (var6.isSolid()) { var1.setBlockWithNotify(var2, var3, var4, Block.dirt.blockID); } }" and BlockFlower.java:24-27 onNeighborBlockChange -> c
   - ours: Neither port wires plant/farmland reactions to block-change notifications. Server: SurvivalPhysics.Notify (SurvivalPhysics.cs:140-162) schedules only fire/fluids; the solid-above farmland check was moved INSIDE the 1/5-gated random tick (Su
   - at: BlockFarmland.java:110-117; BlockFlower.java:24-27; World.java:344-351 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:484-492; ClassiCube/src/IndevTest.c:1712-1717,2432-2465
-- **[P]** (low, both) Farmland hydration ignores spring blocks (52/53) - genuine BlockSource has Material.water for BOTH water and lava springs
-  - genuine: BlockFarmland.java:53 scans "if (var12.getBlockMaterial(var9, var10, var11) == Material.water)"; BlockSource.java:10-11: "protected BlockSource(int var1, int var2) { super(var1, Block.blocksList[var2].blockIndexInTexture, Material.water); }" - both the water spring (52) and even
-  - ours: Server WaterNear (SurvivalGrowth.cs:511-512) matches only 'b == Block.Water || b == Block.StillWater'; client Indev_WaterNear (IndevTest.c:1696-1697) only BLOCK_WATER/BLOCK_STILL_WATER. A farm whose only in-range water is the spring block i
-  - at: BlockFarmland.java:40-66; BlockSource.java:10-14 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:505-515; ClassiCube/src/IndevTest.c:1688-1702
-- **[P]** (low, sp-mp-split) Server tree canopy refuses to overwrite water/farmland; genuine (and client) replace any non-opaque-cube cell
-  - genuine: World.java:1055-1057: "if ((Math.abs(var12) != var9 || Math.abs(var11) != var9 || this.random.nextInt(2) != 0 && var8 != 0) && !Block.opaqueCubeLookup[this.getBlockId(var10, var13, var6)]) { this.setBlockWithNotify(var10, var13, var6, Block.leaves.blockID); }" - opaqueCubeLookup
-  - ours: Server GrowTree (SurvivalGrowth.cs:583, 597-601) gates on IsFullOpaque, which is BlocksSky-based and thus counts water and farmland as opaque - those cells are skipped. Client Indev_GrowTree (IndevTest.c:2394) uses Blocks.FullOpaque, false
-  - at: World.java:1050-1061; BlockFarmland.java:22-24 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:583,597-601; ClassiCube/src/IndevTest.c:2394
-- **[P]** (low, both) Server growth drops spawn at cell center instead of the genuine 0.15-0.85 scatter
-  - genuine: Block.java:282-284 (dropBlockAsItemWithChance): "float var10 = var1.random.nextFloat() * 0.7F + 0.15F;" on all three axes - popped plants, decayed-leaf saplings and popped mature crops spawn scattered inside the cell.
-  - ours: Server spawns at exact centers: SurvivalGrowth.cs:425-426 and 473-475 use 'x + 0.5, y + 0.5, z + 0.5'. Client is faithful (IndevTest.c:2316-2318, 2545-2547) except PopCrop's wheat uses y + 0.5f (IndevTest.c:1759). (The server's clear-before
-  - at: Block.java:275-292 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:423-426,472-477; ClassiCube/src/IndevTest.c:1755-1762
+- **[V]** (low, both) Farmland hydration ignores spring blocks (52/53): FIXED -
+  server WaterNear and client Indev_WaterNear now match the spring blocks too:
+  BlockFarmland scans getBlockMaterial == Material.water, and BlockSource's ctor
+  registers Material.water for BOTH springs - including, as a genuine quirk, the
+  LAVA spring - so either hydrates a farm.
+- **[V]** (low, sp-mp-split) Server tree canopy refuses to overwrite water/farmland: FIXED -
+  GrowTree's canopy/trunk overwrites now use the genuine opaqueCubeLookup test
+  (SurvivalGrowth.OpaqueCube, replacing the BlocksSky-based IsFullOpaque), and
+  OpaqueCube itself now excludes farmland (BlockFarmland.isOpaqueCube false).
+  Side effects are all fidelity gains: fire support and mushroom soil now also
+  treat farmland as non-opaque (genuine isBlockNormalCube == isOpaqueCube).
+  Client was already correct.
+- **[V]** (low, both) Server growth drops spawn at cell center instead of the genuine 0.15-0.85 scatter: FIXED -
+  new SurvivalDrops.SpawnBlockDrops places every item at cell corner +
+  rand*0.7 + 0.15 on all three axes (Indev dropBlockAsItemWithChance; c0.30 Tile
+  dropItems verified identical f=0.7 formula in the disassembly); mined blocks,
+  popped plants/crops/mushrooms, decayed-leaf saplings and explosion debris all
+  route through it. SpawnScatter remains for entity-anchored drops (mob deaths,
+  shears), which genuine spawns at the entity. Client's one unfaithful site
+  (PopCrop wheat y pinned to +0.5) now scatters on Y too.
 - **[P]** (low, client) Client sapling stage side-store never cleared on pop/break: replanted sapling inherits the old stage
   - genuine: World.java:297-309 setBlock: "this.blocks[...] = (byte) var4; this.setBlockMetadata(var1, var2, var3, 0);" - every block change zeroes metadata, so a freshly placed sapling always starts at stage 0.
   - ours: The client's per-cell stage store (indev_saplingStage, IndevTest.c:2288-2304) is only written by metadata import and Indev_TickSapling; Indev_PopPlant (2314-2321) and player breaks never reset it. Replanting a sapling in a cell whose previo
