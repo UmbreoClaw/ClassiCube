@@ -918,7 +918,7 @@ Severity/side legend as reported by the finder: side = which port diverges
   is camera-facing-dependent, which is the bank-facing hypothesis exactly.
   Fix: redistribute the side quads one per bank per facing (crops pattern).
 
-- **[P]** (medium, sp-mp-split) Creative-mode drops float midair on MP
+- **[V] FIXED** (medium, sp-mp-split) Creative-mode drops float midair on MP
   (user screenshot: tossed workbenches hovering). Hypothesis: MP gates the
   local drop sim to net drops only, but a creative toss never reaches the
   server (no inventory consume path), so the client spawns a LOCAL drop
