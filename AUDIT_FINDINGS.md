@@ -778,10 +778,13 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: World.isBlockNormalCube: "Block var4 = Block.blocksList[this.getBlockId(var1, var2, var3)]; return var4 == null ? false : var4.isOpaqueCube();" (World.java:399-402). Fire's support/burnout tests use it (BlockFire.java:64 "if (!var1.isBlockNormalCube(var2, var3 - 1, var4) || var6
   - ours: Server NormalCube: "return CollideType.IsSolid(lvl.CollideType(lvl.GetBlock(...)))" (SurvivalPhysics.cs:129-132) - glass and slabs ARE solid-collide, so server-side fire on a glass/slab top with no flammable neighbour survives ~4-5 schedule
   - at: World.java:399-402; BlockFire.java:64,154,158 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:129-132 (wrong); client /home/user/ClassiCube/src/IndevFire.c:136-139 (correct)
-- **[P]** (low, server) Server: onBlockAdded/onNeighborBlockChange fire validation is deferred ~1s instead of inline
-  - genuine: BlockFire.onNeighborBlockChange: "if (!var1.isBlockNormalCube(var2, var3 - 1, var4) && !this.canNeighborCatchFire(var1, var2, var3, var4)) { var1.setBlockWithNotify(var2, var3, var4, 0); }" (BlockFire.java:157-161), and onBlockAdded identically at 163-169 - both run synchronously
-  - ours: Server Notify only ENQUEUES a scheduled fire update (SurvivalPhysics.cs:140-162 NotifyNeighbour -> ScheduleFire with Time=20, :235-238), so server-authoritatively the fire persists ~21 ticks (~1.05s) before FireUpdate's support check remove
-  - at: BlockFire.java:157-169; World.java:310-316,335-342 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:140-162,235-238; client /home/user/ClassiCube/src/IndevFire.c:286-316 (correct)
+- **[V]** (low, server) Server: onBlockAdded/onNeighborBlockChange fire validation is deferred ~1s instead of inline: FIXED -
+  both sites in SurvivalPhysics now run the genuine synchronous check: Notify's
+  fire-placed branch removes an unsupported fire at once (else schedules its first
+  update, onBlockAdded's scheduleBlockUpdate), and NotifyNeighbour's fire branch
+  removes-or-leaves without enqueueing anything (genuine onNeighborBlockChange
+  schedules nothing - the old extra 20-tick entry also fed fires updateTicks
+  genuine never runs). Client was already correct (IndevFire.c).
 - **[P]** (low, both) Both: fire can spread into / burn blocks in the outermost boundary shell (genuine setBlock is interior-only)
   - genuine: World.setBlock: "if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {...} else return false" (World.java:297-298) - every fire write (spread, burn-to-air, tryToCatchBlockOnFire) silently fails on cells with any coord
   - ours: Both ports allow the full 0..dim-1 range: client Fire_Set gates on World_Contains only (IndevFire.c:157-161) and Fire_SpreadCheck returns false for out-of-range (IndevFire.c:387-394); server SetFire/In likewise (SurvivalPhysics.cs:117-122,
@@ -803,10 +806,12 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: EntityTNTPrimed ctor: "float var5 = (float)(Math.random() * Math.PI * 2.0D); this.motionX = -MathHelper.sin(var5 * (float)Math.PI / 180.0F) * 0.02F; ... this.motionZ = -MathHelper.cos(var5 * (float)Math.PI / 180.0F) * 0.02F;" (EntityTNTPrimed.java:17-20) - the radians value is co
   - ours: Server Ignite: "VX = -Math.Sin(ang) * 0.02, VY = 0.2, VZ = -Math.Cos(ang) * 0.02" (SurvivalTnt.cs:128-134) - a uniformly random horizontal direction at full 0.02 magnitude; its comment says the magnitude is what matters, but genuine's direc
   - at: EntityTNTPrimed.java:17-20 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalTnt.cs:124-134 (wrong); client /home/user/ClassiCube/src/SurvivalTest.c:2022-2029 (correct)
-- **[P]** (low, server) Server: fire age (metadata nibble) is not persisted across map unload/save
-  - genuine: Fire age lives in the world's data nibble: "byte var6 = var1.getBlockMetadata(var2, var3, var4); if (var6 < 15) { var1.setBlockMetadata(var2, var3, var4, var6 + 1); ... }" (BlockFire.java:57-61), and the data array is part of the saved level, so a mid-burn fire resumes at its sav
-  - ours: Server FireAge is a plain in-memory byte[] referenced only inside SurvivalPhysics.cs (lines 62, 222-233); no sidecar/persistence code touches it, so unloading/reloading a level resets every burning fire to age 0 - it restarts its full 16-st
-  - at: BlockFire.java:57-61; World.java:810-858 (data nibble store) vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:62,222-233 (memory only); client /home/user/ClassiCube/src/IndevTest.c:727,732 (persisted)
+- **[V]** (low, server) Server: fire age (metadata nibble) is not persisted across map unload/save: FIXED -
+  the survival sidecar now writes one "fire x y z age" line per mid-burn fire cell
+  (SurvivalPhysics.SaveFireAges) and restores it on load (RestoreFireAge via
+  SurvivalPersistence), matching genuine's data-nibble-in-saved-level behavior;
+  EnsureLoaded already re-schedules pre-existing fire on the first tick, so only
+  the age was memory-only. Client persisted it all along (IndevTest.c nibbles).
 - **[P]** (low, both) Both: scheduled-update queue is bounded at 8192 entries (genuine list is unbounded)
   - genuine: World.scheduleBlockUpdate: "NextTickListEntry var5 = new NextTickListEntry(...); ... this.tickList.add(var5);" (World.java:719-727) - an unconditional add to an unbounded List; only PROCESSING is capped at 200/tick (World.java:553-556).
   - ours: Both ports drop new schedules when 8192 entries are queued: client Fire_Schedule "if (fire_qCount >= FIRE_QUEUE_LEN) return;" (IndevFire.c:98-100) and the requeue guard at IndevFire.c:260; server ScheduleFire "if (lp.FireQueue.Count >= FIRE
