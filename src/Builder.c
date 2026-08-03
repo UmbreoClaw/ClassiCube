@@ -626,28 +626,40 @@ static void Builder_DrawWallTorch(int x, int y, int z) {
 	#define TORCH_QUAD(atx, atz, btx, btz) 		v->x = (atx) + a; v->y = y0; v->z = (atz) + b; v->Col = color; v->U = u1; v->V = v2; v++; 		v->x = (atx);     v->y = yT; v->z = (atz);     v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = (btx);     v->y = yT; v->z = (btz);     v->Col = color; v->U = u2; v->V = v1; v++; 		v->x = (btx) + a; v->y = y0; v->z = (btz) + b; v->Col = color; v->U = u2; v->V = v2; v++;
 	#define TORCH_DEGEN() 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++;
 
-	/* bank 0: the two X-plane sides (facing -X, then +X) */
+	#define TORCH_CAP() \
+		v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv1; v++; \
+		v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv2; v++; \
+		v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv2; v++; \
+		v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv1; v++;
+
+	/* MapRenderer camera-culls sprite BANKS (bank 0 drawn on drawXMax||drawZMin,
+	    1 on XMin||ZMax, 2 on XMin||ZMin, 3 on XMax||ZMax) with face culling ON -
+	    so each bank must hold the side quad whose FRONT faces that bank's camera
+	    range. Packing both X-planes into one bank lost the whole stick from the
+	    opposite quadrant (user-reported: broken from the upper-left only). The
+	    upward cap is visible from every quadrant, so it rides in banks 0 AND 1,
+	    whose conditions together cover all four (double-drawn overlap is the
+	    identical quad - harmless). */
+	/* bank 0 (drawXMax||drawZMin): the +X-facing side + cap */
 	v = &Builder_Vertices[part->sOffset];
-	TORCH_QUAD(cx - 1.0f/16.0f, cz + 0.5f, cx - 1.0f/16.0f, cz - 0.5f)
 	TORCH_QUAD(cx + 1.0f/16.0f, cz - 0.5f, cx + 1.0f/16.0f, cz + 0.5f)
+	TORCH_CAP()
 	v -= 8; v += stride;
-	/* bank 1: the two Z-plane sides (facing -Z, then +Z) */
+	/* bank 1 (drawXMin||drawZMax): the -X-facing side + cap */
+	TORCH_QUAD(cx - 1.0f/16.0f, cz + 0.5f, cx - 1.0f/16.0f, cz - 0.5f)
+	TORCH_CAP()
+	v -= 8; v += stride;
+	/* bank 2 (drawXMin||drawZMin): the -Z-facing side */
 	TORCH_QUAD(cx - 0.5f, cz - 1.0f/16.0f, cx + 0.5f, cz - 1.0f/16.0f)
+	TORCH_DEGEN()
+	v -= 8; v += stride;
+	/* bank 3 (drawXMax||drawZMax): the +Z-facing side */
 	TORCH_QUAD(cx + 0.5f, cz + 1.0f/16.0f, cx - 0.5f, cz + 1.0f/16.0f)
-	v -= 8; v += stride;
-	/* bank 2: the tip cap (upward), padded with a degenerate quad */
-	v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv1; v++;
-	v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv2; v++;
-	v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv2; v++;
-	v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv1; v++;
-	TORCH_DEGEN()
-	v -= 8; v += stride;
-	/* bank 3: padding only */
-	TORCH_DEGEN()
 	TORCH_DEGEN()
 	part->sOffset += 8;
 	#undef TORCH_QUAD
 	#undef TORCH_DEGEN
+	#undef TORCH_CAP
 }
 
 /* The genuine RenderBlocks fire tessellation (renderType 3): grounded fire

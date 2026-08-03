@@ -895,7 +895,7 @@ Severity/side legend as reported by the finder: side = which port diverges
   - at: World.java:1638-1649; BlockFlower.java:41-45 vs mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:434,536-538; ClassiCube/src/IndevTest.c:1778-1784,2330-2333
 
 ### user-reported (2026-08-02, MP island map)
-- **[P]** (medium, client) Wall-mounted torch renders wrong on MP: mostly a thin
+- **[V] FIXED** (medium, client) Wall-mounted torch renders wrong on MP: mostly a thin
   1px diagonal streak with the bright tip cap floating detached near the wall
   top (screenshot: torch auto-mounted on a dirt ledge face, zoom fov 15).
   Builder_DrawWallTorch and the wall-torch defs were NOT touched in the recent
