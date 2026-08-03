@@ -904,3 +904,12 @@ Severity/side legend as reported by the finder: side = which port diverges
   full-tile side-quad span vs genuine renderBlockTorch's 2px-wide quads, and
   whether the MP path renders the SERVER's CPE sprite def instead of the local
   tilted builder (ordering of local redefine vs server BlockDefinitions).
+  INVESTIGATED (2026-08-02): geometry verified faithful against genuine
+  renderBlockTorch line by line (offsets, tilt, cap position, UVs all match)
+  and the sprite vertex count is correctly 8 quads. PRIME SUSPECT: bank
+  facing - the engine draws sprite banks selectively by camera quadrant
+  (crops put one double-sided pair per bank for this reason), but the torch
+  packs both X-plane quads in bank 0 and both Z-plane quads in bank 1, so
+  from some camera angles the visible pair is skipped/backfaced, leaving an
+  edge-on 1px line + the cap. Fix candidate: rearrange to one side quad per
+  bank matching each bank's expected facing. Needs a live client to confirm.
