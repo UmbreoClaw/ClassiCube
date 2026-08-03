@@ -1694,7 +1694,11 @@ static cc_bool Indev_WaterNear(int x, int y, int z) {
 			for (wz = z - 4; wz <= z + 4; wz++) {
 				if (!World_Contains(wx, wy, wz)) continue;
 				b = World_GetBlock(wx, wy, wz);
-				if (b == BLOCK_WATER || b == BLOCK_STILL_WATER) return true;
+				/* getBlockMaterial == Material.water: the spring blocks count
+				    too - BlockSource's ctor registers Material.water for BOTH
+				    the water spring and (genuine quirk) the lava spring */
+				if (b == BLOCK_WATER || b == BLOCK_STILL_WATER ||
+					b == INDEV_BLOCK_WATER_SOURCE || b == INDEV_BLOCK_LAVA_SOURCE) return true;
 			}
 		}
 	}
@@ -1756,7 +1760,7 @@ static void Indev_PopCrop(int x, int y, int z, BlockID crop) {
 	Vec3 dp;
 	if (crop == INDEV_BLOCK_CROPS_7) {
 		dp.x = x + Random_Float(&indev_teRng) * 0.7f + 0.15f;
-		dp.y = y + 0.5f;
+		dp.y = y + Random_Float(&indev_teRng) * 0.7f + 0.15f;
 		dp.z = z + Random_Float(&indev_teRng) * 0.7f + 0.15f;
 		SurvivalTest_SpawnDropWorld(dp, 256 + 40, 1); /* Item.wheat */
 	}
