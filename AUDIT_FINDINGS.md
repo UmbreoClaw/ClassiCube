@@ -735,7 +735,7 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: BlockSponge.java:12-23 'public final void onBlockAdded(World var1, ...) { for(int var5 = var2 - 2; var5 <= var2 + 2; ++var5) { ... if(var1.isWater(var5, var6, var7)) { var1.setBlock(var5, var6, var7, 0); } } }' absorbs all water-material blocks in the 5x5x5 cube on placement; onB
   - ours: SurvivalPhysics has no sponge handling at all beyond the canFlow veto (SurvivalPhysics.cs:431-436): placing a sponge next to MP Indev water removes nothing (the water just sits inside the exclusion zone), and mining a sponge only fires Noti
   - at: BlockSponge.java:12-34 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:431-436 (only the canFlow veto; no absorb) vs client /home/user/ClassiCube/src/BlockPhysics.c:503-519 (absorbs)
-- **[P]** (medium, both) Both: map-border shell is writable, so the edge ocean drains instead of being infinite and fluid spreads into cells genuine cannot touch
+- **[P] PROMOTED - top of queue** (medium, both) Both: map-border shell is writable, so the edge ocean drains instead of being infinite and fluid spreads into cells genuine cannot touch
   - genuine: World.java:297-298 'public final boolean setBlock(int var1, int var2, int var3, int var4) { if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {' — every runtime write to the outer shell silently fails. Consequently
   - ours: Server SurvivalGrowth.SetView (SurvivalGrowth.cs:117) accepts the full 0..dim-1 range, and client Game_UpdateBlock has no shell guard, so FluidSpread2/FlowCheck donor removal (server SurvivalPhysics.cs:592,626; client IndevTest.c:2091,2137)
   - at: World.java:297-298 + BlockFlowing.java:173-178 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalGrowth.cs:117 + SurvivalPhysics.cs:588-592; client /home/user/ClassiCube/src/IndevTest.c:2087-2091 + BlockPhysics.c:151-167
@@ -913,3 +913,7 @@ Severity/side legend as reported by the finder: side = which port diverges
   from some camera angles the visible pair is skipped/backfaced, leaving an
   edge-on 1px line + the cap. Fix candidate: rearrange to one side quad per
   bank matching each bank's expected facing. Needs a live client to confirm.
+  CONFIRMED BY OBSERVATION (2026-08-03): the torch renders correctly from one
+  side and breaks specifically viewed from the UPPER-LEFT quadrant - the bug
+  is camera-facing-dependent, which is the bank-facing hypothesis exactly.
+  Fix: redistribute the side quads one per bank per facing (crops pattern).
