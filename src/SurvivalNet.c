@@ -530,12 +530,17 @@ void SurvivalNet_SendHeldSlot(int slot) {
 	SurvivalNet_Send(payload);
 }
 
-void SurvivalNet_SendDropItem(int slot, cc_bool whole) {
+void SurvivalNet_SendDropItem(int slot, cc_bool whole, int heldId) {
 	cc_uint8 payload[64] = { 0 };
 	if (!SurvivalNet_ServerDriven()) return;
 	payload[0] = SURV_DROP_ITEM;
 	payload[1] = (cc_uint8)slot;
 	payload[2] = whole ? 1 : 0;
+	/* declaredId: only trusted by the server on CREATIVE maps, where no
+	    server inventory exists to read the slot from (the USE_ITEM/painting
+	    pattern) - survival servers take from their own inventory instead */
+	payload[3] = (cc_uint8)(heldId >> 8);
+	payload[4] = (cc_uint8)heldId;
 	SurvivalNet_Send(payload);
 }
 

@@ -515,8 +515,13 @@ server tracks it for place-consume, melee damage, USE_ITEM dispatch and
 `SURV_PLAYER_EQUIP` broadcasts.
 
 ### 0x86 `SURV_DROP_ITEM`
-`[1] slot u8, [2] wholeStack (0 one / 1 all)`. The Q-toss: server takes from
-ITS inventory slot, spawns a drop entity flung forward, echoes the slot.
+`[1] slot u8, [2] wholeStack (0 one / 1 all), [3] declaredId u16 BE`. The
+Q-toss: server takes from ITS inventory slot, spawns a drop entity flung
+forward, echoes the slot. declaredId is trusted only on CREATIVE maps, where
+no server inventory exists (the local palette is the inventory) - the server
+validates the id and spawns one normal net drop, consuming nothing. Old
+clients send zeros there, which is refused; the fixed 64-byte frame keeps
+both directions compatible.
 
 ### 0x87 `SURV_RESPAWN`
 No fields. Only meaningful while dead: the server repositions the player to

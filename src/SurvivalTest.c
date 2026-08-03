@@ -7714,10 +7714,13 @@ void SurvivalTest_TryDropHeld(void) {
 	int i;
 	if (!SurvivalTest_Enabled || !IndevTest_Enabled || !p) return;
 	/* MP: dropping is an intent - the server owns the inventory and the drop
-	    entity (phases 4/5); it spawns the drop and streams it back. MP
-	    creative keeps the local palette inventory, so drops stay local too. */
-	if (SurvivalTest_ServerOwnsInventory()) {
-		SurvivalNet_SendDropItem(slot, false);
+	    entity (phases 4/5); it spawns the drop and streams it back. That now
+	    includes MP CREATIVE: the palette is local, so the held id rides the
+	    intent (declaredId) and the server spawns a normal net drop. The old
+	    local-only creative drop froze midair - MP only ticks net drops
+	    (user-reported floating workbenches). */
+	if (SurvivalNet_ServerDriven()) {
+		SurvivalNet_SendDropItem(slot, false, st_inv[slot].id);
 		return;
 	}
 	if (st_inv[slot].count <= 0) return;
