@@ -333,14 +333,14 @@ cc_bool IndevFire_UseFlintSteel(IVec3 clickedPos, Face face) {
 	case FACE_XMAX: x++; break;
 	}
 
-	/* Fire lands only in an interior air cell (genuine checks >0 and <dim-1 on
-	    every axis); a boundary or occupied target places nothing. Either way the
-	    item wears by 1 and the click is consumed - ItemFlintAndSteel.onItemUse
-	    damages the item unconditionally, which is also what the server's MP path
-	    does, so SP and MP stay in lockstep on a world-edge click. */
-	if (x > 0 && y > 0 && z > 0 &&
-		x < World.Width - 1 && y < World.Height - 1 && z < World.Length - 1 &&
-		World_GetBlock(x, y, z) == BLOCK_AIR) {
+	/* Genuine gates the WHOLE use on the target being interior (>0 and <dim-1
+	    on every axis): a boundary click returns false with NO wear - damageItem
+	    sits inside that branch. (An occupied interior target still wears; only
+	    the fire itself needs the cell to be air.) */
+	if (!(x > 0 && y > 0 && z > 0 &&
+		  x < World.Width - 1 && y < World.Height - 1 && z < World.Length - 1)) return false;
+
+	if (World_GetBlock(x, y, z) == BLOCK_AIR) {
 		/* "fire.ignite", 1.0F, rand * 0.4F + 0.8F */
 		SurvivalTest_PlaySoundAtBlock(x, y, z, MOBSND_IGNITE, 1.0f,
 			Random_Float(&fire_rng) * 0.4f + 0.8f);

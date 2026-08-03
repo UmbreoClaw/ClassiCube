@@ -7864,6 +7864,27 @@ cc_bool SurvivalTest_TryUseBlock(void) {
 		                 || heldId == 256 + 3    /* Flint & steel -> server places fire */
 		                 || heldId == 256 + 65;  /* Painting -> server validates + hangs it */
 		if (!container && !itemUse) return false;
+		/* fire.ignite is played by genuine at USE time, and no wire message
+		    carries sounds - run the same predicate the server will (step out
+		    of the face; interior air cell) and play it locally. Wrong only if
+		    the server rejects the whole use, which the predicate mirrors. */
+		if (heldId == 256 + 3) {
+			int fx = pos.x, fy = pos.y, fz = pos.z;
+			switch (Game_SelectedPos.closest) {
+			case FACE_YMIN: fy--; break;
+			case FACE_YMAX: fy++; break;
+			case FACE_ZMIN: fz--; break;
+			case FACE_ZMAX: fz++; break;
+			case FACE_XMIN: fx--; break;
+			case FACE_XMAX: fx++; break;
+			}
+			if (fx > 0 && fy > 0 && fz > 0 &&
+				fx < World.Width - 1 && fy < World.Height - 1 && fz < World.Length - 1 &&
+				World_GetBlock(fx, fy, fz) == BLOCK_AIR) {
+				SurvivalTest_PlaySoundAtBlock(fx, fy, fz, MOBSND_IGNITE, 1.0f,
+					Random_Float(&st_dropRng) * 0.4f + 0.8f);
+			}
+		}
 		SurvivalNet_SendUseItem(Inventory.SelectedIndex, heldId, pos.x, pos.y, pos.z,
 		                        (int)Game_SelectedPos.closest);
 		return true;
