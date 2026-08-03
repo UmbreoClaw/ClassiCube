@@ -325,6 +325,11 @@ static void Physics_TickRandomBlocksC030(void) {
 		    flowers are immortal (only creative pops dark/bad-soil flowers).
 		    Mushrooms (tile t) override tick WITHOUT the gate and keep popping. */
 		if (block == BLOCK_DANDELION || block == BLOCK_ROSE) continue;
+		/* tile l (sand/gravel) never registers shouldTick and has no tick
+		    override - genuine c0.30 sand falls ONLY from the neighbour-change
+		    hooks, so an undisturbed floating pillar floats forever. (The
+		    shared OnRandomTick entry stays for the engine's classic loop.) */
+		if (block == BLOCK_SAND || block == BLOCK_GRAVEL) continue;
 		tick  = Physics.OnRandomTick[block];
 		if (tick) tick(index, block);
 	}
@@ -468,7 +473,9 @@ static void Physics_HandleMushroom(int index, BlockID block) {
 
 	below = BLOCK_STONE;
 	if (y > 0) below = World.Blocks[index - World.OneY];
-	if (!(below == BLOCK_STONE || below == BLOCK_COBBLE)) {
+	/* genuine soil set is rock, gravel or cobblestone (tile t.a checks
+	    a.e / a.q / a.h = ids 1, 13, 4) */
+	if (!(below == BLOCK_STONE || below == BLOCK_COBBLE || below == BLOCK_GRAVEL)) {
 		Game_UpdateBlock(x, y, z, BLOCK_AIR);
 		Physics_ActivateNeighbours(x, y, z, index);
 	}

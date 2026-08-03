@@ -712,10 +712,11 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: BlockFire.java:114-127 tryToCatchBlockOnFire: `boolean var8 = var1.getBlockId(...) == Block.tnt.blockID; if (var6.nextInt(2) == 0) { var1.setBlockWithNotify(var2, var3, var4, this.blockID); } else { var1.setBlockWithNotify(var2, var3, var4, 0); } if (var8) { Block.tnt.onBlockDest
   - ours: The client is faithful (Fire_TryCatch keeps the 50% fire-vs-air roll, then arms the TNT). The server special-cases TNT before the roll: `if (b == Block.TNT) { SetFire(lvl, x, y, z, Block.Air); SurvivalTnt.Ignite(lvl, x, y, z, DefaultFuse(lv
   - at: /tmp/claude-0/-home-user/ebc9ea10-f533-5652-9e7f-ec7fb09f7000/scratchpad/indev/src/game/java/net/minecraft/game/level/block/BlockFire.java:114-127 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:302-306; client (correct) /home/user/ClassiCube/src/IndevFire.c:166-185
-- **[P]** (low, client) Client c0.30 explosions play the Indev explosion sound; genuine c0.30 blasts are silent
-  - genuine: c0.30 Level.explode's full bytecode contains no playSound invocation (Level has playSound methods, but neither explode, PrimedTnt.tick's detonation branch, nor Creeper$1.beforeRemove calls one) - Survival Test explosions produce particles only, no sound.
-  - ours: SurvivalTest_Explode (the c0.30 path) plays MOBSND_EXPLODE at volume 4 with the INDEV pitch formula before the block loop - an extra rule imported from Indev's World.createExplosion into c0.30 mode.
-  - at: c030 Level.class explode (offsets 0-384, no audio call); PrimedTnt.class tick offsets 146-337; Creeper$1.class beforeRemove offsets 0-203 vs client /home/user/ClassiCube/src/SurvivalTest.c:3712-3715
+- **[V]** (low, client) Client c0.30 explosions play the Indev explosion sound: ALREADY RESOLVED -
+  Indev_PlaySoundAt returns immediately unless IndevTest_Enabled (SurvivalTest.c,
+  gate added with the mob-sound system), so the MOBSND_EXPLODE call on the c0.30
+  Level.explode path - reached only when !IndevTest_Enabled - is a no-op there
+  and c0.30 blasts are genuinely silent. Finding was stale.
 - **[P]** (low, both) Primed-TNT pool caps disagree between sides and change overflow outcomes
   - genuine: Neither Indev nor c0.30 caps the number of primed TNT entities: BlockTNT.onBlockDestroyedByExplosion (Indev) / tile j.f (c0.30) unconditionally `spawnEntityInWorld`/`addEntity` a new PrimedTnt for every TNT block consumed by a blast.
   - ours: The client pool is 64: overflow converts the TNT into a pickup item instead of priming it (documented fallback). The server cap is 128: overflow silently returns from Ignite AFTER the block was already cleared, so the TNT vanishes without e
@@ -891,14 +892,14 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: World.java:297-309 setBlock: "this.blocks[...] = (byte) var4; this.setBlockMetadata(var1, var2, var3, 0);" - every block change zeroes metadata, so a freshly placed sapling always starts at stage 0.
   - ours: The client's per-cell stage store (indev_saplingStage, IndevTest.c:2288-2304) is only written by metadata import and Indev_TickSapling; Indev_PopPlant (2314-2321) and player breaks never reset it. Replanting a sapling in a cell whose previo
   - at: World.java:297-309 vs ClassiCube/src/IndevTest.c:2288-2304,2314-2321
-- **[P]** (low, client) c0.30 mushroom soil set missing gravel
-  - genuine: c0.30 tile/t.a (Mushroom.tick via javap): stays only when NOT lit and below is a.e, a.q or a.h - static init shows field e = tile id 1 (rock), field h = tile id 4 (stoneBrick/cobblestone), field q = tile id 13 (GRAVEL): mushrooms survive on stone, cobblestone or gravel.
-  - ours: Client Physics_HandleMushroom (BlockPhysics.c:395-397): 'if (!(below == BLOCK_STONE || below == BLOCK_COBBLE))' pops it - a c0.30 mushroom sitting on gravel pops in ours, stays in genuine. (The lit->pop half matches.)
-  - at: c030 jar com/mojang/minecraft/level/tile/t.class method a(...); tile/a.class static init offsets 59-88, 134-163, 370-392 vs ClassiCube/src/BlockPhysics.c:384-401
-- **[P]** (low, client) c0.30 sand/gravel random-tick falling is an extra rule (genuine c0.30 never random-ticks them)
-  - genuine: c0.30 tile/l (sand/gravel) constructor: "0: aload_0; 1: iload_1; 2: iload_2; 3: invokespecial a.<init>(II); 6: return" - it never calls the shouldTick setter a(Z) and has no tick override; sand/gravel fall only from the neighbor-change hooks b(...). Level.tick's random loop gates
-  - ours: BlockPhysics.c:617-618 registers 'Physics.OnRandomTick[BLOCK_SAND] = Physics_DoFalling' (and GRAVEL), and Physics_TickRandomBlocksC030 dispatches purely on that table - so floating sand left without any neighbor update eventually falls in o
-  - at: c030 jar com/mojang/minecraft/level/tile/l.class; Level.class tick() offsets 375-401 vs ClassiCube/src/BlockPhysics.c:613-618,244-256
+- **[V]** (low, client) c0.30 mushroom soil set missing gravel: FIXED -
+  Physics_HandleMushroom now accepts BLOCK_GRAVEL alongside stone/cobblestone
+  (genuine tile t.a soil set a.e/a.q/a.h = rock 1, gravel 13, cobblestone 4).
+- **[V]** (low, client) c0.30 sand/gravel random-tick falling is an extra rule: FIXED -
+  Physics_TickRandomBlocksC030 now skips sand/gravel before the OnRandomTick
+  dispatch (genuine tile l never registers shouldTick and has no tick override -
+  falls only from neighbour-change hooks). The shared OnRandomTick registration
+  stays for the engine's own classic-creative physics loop.
 - **[P]** (low, sp-mp-split) Random-tick coordinate masks disagree between client and server on non-power-of-two maps
   - genuine: World.java:583-588: "this.randId = this.randId * 3 + 1013904223; int var13 = this.randId >> 2; int var14 = var13 & var4;" with var4 = width-1 etc. (World.java:550-552) - genuine masks with dim-1, which is only uniform because genuine Indev/c0.30 dimensions are always powers of tw
   - ours: Client copies genuine literally (IndevTest.c:2567 'maskX = World.Width - 1' - on an odd-sized import the AND knocks holes in the pattern so many cells are NEVER picked, acknowledged in its comment); server instead uses next-power-of-two mas
