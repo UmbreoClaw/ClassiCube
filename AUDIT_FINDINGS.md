@@ -786,14 +786,19 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: World.setBlock: "if (var1 > 0 && var2 > 0 && var3 > 0 && var1 < this.width - 1 && var2 < this.height - 1 && var3 < this.length - 1) {...} else return false" (World.java:297-298) - every fire write (spread, burn-to-air, tryToCatchBlockOnFire) silently fails on cells with any coord
   - ours: Both ports allow the full 0..dim-1 range: client Fire_Set gates on World_Contains only (IndevFire.c:157-161) and Fire_SpreadCheck returns false for out-of-range (IndevFire.c:387-394); server SetFire/In likewise (SurvivalPhysics.cs:117-122,
   - at: World.java:297-298; BlockFire.java:271-281 vs client /home/user/ClassiCube/src/IndevFire.c:157-161,387-394; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:117-122,355-362
-- **[P]** (low, both) Both: flint & steel loses durability on world-boundary clicks (genuine does not)
-  - genuine: ItemFlintAndSteel.onItemUse: "if(var3 > 0 && var4 > 0 && var5 > 0 && var3 < var2.width - 1 && ...) { ... var1.damageItem(1); return true; } else { return false; }" (ItemFlintAndSteel.java:38-49) - damageItem(1) is INSIDE the interior-bounds branch; a click whose face-adjusted tar
-  - ours: Client: "SurvivalTest_DamageHeldItem(1); return true;" runs unconditionally after the bounds check (IndevFire.c:349-350); the comment at IndevFire.c:338-340 claims genuine "damages the item unconditionally", which is incorrect. Server match
-  - at: ItemFlintAndSteel.java:38-49 vs client /home/user/ClassiCube/src/IndevFire.c:336-350; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalInventory.cs:597-618
-- **[P]** (low, sp-mp-split) MP only: no "fire.ignite" sound when flint & steel places fire
-  - genuine: ItemFlintAndSteel.onItemUse: "var2.playSoundAtPlayer((float)var3 + 0.5F, ..., \"fire.ignite\", 1.0F, rand.nextFloat() * 0.4F + 0.8F);" (ItemFlintAndSteel.java:41) before setting the fire block.
-  - ours: SP client plays it (IndevFire.c:344-346). In MP the right-click leaves as SURV_USE_ITEM (SurvivalTest.c:7781-7790) and the server's UseFlintSteel places the fire with no sound packet (SurvivalInventory.cs:597-619), so nobody hears the ignit
-  - at: ItemFlintAndSteel.java:41 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalInventory.cs:597-619; client MP path /home/user/ClassiCube/src/SurvivalTest.c:7781-7790
+- **[V]** (low, both) Both: flint & steel loses durability on world-boundary clicks: FIXED -
+  both ports now mirror genuine ItemFlintAndSteel.onItemUse structure: the interior
+  bounds check (>0 and <dim-1 every axis) wraps the WHOLE use, boundary target ->
+  return false with no wear, occupied interior target still wears 1 (damageItem
+  inside the interior branch, after the air check). Client IndevFire_UseFlintSteel
+  (IndevFire.c) + server UseFlintSteel (SurvivalInventory.cs); the incorrect
+  "damages unconditionally" comment was removed with the restructure.
+- **[V]** (low, sp-mp-split) MP only: no "fire.ignite" sound when flint & steel places fire: FIXED -
+  the MP send site (SurvivalTest.c, SURV_USE_ITEM path) now plays MOBSND_IGNITE
+  (vol 1.0, pitch rand*0.4+0.8) optimistically for the acting player under the
+  same interior+air predicate the server's UseFlintSteel applies, matching the
+  genuine playSoundAtPlayer("fire.ignite") call. The server has no sound channel,
+  so remote players still don't hear it - accepted limitation of the wire.
 - **[P]** (low, server) Server: primed-TNT kick velocity skips Notch's double angle conversion (affects fire-ignited TNT)
   - genuine: EntityTNTPrimed ctor: "float var5 = (float)(Math.random() * Math.PI * 2.0D); this.motionX = -MathHelper.sin(var5 * (float)Math.PI / 180.0F) * 0.02F; ... this.motionZ = -MathHelper.cos(var5 * (float)Math.PI / 180.0F) * 0.02F;" (EntityTNTPrimed.java:17-20) - the radians value is co
   - ours: Server Ignite: "VX = -Math.Sin(ang) * 0.02, VY = 0.2, VZ = -Math.Cos(ang) * 0.02" (SurvivalTnt.cs:128-134) - a uniformly random horizontal direction at full 0.02 magnitude; its comment says the magnitude is what matters, but genuine's direc
