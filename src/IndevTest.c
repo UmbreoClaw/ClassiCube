@@ -1915,6 +1915,15 @@ static cc_bool Fluid_CanFlowInto(cc_bool water, int x, int y, int z) {
 /* World.floodFill(x, y, z, moving, still): scanline-floods the connected
     fluid body on ONE layer. 0 = found adjacent air (body can still absorb),
     1 = fully closed, 2 = touches the map border. */
+/* genuine setBlock/setBlockWithNotify refuse the OUTER SHELL - that is what
+    makes the map-edge ocean ring an infinite source (border cells can never be
+    drained, petrified, evaporated, or spread into). still<->moving flips are
+    setTileNoUpdate-class and keep the whole map. */
+static cc_bool IndevFluid_ShellCell(int x, int y, int z) {
+	return x <= 0 || y <= 0 || z <= 0 ||
+		x >= World.Width - 1 || y >= World.Height - 1 || z >= World.Length - 1;
+}
+
 static int Fluid_FloodFill(int x, int y, int z, BlockID moving, BlockID still) {
 	int top = 0, p2, runB;
 	cc_bool spanN, spanS, match;
@@ -2064,7 +2073,7 @@ static void Indev_FluidSchedule(int index, cc_bool water) {
 /* BlockFlowing.liquidSpread: the plain (stagnation-retry) spread */
 static cc_bool Fluid_Spread(BlockID moving, cc_bool water, int tx, int ty, int tz) {
 	if (!Fluid_CanFlowInto(water, tx, ty, tz)) return false;
-	Game_UpdateBlock(tx, ty, tz, moving);
+	if (!IndevFluid_ShellCell(tx, ty, tz)) Game_UpdateBlock(tx, ty, tz, moving);
 	Indev_FluidSchedule(World_Pack(tx, ty, tz), water);
 	return true;
 }
@@ -2088,10 +2097,10 @@ static cc_bool Fluid_Spread2(int x, int y, int z, BlockID moving, BlockID still,
 			dx != 0 && dx != World.Width - 1 && dz != 0 && dz != World.Length - 1) {
 			return false;
 		}
-		Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
+		if (!IndevFluid_ShellCell(dx, dy, dz)) Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
 	}
 
-	Game_UpdateBlock(tx, ty, tz, moving);
+	if (!IndevFluid_ShellCell(tx, ty, tz)) Game_UpdateBlock(tx, ty, tz, moving);
 	Indev_FluidSchedule(World_Pack(tx, ty, tz), water);
 	return true;
 }
@@ -2101,9 +2110,12 @@ static cc_bool Fluid_WaterContact(int x, int y, int z) {
 	BlockID b;
 	if (!World_Contains(x, y, z)) return false;
 	b = World_GetBlock(x, y, z);
-	if (b == INDEV_BLOCK_FIRE) { Game_UpdateBlock(x, y, z, BLOCK_AIR);   return true; }
+	if (b == INDEV_BLOCK_FIRE) {
+		if (!IndevFluid_ShellCell(x, y, z)) Game_UpdateBlock(x, y, z, BLOCK_AIR);
+		return true;
+	}
 	if (b == BLOCK_LAVA || b == BLOCK_STILL_LAVA) {
-		Game_UpdateBlock(x, y, z, BLOCK_STONE);
+		if (!IndevFluid_ShellCell(x, y, z)) Game_UpdateBlock(x, y, z, BLOCK_STONE);
 		return true;
 	}
 	return false;
@@ -2134,7 +2146,7 @@ static void Indev_FluidUpdate(int index, BlockID block) {
 				dx = r & 1023; r >>= 10;
 				dz = r & 1023; r >>= 10;
 				dy = r & 1023;
-				Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
+				if (!IndevFluid_ShellCell(dx, dy, dz)) Game_UpdateBlock(dx, dy, dz, BLOCK_AIR);
 			}
 			return;
 		}
@@ -2168,9 +2180,9 @@ static void Indev_FluidUpdate(int index, BlockID block) {
 					if (indev_liquidOrder[i] == 3 && !spread) spread = Fluid_Spread(moving, water, x, y, z + 1);
 				}
 			} else if (!water) {
-				Game_UpdateBlock(x, y, z, BLOCK_STONE);
+				if (!IndevFluid_ShellCell(x, y, z)) Game_UpdateBlock(x, y, z, BLOCK_STONE);
 			} else {
-				Game_UpdateBlock(x, y, z, BLOCK_AIR);
+				if (!IndevFluid_ShellCell(x, y, z)) Game_UpdateBlock(x, y, z, BLOCK_AIR);
 			}
 		}
 		return;
@@ -2235,19 +2247,11 @@ static void IndevFluid_ActivateStill(int index, BlockID block) {
 	static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
 	static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
 	int n;
-	BlockID nb;
 	World_Unpack(index, x, y, z);
 
-	for (n = 0; n < 6; n++) {
-		int nx = x + NX[n], ny = y + NY[n], nz = z + NZ[n];
-		if (!World_Contains(nx, ny, nz)) continue;
-		nb = World_GetBlock(nx, ny, nz);
-		if (water ? Fluid_IsLavaMat(nb) : Fluid_IsWaterMat(nb)) {
-			Game_UpdateBlock(x, y, z, BLOCK_STONE);
-			return;
-		}
-	}
-
+	/* petrify rides the CHANGED-block id in IndevTest_BlockUpdated now; a
+	    woken fluid meeting pre-existing lava resolves through its own flow
+	    update (Fluid_WaterContact stones THE LAVA), like genuine */
 	wake = Fluid_CanFlowInto(water, x, y - 1, z) ||
 	       Fluid_CanFlowInto(water, x - 1, y, z) || Fluid_CanFlowInto(water, x + 1, y, z) ||
 	       Fluid_CanFlowInto(water, x, y, z - 1) || Fluid_CanFlowInto(water, x, y, z + 1);
@@ -3261,8 +3265,15 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 			int wx = x + WNX[wn], wy = y + WNY[wn], wz = z + WNZ[wn];
 			if (!World_Contains(wx, wy, wz)) continue;
 			wb = World_GetBlock(wx, wy, wz);
-			if (wb == BLOCK_STILL_WATER || wb == BLOCK_STILL_LAVA)
+			if (wb != BLOCK_STILL_WATER && wb != BLOCK_STILL_LAVA) continue;
+			/* BlockStationary petrifies ONLY when the CHANGED block is the
+			    opposite liquid; anything else wakes it instead (and a woken
+			    water meeting old lava stones THE LAVA via its flow update) */
+			if (wb == BLOCK_STILL_WATER ? Fluid_IsLavaMat(block) : Fluid_IsWaterMat(block)) {
+				if (!IndevFluid_ShellCell(wx, wy, wz)) Game_UpdateBlock(wx, wy, wz, BLOCK_STONE);
+			} else {
 				IndevFluid_ActivateStill(World_Pack(wx, wy, wz), wb);
+			}
 		}
 	}
 	depth--;
