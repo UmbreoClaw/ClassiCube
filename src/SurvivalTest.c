@@ -334,6 +334,7 @@ struct DropItem {
 	Vec3    pickupTarget; /* body the pickup fly-in eases toward (captured on PICKUP) */
 	Vec3    netRest;      /* server-authoritative resting spot (DROP_SPAWN bytes 19-24) */
 	cc_bool hasRest;      /* zero rest = old server, no easing */
+	float   restTime;     /* seconds spent easing toward netRest after landing */
 };
 static struct DropItem st_drops[DROP_MAX];
 /* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
@@ -1145,17 +1146,32 @@ static void SurvivalTest_TickNetDrops(float delta) {
 		SurvivalTest_DropPhysics(d, delta);
 
 		/* Once the local arc has landed, ease onto the server's authoritative
-		    resting spot (DROP_SPAWN's trailing rest coords). The two flight
-		    sims agree within a fraction of a block, so this is a slide too
-		    small to notice - but it means every viewer converges on the SAME
-		    point and a rejoin re-stream no longer visibly snaps drops. */
+		    resting spot (DROP_SPAWN's trailing rest coords), then SNAP AND
+		    RELEASE: keeping the pull running forever fought the collision pass
+		    whenever the rest disagreed with where the local box could settle
+		    (a ledge lip, a fraction inside the floor), jittering the drop in
+		    place (user-reported stutter). Converge once - or give up after a
+		    couple of seconds if something solid blocks the slide. */
 		if (d->hasRest && d->onGround &&
 			Math_AbsF(d->velocity.x) + Math_AbsF(d->velocity.y) + Math_AbsF(d->velocity.z) < 0.6f) {
-			float ease = delta * 6.0f;
+			float dx = d->netRest.x - d->position.x;
+			float dy = d->netRest.y - d->position.y;
+			float dz = d->netRest.z - d->position.z;
+			float dist2 = dx * dx + dy * dy + dz * dz;
+			float ease  = delta * 6.0f;
 			if (ease > 1.0f) ease = 1.0f;
-			d->position.x += (d->netRest.x - d->position.x) * ease;
-			d->position.y += (d->netRest.y - d->position.y) * ease;
-			d->position.z += (d->netRest.z - d->position.z) * ease;
+
+			d->restTime += delta;
+			if (dist2 < 0.06f * 0.06f) {
+				d->position = d->netRest;  /* converged: sit exactly on it */
+				d->hasRest  = false;
+			} else if (d->restTime > 2.0f) {
+				d->hasRest  = false;       /* blocked: stay where physics rests */
+			} else {
+				d->position.x += dx * ease;
+				d->position.y += dy * ease;
+				d->position.z += dz * ease;
+			}
 		}
 		if (IndevTest_Enabled) {
 			int cx = Math_Floor(d->position.x);
