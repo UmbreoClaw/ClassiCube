@@ -256,6 +256,7 @@ enum InputBind_ {
 	BIND_HOTBAR_4, BIND_HOTBAR_5, BIND_HOTBAR_6,
 	BIND_HOTBAR_7, BIND_HOTBAR_8, BIND_HOTBAR_9,
 	BIND_HOTBAR_LEFT, BIND_HOTBAR_RIGHT,
+	BIND_SURVIVAL_INVENTORY, /* survival/Indev inventory - separate from the Classic block-list bind */
 	BIND_COUNT
 };
 typedef int InputBind;

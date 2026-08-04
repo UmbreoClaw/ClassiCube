@@ -13,6 +13,8 @@
 #include "TexturePack.h"
 #include "Game.h"
 #include "Options.h"
+#include "IndevTest.h"
+#include "IndevFire.h"
 
 int Builder_SidesLevel, Builder_EdgeLevel;
 /* Packs an index into the 16x16x16 count array. Coordinates range from 0 to 15. */
@@ -92,7 +94,13 @@ static int Builder_TotalVerticesCount(void) {
 static void AddSpriteVertices(BlockID block) {
 	int i = Atlas1D_Index(Block_Tex(block, FACE_XMAX));
 	struct Builder1DPart* part = &Builder_Parts[i];
-	part->sCount += 4 * 4;
+	/* Indev crops draw 8 quads (4 double-sided "#" rows), not the 4 of */
+	/*  the diagonal cross - see Builder_DrawCrops. Wall torches draw 5 */
+	/*  (4 tilted sides + tip cap) padded to 8 with degenerate quads so */
+	/*  the banked sprite layout stays quad-aligned - Builder_DrawWallTorch. */
+	part->sCount += IndevFire_IsFire(block) ? 12 * 4 :
+		(IndevTest_IsCropBlock(block) || IndevTest_IsWallTorch(block) ||
+		 IndevTest_IsGears(block)) ? 8 * 4 : 4 * 4;
 }
 
 static void AddVertices(BlockID block, Face face) {
@@ -493,7 +501,334 @@ static void DefaultPostStretchChunk(void) {
 }
 
 static RNGState spriteRng;
+/* Indev BlockCrops (render type 6, RenderBlocks.renderBlockCrops): four
+    double-sided planes at +-0.25 from the block centre - two spanning the
+    full Z extent, two the full X - sunk 1/16 into the farmland below.
+    The sprite region renders with face culling ON and its four banks are
+    view-direction groups (bank 0 drawn when the camera is beyond XMax or
+    ZMin, etc - see MapRenderer's sprite pass), so every quad must sit in
+    a bank that is guaranteed drawn whenever that quad is front-facing:
+    +X faces -> bank 0 or 3, -X -> 1 or 2, +Z -> 1 or 3, -Z -> 0 or 2.
+    Winding follows the engine sprite convention ((v1-v0)x(v2-v1) points
+    out of the front face). Emitted as two banked 4-quad sprite units. */
+static void Builder_DrawCrops(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float v1, v2, u1, u2;
+	float X, Y, Z, y1, y2, xlo, xhi, zlo, zhi;
+	int stride;
+
+	X  = (float)x; Y = (float)y; Z = (float)z;
+	y1 = Y - 1.0f/16.0f; y2 = y1 + 1.0f;
+	xlo = X + 0.25f; xhi = X + 0.75f;
+	zlo = Z + 0.25f; zhi = Z + 0.75f;
+
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	v2  = v1 + Atlas1D.InvTileSize * UV2_Scale;
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+
+	/* one quad: A-end column then B-end column, bottom-top-top-bottom, with
+	    the genuine u mapping (A end = u1). Facing normal = (B - A) rotated
+	    90 degrees clockwise in the XZ plane, same as the engine sprites. */
+	#define CROP_QUAD(ax, az, bx, bz) \
+		v->x = (ax); v->y = y1; v->z = (az); v->Col = color; v->U = u1; v->V = v2; v++; \
+		v->x = (ax); v->y = y2; v->z = (az); v->Col = color; v->U = u1; v->V = v1; v++; \
+		v->x = (bx); v->y = y2; v->z = (bz); v->Col = color; v->U = u2; v->V = v1; v++; \
+		v->x = (bx); v->y = y1; v->z = (bz); v->Col = color; v->U = u2; v->V = v2; v++;
+
+	/* unit 1: the two planes perpendicular to X */
+	v = &Builder_Vertices[part->sOffset];
+	CROP_QUAD(xlo, Z,   xlo, Z+1) /* bank 0: xlo plane, +X facing */
+	v -= 4; v += stride;
+	CROP_QUAD(xlo, Z+1, xlo, Z)   /* bank 1: xlo plane, -X facing */
+	v -= 4; v += stride;
+	CROP_QUAD(xhi, Z+1, xhi, Z)   /* bank 2: xhi plane, -X facing */
+	v -= 4; v += stride;
+	CROP_QUAD(xhi, Z,   xhi, Z+1) /* bank 3: xhi plane, +X facing */
+	part->sOffset += 4;
+
+	/* unit 2: the two planes perpendicular to Z */
+	v = &Builder_Vertices[part->sOffset];
+	CROP_QUAD(X,   zlo, X+1, zlo) /* bank 0: zlo plane, -Z facing */
+	v -= 4; v += stride;
+	CROP_QUAD(X+1, zlo, X,   zlo) /* bank 1: zlo plane, +Z facing */
+	v -= 4; v += stride;
+	CROP_QUAD(X,   zhi, X+1, zhi) /* bank 2: zhi plane, -Z facing */
+	v -= 4; v += stride;
+	CROP_QUAD(X+1, zhi, X,   zhi) /* bank 3: zhi plane, +Z facing */
+	part->sOffset += 4;
+	#undef CROP_QUAD
+}
+
+/* The genuine RenderBlocks.renderBlockTorch geometry for the wall-mounted
+    torch variants (metadata 1-4): a 2px column leaning out of its wall -
+    base shifted 0.1 towards the wall and raised 0.2, bottom vertices
+    displaced a further 0.4 towards the wall (the top stays put, giving the
+    lean), full-tile side quads, and the 2x2px tip cap at 10/16 height
+    interpolated along the lean line. Emitted as 2 quads per sprite bank
+    (like crops), with 3 degenerate quads padding 5 real ones up to 8. */
+static void Builder_DrawWallTorch(int x, int y, int z) {
+	/* metadata 1-4: attached to the solid block at -X / +X / -Z / +Z */
+	static const float offX[4]  = { -0.1f, 0.1f, 0.0f,  0.0f };
+	static const float offZ[4]  = {  0.0f, 0.0f, -0.1f, 0.1f };
+	static const float tiltX[4] = { -0.4f, 0.4f, 0.0f,  0.0f };
+	static const float tiltZ[4] = {  0.0f, 0.0f, -0.4f, 0.4f };
+
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float u1, u2, v1, v2, cu1, cu2, cv1, cv2;
+	float cx, cz, y0, yT, yC, a, b, capx, capz;
+	int m, stride;
+
+	m  = IndevTest_WallTorchMeta(Builder_Block) - 1;
+	a  = tiltX[m]; b = tiltZ[m];
+	cx = (float)x + 0.5f + offX[m];
+	cz = (float)z + 0.5f + offZ[m];
+	y0 = (float)y + 0.2f;
+	yT = y0 + 1.0f;          /* side quads span the full tile height */
+	yC = y0 + 10.0f/16.0f;   /* tip cap height */
+	capx = cx + a * (6.0f/16.0f);
+	capz = cz + b * (6.0f/16.0f);
+
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	v2  = v1 + Atlas1D.InvTileSize * UV2_Scale;
+	/* the tip cap samples the 2x2px torch-tip texels (u 7-9, v 6-8 of 16) */
+	cu1 = u1 + (u2 - u1) * ( 7.0f/16.0f);
+	cu2 = u1 + (u2 - u1) * ( 9.0f/16.0f);
+	cv1 = v1 + (v2 - v1) * ( 6.0f/16.0f);
+	cv2 = v1 + (v2 - v1) * ( 8.0f/16.0f);
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+
+	/* side quad facing per the engine sprite rule (normal = top A->B edge
+	    rotated 90 degrees clockwise in XZ); bottoms lean by (a, b) */
+	#define TORCH_QUAD(atx, atz, btx, btz) 		v->x = (atx) + a; v->y = y0; v->z = (atz) + b; v->Col = color; v->U = u1; v->V = v2; v++; 		v->x = (atx);     v->y = yT; v->z = (atz);     v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = (btx);     v->y = yT; v->z = (btz);     v->Col = color; v->U = u2; v->V = v1; v++; 		v->x = (btx) + a; v->y = y0; v->z = (btz) + b; v->Col = color; v->U = u2; v->V = v2; v++;
+	#define TORCH_DEGEN() 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++; 		v->x = cx; v->y = y0; v->z = cz; v->Col = color; v->U = u1; v->V = v1; v++;
+
+	#define TORCH_CAP() \
+		v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv1; v++; \
+		v->x = capx - 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu1; v->V = cv2; v++; \
+		v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz + 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv2; v++; \
+		v->x = capx + 1.0f/16.0f; v->y = yC; v->z = capz - 1.0f/16.0f; v->Col = color; v->U = cu2; v->V = cv1; v++;
+
+	/* MapRenderer camera-culls sprite BANKS (bank 0 drawn on drawXMax||drawZMin,
+	    1 on XMin||ZMax, 2 on XMin||ZMin, 3 on XMax||ZMax) with face culling ON -
+	    so each bank must hold the side quad whose FRONT faces that bank's camera
+	    range. Packing both X-planes into one bank lost the whole stick from the
+	    opposite quadrant (user-reported: broken from the upper-left only). The
+	    upward cap is visible from every quadrant, so it rides in banks 0 AND 1,
+	    whose conditions together cover all four (double-drawn overlap is the
+	    identical quad - harmless). */
+	/* bank 0 (drawXMax||drawZMin): the +X-facing side + cap */
+	v = &Builder_Vertices[part->sOffset];
+	TORCH_QUAD(cx + 1.0f/16.0f, cz - 0.5f, cx + 1.0f/16.0f, cz + 0.5f)
+	TORCH_CAP()
+	v -= 8; v += stride;
+	/* bank 1 (drawXMin||drawZMax): the -X-facing side + cap */
+	TORCH_QUAD(cx - 1.0f/16.0f, cz + 0.5f, cx - 1.0f/16.0f, cz - 0.5f)
+	TORCH_CAP()
+	v -= 8; v += stride;
+	/* bank 2 (drawXMin||drawZMin): the -Z-facing side */
+	TORCH_QUAD(cx - 0.5f, cz - 1.0f/16.0f, cx + 0.5f, cz - 1.0f/16.0f)
+	TORCH_DEGEN()
+	v -= 8; v += stride;
+	/* bank 3 (drawXMax||drawZMax): the +Z-facing side */
+	TORCH_QUAD(cx + 0.5f, cz + 1.0f/16.0f, cx - 0.5f, cz + 1.0f/16.0f)
+	TORCH_DEGEN()
+	part->sOffset += 8;
+	#undef TORCH_QUAD
+	#undef TORCH_DEGEN
+	#undef TORCH_CAP
+}
+
+/* The genuine RenderBlocks fire tessellation (renderType 3): grounded fire
+    is 8 slanted flame sheets alternating between the two animated flame
+    tiles; fire clinging to walls/ceilings draws leaning sheets against
+    each flammable neighbour instead. Every sheet is emitted as an opposed
+    pair in genuine, so the transcription is winding-safe. Padded to 12
+    quads (3 per sprite bank) with degenerates. */
+static void Builder_DrawFire(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	PackedCol color;
+	TextureLoc loc1, loc2;
+	float u1, u2, v1a, v2a, v1b, v2b, t;
+	float X, Y, Z, yy;
+	int stride, quads = 0;
+	cc_bool grounded;
+
+	X = (float)x; Y = (float)y; Z = (float)z;
+	loc1 = Block_Tex(Builder_Block, FACE_XMAX); /* INDEV_FIRE_TEX_LOC */
+	loc2 = INDEV_FIRE_TEX_LOC2;
+	/* both tiles must live in the same 1D atlas part to share the range */
+	if (Atlas1D_Index(loc2) != Atlas1D_Index(loc1)) loc2 = loc1;
+
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	v1a = Atlas1D_RowId(loc1) * Atlas1D.InvTileSize;
+	v2a = v1a + Atlas1D.InvTileSize * UV2_Scale;
+	v1b = Atlas1D_RowId(loc2) * Atlas1D.InvTileSize;
+	v2b = v1b + Atlas1D.InvTileSize * UV2_Scale;
+
+	part  = &Builder_Parts[Atlas1D_Index(loc1)];
+	color = PACKEDCOL_WHITE; /* fire is fullbright */
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+	v = &Builder_Vertices[part->sOffset];
+
+	#define FIRE_V(px, py, pz, FU, FVV) \
+		v->x = (px); v->y = (py); v->z = (pz); v->Col = color; v->U = (FU); v->V = (FVV); v++;
+	/* 3 quads per bank; hop to the next bank after every 3rd quad */
+	#define FIRE_ENDQUAD() \
+		quads++; if ((quads % 3) == 0) { v -= 12; v += stride; }
+	#define FIRE_DEGEN() \
+		FIRE_V(X, Y, Z, u1, v1a) FIRE_V(X, Y, Z, u1, v1a) \
+		FIRE_V(X, Y, Z, u1, v1a) FIRE_V(X, Y, Z, u1, v1a) FIRE_ENDQUAD()
+
+	grounded = (World_Contains(x, y - 1, z) && Blocks.FullOpaque[World_GetBlock(x, y - 1, z)]) ||
+	           (World_Contains(x, y - 1, z) && IndevFire_CanCatch(World_GetBlock(x, y - 1, z)));
+
+	if (grounded) {
+		/* inner slanted pair along X (tile 1) */
+		FIRE_V(X+0.2f, Y+1.4f, Z+1, u2,v1a) FIRE_V(X+0.7f, Y, Z+1, u2,v2a) FIRE_V(X+0.7f, Y, Z, u1,v2a) FIRE_V(X+0.2f, Y+1.4f, Z, u1,v1a) FIRE_ENDQUAD()
+		FIRE_V(X+0.8f, Y+1.4f, Z, u2,v1a) FIRE_V(X+0.3f, Y, Z, u2,v2a) FIRE_V(X+0.3f, Y, Z+1, u1,v2a) FIRE_V(X+0.8f, Y+1.4f, Z+1, u1,v1a) FIRE_ENDQUAD()
+		/* inner slanted pair along Z (tile 2) */
+		FIRE_V(X+1, Y+1.4f, Z+0.8f, u2,v1b) FIRE_V(X+1, Y, Z+0.3f, u2,v2b) FIRE_V(X, Y, Z+0.3f, u1,v2b) FIRE_V(X, Y+1.4f, Z+0.8f, u1,v1b) FIRE_ENDQUAD()
+		FIRE_V(X, Y+1.4f, Z+0.2f, u2,v1b) FIRE_V(X, Y, Z+0.7f, u2,v2b) FIRE_V(X+1, Y, Z+0.7f, u1,v2b) FIRE_V(X+1, Y+1.4f, Z+0.2f, u1,v1b) FIRE_ENDQUAD()
+		/* outer shell along X (tile 2) */
+		FIRE_V(X+0.1f, Y+1.4f, Z, u1,v1b) FIRE_V(X, Y, Z, u1,v2b) FIRE_V(X, Y, Z+1, u2,v2b) FIRE_V(X+0.1f, Y+1.4f, Z+1, u2,v1b) FIRE_ENDQUAD()
+		FIRE_V(X+0.9f, Y+1.4f, Z+1, u1,v1b) FIRE_V(X+1, Y, Z+1, u1,v2b) FIRE_V(X+1, Y, Z, u2,v2b) FIRE_V(X+0.9f, Y+1.4f, Z, u2,v1b) FIRE_ENDQUAD()
+		/* outer shell along Z (tile 1) */
+		FIRE_V(X, Y+1.4f, Z+0.9f, u1,v1a) FIRE_V(X, Y, Z+1, u1,v2a) FIRE_V(X+1, Y, Z+1, u2,v2a) FIRE_V(X+1, Y+1.4f, Z+0.9f, u2,v1a) FIRE_ENDQUAD()
+		FIRE_V(X+1, Y+1.4f, Z+0.1f, u1,v1a) FIRE_V(X+1, Y, Z, u1,v2a) FIRE_V(X, Y, Z, u2,v2a) FIRE_V(X, Y+1.4f, Z+0.1f, u2,v1a) FIRE_ENDQUAD()
+	} else {
+		/* side/ceiling flames against each flammable neighbour, with the
+		    genuine checkerboard tile/mirror variation */
+		float sv1 = v1a, sv2 = v2a, su1 = u1, su2 = u2;
+		if (((x + y + z) & 1) == 1) { sv1 = v1b; sv2 = v2b; }
+		if (((x / 2 + y / 2 + z / 2) & 1) == 1) { t = su1; su1 = su2; su2 = t; }
+
+		if (IndevFire_CanCatch(x > 0 ? World_GetBlock(x - 1, y, z) : BLOCK_AIR)) {
+			FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_V(X, Y+1.0f/16, Z, su1,sv2) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+0.2f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(x < World.MaxX ? World_GetBlock(x + 1, y, z) : BLOCK_AIR)) {
+			FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+1, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z+1, su2,sv1) FIRE_V(X+1, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+0.8f, Y+1.4f+1.0f/16, Z, su1,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(z > 0 ? World_GetBlock(x, y, z - 1) : BLOCK_AIR)) {
+			FIRE_V(X, Y+1.4f+1.0f/16, Z+0.2f, su2,sv1) FIRE_V(X, Y+1.0f/16, Z, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.2f, su1,sv1) FIRE_ENDQUAD()
+			FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.2f, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z, su1,sv2) FIRE_V(X, Y+1.0f/16, Z, su2,sv2) FIRE_V(X, Y+1.4f+1.0f/16, Z+0.2f, su2,sv1) FIRE_ENDQUAD()
+		}
+		if (IndevFire_CanCatch(z < World.MaxZ ? World_GetBlock(x, y, z + 1) : BLOCK_AIR)) {
+			FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.8f, su1,sv1) FIRE_V(X+1, Y+1.0f/16, Z+1, su1,sv2) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X, Y+1.4f+1.0f/16, Z+0.8f, su2,sv1) FIRE_ENDQUAD()
+			FIRE_V(X, Y+1.4f+1.0f/16, Z+0.8f, su2,sv1) FIRE_V(X, Y+1.0f/16, Z+1, su2,sv2) FIRE_V(X+1, Y+1.0f/16, Z+1, su1,sv2) FIRE_V(X+1, Y+1.4f+1.0f/16, Z+0.8f, su1,sv1) FIRE_ENDQUAD()
+		}
+		if (y + 1 < World.Height && IndevFire_CanCatch(World_GetBlock(x, y + 1, z))) {
+			yy = Y + 1.0f;
+			if (((x + (y + 1) + z) & 1) == 0) {
+				FIRE_V(X, yy-0.2f, Z, u2,v1a) FIRE_V(X+1, yy, Z, u2,v2a) FIRE_V(X+1, yy, Z+1, u1,v2a) FIRE_V(X, yy-0.2f, Z+1, u1,v1a) FIRE_ENDQUAD()
+				FIRE_V(X+1, yy-0.2f, Z+1, u2,v1b) FIRE_V(X, yy, Z+1, u2,v2b) FIRE_V(X, yy, Z, u1,v2b) FIRE_V(X+1, yy-0.2f, Z, u1,v1b) FIRE_ENDQUAD()
+			} else {
+				FIRE_V(X, yy-0.2f, Z+1, u2,v1a) FIRE_V(X, yy, Z, u2,v2a) FIRE_V(X+1, yy, Z, u1,v2a) FIRE_V(X+1, yy-0.2f, Z+1, u1,v1a) FIRE_ENDQUAD()
+				FIRE_V(X+1, yy-0.2f, Z, u2,v1b) FIRE_V(X+1, yy, Z+1, u2,v2b) FIRE_V(X, yy, Z+1, u1,v2b) FIRE_V(X, yy-0.2f, Z, u1,v1b) FIRE_ENDQUAD()
+			}
+		}
+	}
+
+	while (quads < 12) { FIRE_DEGEN() }
+	part->sOffset += 12;
+	#undef FIRE_V
+	#undef FIRE_ENDQUAD
+	#undef FIRE_DEGEN
+}
+
+/* BlockGears renderType 5: a gear‑textured quad flush on each ADJACENT SOLID
+    wall (isBlockNormalCube), inset 0.05 off the wall and oversized 2/16 on every
+    edge; nothing if no wall is adjacent. We emit each present wall as an opposed
+    pair (double‑sided so the winding doesn't matter), padded to 4 banks / 8 quads
+    with degenerates — the banked layout the wall‑torch path uses. */
+static void Builder_DrawGears(int x, int y, int z) {
+	struct Builder1DPart* part;
+	struct VertexTextured* v;
+	cc_bool bright;
+	PackedCol color;
+	TextureLoc loc;
+	float u1, u2, va, vb, X, Y, Z, yb, yt;
+	int stride;
+	const float o = 2.0f/16.0f, d = 0.05f;
+
+	X = (float)x; Y = (float)y; Z = (float)z;
+	yb = Y - o; yt = Y + 1.0f + o;
+	loc = Block_Tex(Builder_Block, FACE_XMAX);
+	u1  = 0.0f;
+	u2  = UV2_Scale;
+	va  = Atlas1D_RowId(loc) * Atlas1D.InvTileSize;
+	vb  = va + Atlas1D.InvTileSize * UV2_Scale;
+
+	bright = Blocks.Brightness[Builder_Block];
+	part   = &Builder_Parts[Atlas1D_Index(loc)];
+	color  = bright ? PACKEDCOL_WHITE : Lighting.Color_Sprite_Fast(x, y, z);
+	Block_Tint(color, Builder_Block);
+	stride = part->sCount >> 2;
+	v = &Builder_Vertices[part->sOffset];
+
+	#define GEAR_V(px, py, pz, gu, gv) \
+		v->x = (px); v->y = (py); v->z = (pz); v->Col = color; v->U = (gu); v->V = (gv); v++;
+	#define GEAR_DEGEN() GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va) GEAR_V(X, Y, Z, u1, va)
+	/* one bank = a vertical quad between corners A(ax,az) and B(bx,bz) + its
+	    mirror; or two degenerate quads when that wall isn't solid. */
+	#define GEAR_BANK(present, ax, az, bx, bz) \
+		if (present) { \
+			GEAR_V((ax), yb, (az), u2, vb) GEAR_V((ax), yt, (az), u2, va) \
+			GEAR_V((bx), yt, (bz), u1, va) GEAR_V((bx), yb, (bz), u1, vb) \
+			GEAR_V((bx), yb, (bz), u1, vb) GEAR_V((bx), yt, (bz), u1, va) \
+			GEAR_V((ax), yt, (az), u2, va) GEAR_V((ax), yb, (az), u2, vb) \
+		} else { GEAR_DEGEN() GEAR_DEGEN() } \
+		v -= 8; v += stride;
+
+	/* -X wall: quad on the x+d plane, spanning z from z-o to z+1+o */
+	GEAR_BANK(x > 0            && Blocks.FullOpaque[World_GetBlock(x - 1, y, z)], X + d,     Z - o, X + d,     Z + 1 + o)
+	/* +X wall: plane x+1-d */
+	GEAR_BANK(x < World.MaxX   && Blocks.FullOpaque[World_GetBlock(x + 1, y, z)], X + 1 - d, Z - o, X + 1 - d, Z + 1 + o)
+	/* -Z wall: plane z+d, spanning x from x-o to x+1+o */
+	GEAR_BANK(z > 0            && Blocks.FullOpaque[World_GetBlock(x, y, z - 1)], X - o,     Z + d, X + 1 + o, Z + d)
+	/* +Z wall: plane z+1-d */
+	GEAR_BANK(z < World.MaxZ   && Blocks.FullOpaque[World_GetBlock(x, y, z + 1)], X - o,     Z + 1 - d, X + 1 + o, Z + 1 - d)
+
+	part->sOffset += 8;
+	#undef GEAR_V
+	#undef GEAR_DEGEN
+	#undef GEAR_BANK
+}
+
 static void Builder_DrawSprite(int x, int y, int z) {
+	if (IndevTest_IsCropBlock(Builder_Block)) { Builder_DrawCrops(x, y, z); return; }
+	if (IndevTest_IsWallTorch(Builder_Block)) { Builder_DrawWallTorch(x, y, z); return; }
+	if (IndevTest_IsGears(Builder_Block))     { Builder_DrawGears(x, y, z); return; }
+	if (IndevFire_IsFire(Builder_Block))      { Builder_DrawFire(x, y, z); return; }
+	{
 	struct Builder1DPart* part;
 	struct VertexTextured* v;
 	cc_uint8 offsetType;
@@ -562,6 +897,7 @@ static void Builder_DrawSprite(int x, int y, int z) {
 	v->x = x1; v->y = y1; v->z = z2; v->Col = color; v->U = s_u1; v->V = v2; v++;
 
 	part->sOffset += 4;
+	}
 }
 
 
@@ -1660,8 +1996,10 @@ static void OnInit(void) {
 }
 
 static void OnNewMapLoaded(void) {
-	Builder_SidesLevel = max(0, Env_SidesHeight);
-	Builder_EdgeLevel  = max(0, Env.EdgeHeight);
+	/* Air sides/edge draw no walls, so they must not occlude the map's
+	    boundary faces either (Indev shows its real border blocks) */
+	Builder_SidesLevel = Blocks.Draw[Env.SidesBlock] == DRAW_GAS ? 0 : max(0, Env_SidesHeight);
+	Builder_EdgeLevel  = Blocks.Draw[Env.EdgeBlock]  == DRAW_GAS ? 0 : max(0, Env.EdgeHeight);
 }
 
 struct IGameComponent Builder_Component = {

@@ -20,11 +20,44 @@ struct AnimatedComp {
 
 	float LeftLegX, LeftLegZ, RightLegX, RightLegZ;
 	float LeftArmX, LeftArmZ, RightArmX, RightArmZ;
+	/* Arm yaw - unused by the player/CalcHumanAnim path (always 0 there), only */
+	/*  set by the zombie/skeleton draw for their outward arm splay (see Model.c). */
+	float LeftArmY, RightArmY;
+
+	/* Attack/punch arm swing (a one-shot forward swing of the main arm, layered */
+	/*  on top of the walk/idle pose). PunchN is the linear 0..1 progress this */
+	/*  tick, PunchO the previous tick's (render interpolates between them). */
+	cc_bool Punching;
+	float PunchO, PunchN;
+
+	/* c0.30 humanoid-mob attack swing (Mob.attackTime/grounded). 0..1 progress */
+	/*  for the current render frame, set per-frame by SurvivalTest's RenderMobs */
+	/*  and read by the zombie/skeleton models to swing both arms. 0 = no swing */
+	/*  (so it has no effect on the player or any non-attacking entity). */
+	float AttackSwing;
+	/* Per-mob age in ticks (+ partial-tick fraction), i.e. Mob.tickCount - drives */
+	/*  the zombie/skeleton arms' slow always-on idle roll/pitch sway. Unused by */
+	/*  anything else, so 0 (the default) is harmless for the player/other models. */
+	float Age;
+
+	/* Sheep.graze (interpolated grazeO->graze) - 0..1 head-dip while grazing. */
+	/*  Sheep.renderModel translates the head pivot down 8/16 and forward 1/16 */
+	/*  blocks * this. Only ever non-zero for sheep; 0 is a no-op elsewhere. */
+	float Graze;
+
+	/* c0.30 HumanoidMob.helmet/armor - purely cosmetic plate-armor overlay flags, */
+	/*  rolled once (independently, ~20% each) when a zombie/skeleton spawns (see */
+	/*  SurvivalTest's SurvivalTest_SpawnMobAt), copied here per render frame by */
+	/*  RenderMobs and read by Model.c's MobArmor_Draw. Always false elsewhere. */
+	cc_bool HasHelmet, HasArmor;
 };
 
 void AnimatedComp_Init(struct AnimatedComp* anim);
 void AnimatedComp_Update(struct Entity* entity, Vec3 oldPos, Vec3 newPos, float delta);
 void AnimatedComp_GetCurrent(struct Entity* entity, float t);
+/* Starts a one-shot attack/punch arm swing (ignored if one is already playing, */
+/*  so it finishes cleanly). Visible only on the rendered model, e.g. 3rd person. */
+void AnimatedComp_StartPunch(struct AnimatedComp* anim);
 
 /* Entity component that performs tilt animation depending on movement speed and time */
 struct TiltComp {

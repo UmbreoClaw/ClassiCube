@@ -74,6 +74,15 @@ CC_VAR extern struct _Lighting {
 	PackedCol (*Color_ZSide_Fast)(int x, int y, int z);
 } Lighting;
 
+/* Block-emitted (lamp/lava) light level 0-15 at a position - sky light not
+    included. Only meaningful while fancy lighting is the active mode. */
+int FancyLighting_BlockLightLevel(int x, int y, int z);
+/* Genuine Indev combined light (0-15) at a position: max of the lamp level and
+    the effective flooded sky (Indev maps only - see FancyLighting.c). */
+int FancyLighting_IndevLight(int x, int y, int z);
+/* Sets the eased day/night sky level k (4..15) the Indev palettes dim by.
+    Caller triggers the palette rebuild via the Env sun-colour change. */
+void FancyLighting_SetIndevSky(int level);
 void FancyLighting_SetActive(void);
 void FancyLighting_OnInit(void);
 

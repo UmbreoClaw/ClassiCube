@@ -25,6 +25,9 @@
 #include "Protocol.h"
 #include "AxisLinesRenderer.h"
 #include "Picking.h"
+#include "SurvivalTest.h"
+#include "IndevFire.h"
+#include "IndevTest.h"
 
 static cc_bool input_buttonsDown[3];
 static int input_pickingId = -1;
@@ -411,9 +414,22 @@ static void InputHandler_DeleteBlock(void) {
 	pos = Game_SelectedPos.pos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
 
+	/* Minecraft.clickMouse: every left click that lands on a block first */
+	/*  tries World.extinguishFire on the clicked face, then punches the */
+	/*  block as normal (fire never occludes the pick ray) */
+	IndevFire_Extinguish(pos, Game_SelectedPos.closest);
+
 	old = World_GetBlock(pos.x, pos.y, pos.z);
 	if (Blocks.Draw[old] == DRAW_GAS || !Blocks.CanDelete[old]) return;
+	/* In survival, blocks with hardness only break through the continuous */
+	/*  per-tick mining system (SurvivalTest_TickBreaking) - this click-triggered */
+	/*  path only handles the instant case, matching SurvivalGameMode's 3-arg */
+	/*  hitBlock(x,y,z) override (which does nothing for hardness > 0 blocks). */
+	if (!SurvivalTest_CanInstaBreak(old)) return;
 
+	/* sendBlockRemoved: Item.onBlockDestroyed wears the held tool even on
+	    the instant-click path (wear before the removal, like genuine) */
+	SurvivalTest_WearHeldToolForBlockBreak();
 	Game_ChangeBlock(pos.x, pos.y, pos.z, BLOCK_AIR);
 	Event_RaiseBlock(&UserEvents.BlockChanged, pos, old, BLOCK_AIR);
 }
@@ -421,6 +437,15 @@ static void InputHandler_DeleteBlock(void) {
 static void InputHandler_PlaceBlock(void) {
 	IVec3 pos;
 	BlockID old, block;
+
+	/* In survival, right-clicking a mushroom eats it instead of placing a */
+	/*  block - works even when not aiming at a placeable surface */
+	if (SurvivalTest_TryEat()) return;
+	/* Right-clicking a workbench opens the 3x3 crafting grid (Indev) */
+	if (SurvivalTest_TryUseBlock()) return;
+	/* ItemBow.onItemRightClick: fires whether or not a block is targeted */
+	if (SurvivalTest_TryUseBow()) return;
+
 	pos = Game_SelectedPos.translatedPos;
 	if (!Game_SelectedPos.valid || !World_Contains(pos.x, pos.y, pos.z)) return;
 
@@ -429,11 +454,19 @@ static void InputHandler_PlaceBlock(void) {
 	if (AutoRotate_Enabled) block = AutoRotate_RotateBlock(block);
 
 	if (Game_CanPick(old) || !Blocks.CanPlace[block]) return;
+	/* fire is unpickable but not replaceable - genuine only places into */
+	/*  air cells (ItemBlock.onItemUse's getBlockId == 0 check) */
+	if (IndevFire_IsFire(old)) return;
 	/* air-ish blocks can only replace over other air-ish blocks */
 	if (Blocks.Draw[block] == DRAW_GAS && Blocks.Draw[old] != DRAW_GAS) return;
 
 	/* undeletable gas blocks can't be replaced with other blocks */
 	if (Blocks.Collide[old] == COLLIDE_NONE && !Blocks.CanDelete[old]) return;
+
+	/* In survival, can only place blocks the player actually has */
+	if (!SurvivalTest_CanPlace(block)) return;
+	/* Block.canPlaceBlockAt (Indev): chests refuse triple/L arrangements */
+	if (!IndevTest_CanPlaceBlockAt(block, pos)) return;
 
 	if (!CheckIsFree(block)) return;
 
@@ -489,7 +522,7 @@ void InputHandler_Tick(float delta) {
 	}
 
 	if (left) {
-		InputHandler_DeleteBlock();
+		if (!SurvivalTest_TryAttackMob()) InputHandler_DeleteBlock();
 	} else if (right) {
 		InputHandler_PlaceBlock();
 	} else if (middle) {
@@ -597,9 +630,11 @@ static void InputHandler_CheckZoomFov(void* obj) {
 
 static cc_bool BindTriggered_DeleteBlock(int key, struct InputDevice* device) {
 	if (Gui.InputGrab) return false;
-	
+
 	MouseStatePress(MOUSE_LEFT);
-	InputHandler_DeleteBlock();
+	/* In survival, a left click first tries to melee whatever mob is aimed at */
+	/*  (matching InputHandler_Tick's held-down path) before deleting a block. */
+	if (!SurvivalTest_TryAttackMob()) InputHandler_DeleteBlock();
 	return true;
 }
 
@@ -863,8 +898,21 @@ static void OnInputDown(void* obj, int key, cc_bool was, struct InputDevice* dev
 		if (!Bind_OnTriggered[i])              continue;
 		triggered |= Bind_OnTriggered[i](key, device);
 	}
-	
-	for (i = 0; i < Gui.ScreensCount; i++) 
+
+	/* Minecraft.java: Tab is a discrete (one-per-press) "fire arrow" action in */
+	/*  Survival Test. It must be handled here, before the screen loop below, */
+	/*  because the chat HUD claims BIND_TABLIST (Tab by default) and would */
+	/*  otherwise swallow the keypress via its show-player-list handler. Skipped */
+	/*  while input is grabbed (e.g. typing into chat) so Tab autocomplete works. */
+	if (!was && !Gui.InputGrab && InputBind_Claims(BIND_TABLIST, key, device)) {
+		SurvivalTest_TryShootArrow();
+	}
+	/* Q drops one of the held stack (Indev mode only - see TryDropHeld) */
+	if (!was && !Gui.InputGrab && key == 'Q') {
+		SurvivalTest_TryDropHeld();
+	}
+
+	for (i = 0; i < Gui.ScreensCount; i++)
 	{
 		s = Gui_Screens[i];
 		s->dirty = true;

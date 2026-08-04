@@ -7,6 +7,8 @@
 #include "Block.h"
 #include "Event.h"
 #include "Http.h"
+#include "IndevGen.h"
+#include "SurvivalTest.h"
 #include "Funcs.h"
 #include "Entity.h"
 #include "Graphics.h"
@@ -42,6 +44,8 @@ static void Server_ResetState(void) {
 	Server.SupportsPartialMessages = false;
 	Server.SupportsFullCP437       = false;
 	Server.SupportsNotifyAction    = false;
+	Server.SupportsSurvival        = false;
+	Server.SurvivalExtVersion      = 0;
 }
 
 void Server_RetrieveTexturePack(const cc_string* url) {
@@ -146,6 +150,12 @@ static void SPConnection_BeginConnect(void) {
 	gen = &FlatgrassGen;
 #else
 	gen = &NotchyGen;
+	/* Indev mode boots into a genuine Indev world, not a classic one -
+	    same defaults as the Generate-new-level menu (Inland, Normal) */
+	if (SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV) {
+		IndevGen_Setup(0, 0);
+		gen = &IndevGen;
+	}
 #endif
 
 	Random_SeedFromCurrentTime(&rnd);
@@ -549,7 +559,15 @@ static void OnInit(void) {
 	Game_Tasks.network.callback = Server.Tick;
 	ScheduledTask2_Add(&Game_Tasks.network);
 
-	String_AppendConst(&Server.AppName, GAME_APP_NAME);
+	/* Advertise the Indev fork by name in the CPE handshake so servers/admins
+	    can identify survival clients (see doc/networking-plan.md §20.4). This is
+	    identity only - authoritative capability gating uses the SurvivalTest CPE
+	    extension, not this string. c0.30-s / creative keep the stock name. */
+	if (SurvivalTest_Gamemode() == SURVIVAL_GAMEMODE_INDEV) {
+		String_AppendConst(&Server.AppName, "ClassiCube Indev " GAME_APP_VER);
+	} else {
+		String_AppendConst(&Server.AppName, GAME_APP_NAME);
+	}
 	String_AppendConst(&Server.AppName, Platform_AppNameSuffix);
 
 #ifdef CC_BUILD_WEB

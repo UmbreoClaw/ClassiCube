@@ -48,6 +48,9 @@ CC_VAR extern struct _GuiData {
 	cc_bool ShowFPS;
 	/* Whether classic-style inventory is used */
 	cc_bool ClassicInventory;
+	/* Whether the Indev gamemode sizes its GUI with the genuine
+	    ScaledResolution (largest integer scale keeping >= 320x240). */
+	cc_bool IndevGuiScale;
 	float RawHotbarScale, RawChatScale, RawInventoryScale, RawCrosshairScale;
 	GfxResourceID GuiTex, GuiClassicTex, IconsTex, TouchTex;
 	int DefaultLines;
@@ -83,6 +86,12 @@ float Gui_GetInventoryScale(void);
 float Gui_GetChatScale(void);
 float Gui_GetCrosshairScale(void);
 
+/* The genuine Indev ScaledResolution factor for MENU screens (the same value
+    the survival HUD / Game Over screen use), or 0 when inactive (not Indev,
+    toggle off, or touch UI). When non-zero: buttons are 200x20 GUI px * this,
+    the menu font is 8 GUI px * this, offsets scale by this/2 (ClassiCube's
+    menu grid is authored at 2x classic GUI px). */
+int Gui_GetIndevMenuScale(void);
 CC_NOINLINE void Gui_MakeTitleFont(struct FontDesc* font);
 CC_NOINLINE void Gui_MakeBodyFont(struct FontDesc* font);
 
@@ -208,6 +217,9 @@ struct WidgetVTABLE {
 /* Whether for dual screen builds, this widget still appears on */
 /*  the main game screen instead of the dedicated UI screen */
 #define WIDGET_FLAG_MAINSCREEN 0x04
+/* Whether this widget's offsets/size follow the genuine Indev menu scale
+    (buttons - set by ButtonWidget_Init) instead of raw display scaling */
+#define WIDGET_FLAG_INDEV_SCALE 0x08
 #ifdef CC_BUILD_DUALSCREEN
 	#define Window_UI Window_Alt
 #else
@@ -217,6 +229,9 @@ struct WidgetVTABLE {
 /* Represents an individual 2D gui component. */
 struct Widget { Widget_Body };
 void Widget_SetLocation(void* widget, cc_uint8 horAnchor, cc_uint8 verAnchor, int xOffset, int yOffset);
+/* Marks a widget's offsets as following the genuine Indev menu scale
+    (WIDGET_FLAG_INDEV_SCALE) - no-op visually unless the scale is active. */
+void Widget_SetIndevScaled(void* widget);
 /* Calculates where this widget should be on-screen based on its attributes. */
 /* These attributes are width/height, horAnchor/verAnchor, xOffset/yOffset */
 void Widget_CalcPosition(void* widget);

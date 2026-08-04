@@ -50,6 +50,14 @@ void Audio_SetMusic(int volume);
 void Audio_SetSounds(int volume);
 void Audio_PlayDigSound(cc_uint8 type);
 void Audio_PlayStepSound(cc_uint8 type);
+/* Plays a step sound scaled by a 0..1 volume multiplier (mob footstep distance falloff). */
+void Audio_PlayStepSoundAt(cc_uint8 type, float volScale);
+/* Plays the genuine Indev while-mining hit: the block's step sound at
+    quarter volume and half pitch (PlayerControllerSP.sendBlockRemoving). */
+void Audio_PlayDigHitSound(cc_uint8 type);
+/* Plays the genuine Indev damaging-fall landing thud: the block-under's step
+    sound at half volume, 3/4 pitch (EntityLiving.fall). */
+void Audio_PlayFallSound(cc_uint8 type);
 #define AUDIO_MAX_BUFFERS 4
 
 cc_bool AudioBackend_Init(void);
@@ -136,6 +144,20 @@ struct Soundboard { struct SoundGroup groups[SOUND_COUNT]; };
 
 extern struct Soundboard digBoard, stepBoard;
 void Sounds_LoadDefault(void);
+
+/* Indev (SurvivalTest layer) mob/entity sounds - loaded from mob_* entries
+    in the sounds zip, played through World.playSoundAtEntity's rules. */
+enum MobSoundType {
+	MOBSND_PIG, MOBSND_PIGDEATH, MOBSND_SHEEP,   MOBSND_HURT, MOBSND_BOW,
+	MOBSND_FUSE, MOBSND_DRR,     MOBSND_POP,     MOBSND_EXPLODE, MOBSND_FIZZ,
+	MOBSND_FIRE, MOBSND_IGNITE,  MOBSND_SPLASH,
+	MOBSND_COUNT
+};
+/* Plays an Indev mob/entity sound. volume/pitch are the genuine float
+    parameters (1.0 = normal); dist is the distance from the local player
+    to the source - sounds cut off past 16 blocks (16*volume when louder),
+    with linear falloff standing in for the original positional engine. */
+void Audio_PlayMobSound(int type, float volume, float pitch, float dist);
 
 CC_END_HEADER
 #endif

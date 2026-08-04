@@ -11,6 +11,8 @@
 #include "ExtMath.h"
 #include "Options.h"
 #include "Logger.h"
+#include "IndevTest.h"
+#include "IndevFire.h"
 
 /* Disables when no hardware FPU, as lava/water animations are FPU heavy and thus costly */
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_NORMAL
@@ -170,6 +172,86 @@ static void WaterAnimation_Tick(void) {
 
 	Bitmap_Init(bmp, size, size, pixels);
 	Animations_Update(WATER_TEX_LOC, &bmp, size);
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------Indev fire animation--------------------------------------------------*
+*#########################################################################################################################*/
+/* TextureFlamesFX (in-20100223): a 16x20 heat buffer - the bottom 4 rows are
+    off-texture fuel - where each cell pulls 18x the cell above it plus its
+    3x2 neighbourhood, normalised by 1.06. Row 19 refuels randomly. The top
+    16 rows map through the genuine fire palette (alpha cuts off below 0.5)
+    into the spare terrain tile the burning-mob billboards sample. Only runs
+    in Indev mode, so c0.30/creative terrain is never touched. */
+/* genuine registers TWO independent TextureFlamesFX instances (terrain
+    tiles 31 and 31+16) - the fire block renderer alternates between them */
+static float fire_heat[2][16 * 20], fire_next[2][16 * 20];
+static RNGState fire_rnd;
+static cc_bool  fire_rndInited;
+
+static void FireAnimation_TickOne(int inst, int tileLoc) {
+	BitmapCol pixels[64 * 64]; /* like LIQUID_ANIM_MAX, capped for HD packs */
+	struct Bitmap bmp;
+	float heat, b;
+	int x, y, nx, ny, denom, i, size;
+
+	/* The sim itself is fixed 16x16 like the original; the OUTPUT is
+	    nearest-neighbour upscaled to the pack's tile size (capped at 64,
+	    like the liquid animations). Without this, non-16px texture packs
+	    never got the fire tiles painted at all - and since those tiles
+	    are deliberately EMPTY in the atlas, fire rendered fully
+	    transparent: an invisible block that still burns (user report). */
+	size = min(Atlas2D.TileSize, 64);
+	if (size < 16) return; /* sub-16px packs can't fit the sim */
+	if (!fire_rndInited) {
+		Random_SeedFromCurrentTime(&fire_rnd);
+		fire_rndInited = true;
+	}
+
+	for (x = 0; x < 16; x++) {
+		for (y = 0; y < 20; y++) {
+			denom = 18;
+			heat  = fire_heat[inst][x + ((y + 1) % 20) * 16] * 18.0f;
+
+			for (nx = x - 1; nx <= x + 1; nx++) {
+				for (ny = y; ny <= y + 1; ny++) {
+					if (nx >= 0 && ny >= 0 && nx < 16 && ny < 20) heat += fire_heat[inst][nx + ny * 16];
+					denom++;
+				}
+			}
+			fire_next[inst][x + y * 16] = heat / ((float)denom * 1.06f);
+
+			if (y >= 19) {
+				fire_next[inst][x + y * 16] =
+					Random_Float(&fire_rnd) * Random_Float(&fire_rnd) * Random_Float(&fire_rnd) * 4.0f +
+					Random_Float(&fire_rnd) * 0.1f + 0.2f;
+			}
+		}
+	}
+	Mem_Copy(fire_heat[inst], fire_next[inst], sizeof(fire_heat[0]));
+
+	for (y = 0; y < size; y++) {
+		for (x = 0; x < size; x++) {
+			i = (x * 16 / size) + (y * 16 / size) * 16;
+			b = fire_heat[inst][i] * 1.8f;
+			Math_Clamp(b, 0.0f, 1.0f);
+
+			pixels[x + y * size] = BitmapCol_Make(
+				b * 155.0f + 100.0f,
+				b * b * 255.0f,
+				b * b * b * b * b * b * b * b * b * b * 255.0f,
+				b < 0.5f ? 0 : 255);
+		}
+	}
+
+	Bitmap_Init(bmp, size, size, pixels);
+	Animations_Update(tileLoc, &bmp, size);
+}
+
+static void FireAnimation_Tick(void) {
+	FireAnimation_TickOne(0, INDEV_FIRE_TEX_LOC);
+	FireAnimation_TickOne(1, INDEV_FIRE_TEX_LOC2);
 }
 #endif
 
@@ -339,6 +421,7 @@ static cc_bool Animations_Tick(struct ScheduledTask2* task) {
 #ifndef CC_BUILD_WEB
 	if (useLavaAnim)  LavaAnimation_Tick();
 	if (useWaterAnim) WaterAnimation_Tick();
+	if (IndevTest_Enabled) FireAnimation_Tick();
 #endif
 
 	if (!anims_count) return true;

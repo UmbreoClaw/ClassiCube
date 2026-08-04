@@ -17,6 +17,8 @@
 #include "TexturePack.h"
 #include "Utils.h"
 #include "Audio.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
 
 #ifdef CC_BUILD_FILESYSTEM
 static struct LocationUpdate* spawn_point;
@@ -1398,6 +1400,8 @@ COMPOUND "MinecraftLevel" {
 	}
 }*/
 static int mcl_edgeHeight, mcl_sidesHeight;
+static BlockRaw* mcl_dataArr; /* Data array: light low nibble, metadata high */
+static cc_uint32 mcl_dataSize;
 
 static void MCLevel_ParseMap(struct NbtTag* tag) {
 	if (IsTag(tag, "width"))  { World.Width  = NbtTag_U16(tag); return; }
@@ -1407,6 +1411,11 @@ static void MCLevel_ParseMap(struct NbtTag* tag) {
 	if (IsTag(tag, "blocks")) {
 		World.Volume = tag->dataSize;
 		World.Blocks = Nbt_TakeArray(tag, ".mclevel map blocks");
+	}
+	if (IsTag(tag, "data") && IndevTest_Enabled) {
+		/* kept only for the facing metadata of chests/furnaces */
+		mcl_dataSize = tag->dataSize;
+		mcl_dataArr  = Nbt_TakeArray(tag, ".mclevel map data");
 	}
 }
 
@@ -1423,7 +1432,11 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 	} else if (IsTag(tag, "CloudColor")) {
 		Env.CloudsCol = MCLevel_ParseColor(tag);
 	} else if (IsTag(tag, "CloudHeight")) {
-		Env.CloudsHeight = NbtTag_U16(tag);
+		/* SIGNED short (genuine LevelLoader getShort): Floating maps store
+		    cloudHeight -16 - reading that unsigned (65520) shoves the sky
+		    ceiling to max(height, clouds)+6 ~ y=65526, leaving only the fog
+		    gradient visible (washed-out white sky after save+load) */
+		Env.CloudsHeight = (cc_int16)NbtTag_U16(tag);
 	} else if (IsTag(tag, "SurroundingGroundType")) {
 		Env.SidesBlock  = NbtTag_U8(tag);
 		/* TODO need to explore this fully */
@@ -1431,11 +1444,20 @@ static void MCLevel_ParseEnvironment(struct NbtTag* tag) {
 	} else if (IsTag(tag, "SurroundingWaterType")) {
 		Env.EdgeBlock   = NbtTag_U8(tag);
 	} else if (IsTag(tag, "SurroundingGroundHeight")) {
-		mcl_sidesHeight = NbtTag_U16(tag);
+		/* SIGNED short: genuine Floating maps store groundLevel -128 */
+		mcl_sidesHeight = (cc_int16)NbtTag_U16(tag);
 	} else if (IsTag(tag, "SurroundingWaterHeight")) {
-		mcl_edgeHeight  = NbtTag_U16(tag);
+		mcl_edgeHeight  = (cc_int16)NbtTag_U16(tag);
+	} else if (IsTag(tag, "TimeOfDay")) {
+		IndevTest_SetWorldTime(NbtTag_I16(tag));
+	} else if (IsTag(tag, "SkyBrightness")) {
+		/* genuine LevelLoader: getByte is SIGNED (negative -> 0), and
+		    values above 16 are legacy percentages (* 15 / 100) */
+		int b = (cc_int8)NbtTag_U8(tag);
+		if (b < 0)  b = 0;
+		if (b > 16) b = b * 15 / 100;
+		IndevTest_SetSkyBrightness(b);
 	}
-	/* TODO: SkyBrightness */
 }
 
 
@@ -1462,10 +1484,237 @@ static void MCLevel_Callback_3(struct NbtTag* tag) {
 	}
 }
 
+/*------------------------------------------------- survival extensions ---------------------------------------------------*/
+/* Entities/TileEntities restore (genuine Indev schema): compounds inside the
+    lists arrive as unnamed tags; their FIELD tags fire first and are
+    accumulated below, then the compound's own callback fires (the walker
+    visits parents after children) and the accumulated state is committed.
+    NBT compound field order is arbitrary (Java HashMap), so no field-order
+    assumptions are made. */
+static struct { int slot, id, count, damage; } mcl_item;
+/* Entity id strings we restore: the player, the 6 mob kinds, item drops */
+static const char* const mcl_mobNames[] = {
+	"Zombie", "Skeleton", "Pig", "Creeper", "Spider", "Sheep"
+};
+static struct {
+	cc_bool isPlayer;
+	int mobType; /* index into mcl_mobNames, or -1 */
+	cc_bool isItem;
+	int dropId, dropCount;
+	float px, py, pz, yaw, pitch;
+	int health, score;
+	cc_bool isPainting;
+	int paintDir, tileX, tileY, tileZ;
+	char motiveBuf[32]; cc_string motive;
+	/* main inventory, then the 4 armor slots (saved as Slot 100..103) */
+	cc_uint16 ids[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
+	cc_int16  counts[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
+	cc_int16  dmg[SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS];
+} mcl_ent;
+static struct {
+	int kind; /* INDEV_CONTAINER_* resolved from the id string */
+	int pos, burn, cook;
+	cc_uint16 ids[SURVIVAL_CONTAINER_SLOTS]; cc_int16 counts[SURVIVAL_CONTAINER_SLOTS], dmg[SURVIVAL_CONTAINER_SLOTS];
+} mcl_te;
+
+static void MCLevel_ResetItem(void) { mcl_item.slot = -1; mcl_item.id = 0; mcl_item.count = 0; mcl_item.damage = 0; }
+static void MCLevel_ResetEnt(void) {
+	Mem_Set(&mcl_ent, 0, sizeof(mcl_ent));
+	mcl_ent.mobType = -1;
+	MCLevel_ResetItem();
+}
+static void MCLevel_ResetTE(void) {
+	Mem_Set(&mcl_te, 0, sizeof(mcl_te));
+	MCLevel_ResetItem();
+}
+
+static cc_bool MCLevel_TagIs(struct NbtTag* tag, const char* name) {
+	return tag && String_CaselessEqualsConst(&tag->name, name);
+}
+
+/* Fields of an item compound inside an "Inventory" (player) or "Items" */
+/*  (chest/furnace) list. */
+static void MCLevel_ParseItemField(struct NbtTag* tag) {
+	if (IsTag(tag, "Slot"))   { mcl_item.slot   = NbtTag_U8(tag);  return; }
+	if (IsTag(tag, "id"))     { mcl_item.id     = NbtTag_I16(tag); return; }
+	if (IsTag(tag, "Count"))  { mcl_item.count  = (cc_int8)NbtTag_U8(tag); return; }
+	if (IsTag(tag, "Damage")) { mcl_item.damage = NbtTag_I16(tag); return; }
+}
+
+static void MCLevel_CommitItem(cc_bool toEntity) {
+	int slot = mcl_item.slot;
+	/* Block ids inside item stacks live in the genuine Indev id space too */
+	if (mcl_item.id > 0 && mcl_item.id < 256 && IndevTest_Enabled) {
+		mcl_item.id = IndevTest_BlockFromIndev((BlockRaw)mcl_item.id);
+	}
+	if (toEntity) {
+		/* armor slots are saved as 100-103, stored after the main slots */
+		if (slot >= 100 && slot < 100 + SURVIVAL_ARMOR_SLOTS) {
+			slot = SURVIVAL_INV_SLOTS + (slot - 100);
+		}
+		if (slot >= 0 && slot < SURVIVAL_INV_SLOTS + SURVIVAL_ARMOR_SLOTS) {
+			mcl_ent.ids[slot]    = (cc_uint16)mcl_item.id;
+			mcl_ent.counts[slot] = (cc_int16)mcl_item.count;
+			mcl_ent.dmg[slot]    = (cc_int16)mcl_item.damage;
+		}
+	} else {
+		if (slot >= 0 && slot < SURVIVAL_CONTAINER_SLOTS) {
+			mcl_te.ids[slot]    = (cc_uint16)mcl_item.id;
+			mcl_te.counts[slot] = (cc_int16)mcl_item.count;
+			mcl_te.dmg[slot]    = (cc_int16)mcl_item.damage;
+		}
+	}
+	MCLevel_ResetItem();
+}
+
+static void MCLevel_CommitEntity(void) {
+	int i;
+	if (mcl_ent.isPlayer && SurvivalTest_Enabled) {
+		for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+			SurvivalTest_RestoreSlot(i, mcl_ent.ids[i], mcl_ent.counts[i], mcl_ent.dmg[i]);
+		}
+		for (i = 0; i < SURVIVAL_ARMOR_SLOTS; i++) {
+			SurvivalTest_RestoreSlot(100 + i, mcl_ent.ids[SURVIVAL_INV_SLOTS + i],
+				mcl_ent.counts[SURVIVAL_INV_SLOTS + i], mcl_ent.dmg[SURVIVAL_INV_SLOTS + i]);
+		}
+		SurvivalTest_RestoreStats(mcl_ent.health, mcl_ent.score);
+		/* Reappear exactly where the level was saved (entity Pos is at eye */
+		/*  height; LocationUpdate wants feet) */
+		if (mcl_ent.px || mcl_ent.py || mcl_ent.pz) {
+			spawn_point->flags |= LU_HAS_POS | LU_HAS_YAW | LU_HAS_PITCH;
+			spawn_point->pos.x = mcl_ent.px;
+			spawn_point->pos.y = mcl_ent.py - 1.62f;
+			spawn_point->pos.z = mcl_ent.pz;
+			spawn_point->yaw   = mcl_ent.yaw;
+			spawn_point->pitch = mcl_ent.pitch;
+		}
+	}
+	if (SurvivalTest_Enabled && !mcl_ent.isPlayer) {
+		Vec3 p;
+		p.x = mcl_ent.px; p.y = mcl_ent.py; p.z = mcl_ent.pz;
+		if (mcl_ent.mobType >= 0) {
+			SurvivalTest_RestoreMob(mcl_ent.mobType, p, mcl_ent.yaw,
+				mcl_ent.health ? mcl_ent.health : 10); /* genuine default */
+		} else if (mcl_ent.isPainting) {
+			SurvivalTest_RestorePainting(mcl_ent.tileX, mcl_ent.tileY, mcl_ent.tileZ,
+										 mcl_ent.paintDir, &mcl_ent.motive);
+		} else if (mcl_ent.isItem && mcl_ent.dropId > 0 && mcl_ent.dropCount > 0) {
+			int bid = mcl_ent.dropId;
+			if (bid > 0 && bid < 256 && IndevTest_Enabled) bid = IndevTest_BlockFromIndev((BlockRaw)bid);
+			if (bid > 0) SurvivalTest_SpawnDropWorld(p, bid, mcl_ent.dropCount);
+		}
+		/* paintings/arrows/primed TNT are still skipped */
+	}
+	MCLevel_ResetEnt();
+}
+
+static void MCLevel_CommitTileEntity(void) {
+	int x, y, z;
+	if (mcl_te.kind && IndevTest_Enabled) {
+		/* Pos is a single packed int: x + (y << 10) + (z << 20) */
+		x =  mcl_te.pos        & 1023;
+		y = (mcl_te.pos >> 10) & 1023;
+		z = (mcl_te.pos >> 20) & 1023;
+		IndevTest_RestoreTE(mcl_te.kind, x, y, z, mcl_te.burn, mcl_te.cook,
+							mcl_te.ids, mcl_te.counts, mcl_te.dmg);
+	}
+	MCLevel_ResetTE();
+}
+
+/* Handles every tag under the "Entities"/"TileEntities" lists; returns false
+    when the tag isn't part of either subtree. */
+static cc_bool MCLevel_ParseSurvival(struct NbtTag* tag) {
+	struct NbtTag* p1 = tag->parent;                  /* element / field list */
+	struct NbtTag* p2 = p1 ? p1->parent : NULL;
+	struct NbtTag* p3 = p2 ? p2->parent : NULL;
+	cc_string str;
+
+	/* element compound END: [unnamed] under the top-level lists */
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Entities"))     { MCLevel_CommitEntity();     return true; }
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "TileEntities")) { MCLevel_CommitTileEntity(); return true; }
+
+	/* item compound END: [unnamed] under "Inventory"/"Items" lists */
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Inventory") && MCLevel_TagIs(p3, "Entities"))     { MCLevel_CommitItem(true);  return true; }
+	if (tag->type == NBT_DICT && MCLevel_TagIs(p1, "Items")     && MCLevel_TagIs(p3, "TileEntities")) { MCLevel_CommitItem(false); return true; }
+
+	/* item fields: [field] -> [unnamed item] -> Inventory/Items list */
+	if (p2 && (MCLevel_TagIs(p2, "Inventory") || MCLevel_TagIs(p2, "Items"))) {
+		MCLevel_ParseItemField(tag);
+		return true;
+	}
+
+	/* entity fields: [field] -> [unnamed entity] -> Entities */
+	if (MCLevel_TagIs(p2, "Entities")) {
+		if (IsTag(tag, "id")) {
+			int mi;
+			str = NbtTag_String(tag);
+			mcl_ent.isPlayer   = String_CaselessEqualsConst(&str, "LocalPlayer");
+			mcl_ent.isItem     = String_CaselessEqualsConst(&str, "Item");
+			mcl_ent.isPainting = String_CaselessEqualsConst(&str, "Painting");
+			for (mi = 0; mi < Array_Elems(mcl_mobNames); mi++) {
+				if (String_CaselessEqualsConst(&str, mcl_mobNames[mi])) mcl_ent.mobType = mi;
+			}
+			return true;
+		}
+		if (IsTag(tag, "Health")) { mcl_ent.health = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "Score"))  { mcl_ent.score  = NbtTag_I32(tag); return true; }
+		/* genuine EntityPainting.writeEntityToNBT extras */
+		if (IsTag(tag, "Dir"))    { mcl_ent.paintDir = NbtTag_U8(tag);  return true; }
+		if (IsTag(tag, "TileX"))  { mcl_ent.tileX    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "TileY"))  { mcl_ent.tileY    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "TileZ"))  { mcl_ent.tileZ    = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "Motive")) {
+			str = NbtTag_String(tag);
+			String_InitArray(mcl_ent.motive, mcl_ent.motiveBuf);
+			String_AppendString(&mcl_ent.motive, &str);
+			return true;
+		}
+		return true;
+	}
+	/* item drop payload: [field] -> "Item" compound -> [unnamed] -> Entities */
+	if (MCLevel_TagIs(p1, "Item") && MCLevel_TagIs(p3, "Entities")) {
+		if (IsTag(tag, "id"))    { mcl_ent.dropId    = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "Count")) { mcl_ent.dropCount = (cc_int8)NbtTag_U8(tag); return true; }
+		return true;
+	}
+	/* entity Pos/Rotation lists: [float] -> Pos/Rotation -> [unnamed] -> Entities */
+	if (MCLevel_TagIs(p3, "Entities")) {
+		if (MCLevel_TagIs(p1, "Pos")) {
+			if (tag->listIndex == 0) mcl_ent.px = NbtTag_F32(tag);
+			if (tag->listIndex == 1) mcl_ent.py = NbtTag_F32(tag);
+			if (tag->listIndex == 2) mcl_ent.pz = NbtTag_F32(tag);
+			return true;
+		}
+		if (MCLevel_TagIs(p1, "Rotation")) {
+			if (tag->listIndex == 0) mcl_ent.yaw   = NbtTag_F32(tag);
+			if (tag->listIndex == 1) mcl_ent.pitch = NbtTag_F32(tag);
+			return true;
+		}
+		return true;
+	}
+
+	/* tile entity fields: [field] -> [unnamed te] -> TileEntities */
+	if (MCLevel_TagIs(p2, "TileEntities")) {
+		if (IsTag(tag, "id")) {
+			str = NbtTag_String(tag);
+			if (String_CaselessEqualsConst(&str, "Chest"))   mcl_te.kind = INDEV_CONTAINER_CHEST;
+			if (String_CaselessEqualsConst(&str, "Furnace")) mcl_te.kind = INDEV_CONTAINER_FURNACE;
+			return true;
+		}
+		if (IsTag(tag, "Pos"))      { mcl_te.pos  = NbtTag_I32(tag); return true; }
+		if (IsTag(tag, "BurnTime")) { mcl_te.burn = NbtTag_I16(tag); return true; }
+		if (IsTag(tag, "CookTime")) { mcl_te.cook = NbtTag_I16(tag); return true; }
+		return true;
+	}
+	return false;
+}
+
 static void MCLevel_Callback(struct NbtTag* tag) {
 	struct NbtTag* tmp = tag->parent;
 	int depth = 0;
 	while (tmp) { depth++; tmp = tmp->parent; }
+
+	if (MCLevel_ParseSurvival(tag)) return;
 
 	switch (depth) {
 	case 2: MCLevel_Callback_2(tag); return;
@@ -1478,11 +1727,400 @@ static void MCLevel_Callback(struct NbtTag* tag) {
 /* Imports a world from a .mclevel NBT map file */
 /* Used by Minecraft Indev client */
 static cc_result MCLevel_Load(struct Stream* stream) {
-	cc_result res = Nbt_Read(stream, MCLevel_Callback);
+	cc_result res;
+	cc_uint32 i;
+
+	MCLevel_ResetEnt();
+	MCLevel_ResetTE();
+	res = Nbt_Read(stream, MCLevel_Callback);
 
 	Env.EdgeHeight  = mcl_edgeHeight;
 	Env.SidesOffset = mcl_sidesHeight - mcl_edgeHeight;
+
+	/* Genuine Indev block ids 50-62 (torch/chest/workbench/furnaces/...) */
+	/*  collide with CPE ids - remap them onto the Indev-mode blocks. Only */
+	/*  done in Indev mode, where those blocks are actually defined. The */
+	/*  Data array's metadata nibble picks the directional chest/furnace */
+	/*  variant so the facing survives the round trip. */
+	if (!res && World.Blocks && IndevTest_Enabled) {
+		for (i = 0; i < World.Volume; i++) {
+			BlockRaw b;
+			if (World.Blocks[i] < 50) continue;
+			b = IndevTest_BlockFromIndev(World.Blocks[i]);
+			if (mcl_dataArr && i < mcl_dataSize) {
+				b = (BlockRaw)IndevTest_ApplyDataMetaAt(i, b, (mcl_dataArr[i] >> 4) & 15);
+			}
+			World.Blocks[i] = b;
+		}
+	}
+	Mem_Free(mcl_dataArr);
+	mcl_dataArr  = NULL;
+	mcl_dataSize = 0;
 	return res;
+}
+
+/*########################################################################################################################*
+*--------------------------------------------------MCLevel export---------------------------------------------------------*
+*#########################################################################################################################*/
+static cc_uint8* Nbt_WriteList(cc_uint8* data, const char* name, cc_uint8 childType, int count) {
+	*data++ = NBT_LIST;
+	data    = Nbt_WriteConst(data, name);
+	*data++ = childType;
+	Mem_WriteU32_BE(data, count);
+	return data + 4;
+}
+
+static cc_uint8* Nbt_WriteInt64Zero(cc_uint8* data, const char* name) {
+	*data++ = NBT_I64;
+	data    = Nbt_WriteConst(data, name);
+	Mem_Set(data, 0, 8);
+	return data + 8;
+}
+
+static int MCLevel_PackRGB(PackedCol c) {
+	return (PackedCol_R(c) << 16) | (PackedCol_G(c) << 8) | PackedCol_B(c);
+}
+
+/* One item compound inside a list (list elements are unnamed - fields only, */
+/*  then the compound terminator). Block ids are converted to the genuine */
+/*  Indev id space - stacks holding our custom ids (workbench 66 etc) would */
+/*  be null entries in real Indev's item table and CRASH its GUI rendering. */
+static cc_uint8* MCLevel_WriteItem(cc_uint8* cur, int slot, int id, int count, int damage) {
+	if (id > 0 && id < 256) id = IndevTest_BlockToIndev((BlockRaw)id);
+	cur = Nbt_WriteUInt8 (cur, "Slot",  (cc_uint8)slot);
+	cur = Nbt_WriteUInt16(cur, "id",    (cc_uint16)id);
+	cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)count);
+	cur = Nbt_WriteUInt16(cur, "Damage",(cc_uint16)damage);
+	*cur++ = NBT_END;
+	return cur;
+}
+
+static cc_uint8* MCLevel_WriteFloatList(cc_uint8* cur, const char* name, const float* v, int n) {
+	union IntAndFloat raw;
+	int i;
+	cur = Nbt_WriteList(cur, name, NBT_F32, n);
+	for (i = 0; i < n; i++) {
+		raw.f = v[i];
+		Mem_WriteU32_BE(cur, raw.u); cur += 4;
+	}
+	return cur;
+}
+
+/* Exports the world in Minecraft Indev's own .mclevel format (gzipped NBT, */
+/*  schema per the in-20100223 LevelLoader) - including the survival player */
+/*  (position, health, score, inventory) and chest/furnace tile entities, */
+/*  so saving and reloading an Indev-mode world keeps everything. Files are */
+/*  written id-compatible with genuine Indev (block ids remapped). */
+cc_result MCLevel_Save(struct Stream* stream) {
+	struct LocalPlayer* p = Entities.CurPlayer;
+	cc_uint8 buffer[4096];
+	cc_uint8 chunk[2048];
+	cc_uint8* cur;
+	cc_result res;
+	cc_uint32 i, blk;
+	int n, te, kind, burn, cook, count, invCount;
+	int id, cnt, dmg, slots;
+	IVec3 tpos;
+	float fv[3];
+
+	cur = buffer;
+	cur = Nbt_WriteDict(cur, "MinecraftLevel");
+
+	cur = Nbt_WriteDict(cur, "About");
+	{
+		static const cc_string author = String_FromConst("ClassiCube");
+		cur = Nbt_WriteString(cur, "Author", &author);
+		cur = Nbt_WriteString(cur, "Name",   &World.Name);
+		cur = Nbt_WriteInt64Zero(cur, "CreatedOn");
+	} *cur++ = NBT_END;
+
+	cur = Nbt_WriteDict(cur, "Environment");
+	{
+		cur = Nbt_WriteInt32 (cur, "CloudColor", MCLevel_PackRGB(IndevTest_BaseCloudsCol()));
+		cur = Nbt_WriteInt32 (cur, "SkyColor",   MCLevel_PackRGB(IndevTest_BaseSkyCol()));
+		cur = Nbt_WriteInt32 (cur, "FogColor",   MCLevel_PackRGB(IndevTest_BaseFogCol()));
+		cur = Nbt_WriteUInt8 (cur, "SkyBrightness", (cc_uint8)IndevTest_SkyBrightness());
+		cur = Nbt_WriteUInt16(cur, "CloudHeight", (cc_uint16)Env.CloudsHeight);
+		/* the pinned World.groundLevel/waterLevel/defaultFluid - the live
+		    env planes are the remapped OOB-horizon form, not the raw levels */
+		cur = Nbt_WriteUInt16(cur, "SurroundingGroundHeight", (cc_uint16)(cc_int16)IndevTest_SurroundGroundLevel());
+		cur = Nbt_WriteUInt16(cur, "SurroundingWaterHeight",  (cc_uint16)(cc_int16)IndevTest_SurroundWaterLevel());
+		cur = Nbt_WriteUInt8 (cur, "SurroundingGroundType", 2 /* grass - genuine writes grass always */);
+		cur = Nbt_WriteUInt8 (cur, "SurroundingWaterType",
+				IndevTest_BlockToIndev((BlockRaw)IndevTest_SurroundFluid()));
+		cur = Nbt_WriteUInt16(cur, "TimeOfDay", (cc_uint16)IndevTest_WorldTime());
+	} *cur++ = NBT_END;
+
+	cur = Nbt_WriteDict(cur, "Map");
+	{
+		cur = Nbt_WriteUInt16(cur, "Width",  World.Width);
+		cur = Nbt_WriteUInt16(cur, "Length", World.Length);
+		cur = Nbt_WriteUInt16(cur, "Height", World.Height);
+		cur = Nbt_WriteList  (cur, "Spawn", NBT_I16, 3);
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.x); cur += 2;
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.y); cur += 2;
+		Mem_WriteU16_BE(cur, (cc_uint16)p->Base.Position.z); cur += 2;
+		cur = Nbt_WriteArray(cur, "Blocks", World.Volume);
+	}
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+	/* blocks, remapped to genuine Indev ids in chunks */
+	for (i = 0; i < World.Volume; i += n) {
+		n = min(World.Volume - i, sizeof(chunk));
+		for (blk = 0; blk < (cc_uint32)n; blk++) {
+			chunk[blk] = IndevTest_BlockToIndev(World.Blocks[i + blk]);
+		}
+		if ((res = Stream_Write(stream, chunk, n))) return res;
+	}
+
+	/* Data array: metadata high nibble | light low nibble (full light). */
+	/*  Containers carry their facing metadata (2-5); torches standing (5). */
+	cur = buffer;
+	cur = Nbt_WriteArray(cur, "Data", World.Volume);
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+	for (i = 0; i < World.Volume; i += n) {
+		n = min(World.Volume - i, sizeof(chunk));
+		for (blk = 0; blk < (cc_uint32)n; blk++) {
+			BlockRaw b = World.Blocks[i + blk];
+			cc_uint8  d = 0x0F;
+			if (IndevTest_Enabled) d |= (cc_uint8)(IndevTest_BlockDataMetaAt((int)(i + blk), b) << 4);
+			chunk[blk] = d;
+		}
+		if ((res = Stream_Write(stream, chunk, n))) return res;
+	}
+	cur = buffer;
+	*cur++ = NBT_END; /* close Map */
+
+	/* Entities: the LocalPlayer plus every live mob and item drop */
+	count = 0;
+	if (SurvivalTest_Enabled) {
+		int mt, mh; float myaw; Vec3 mp;
+		count = 1;
+		for (n = SurvivalTest_MobNext(-1, &mt, &mp, &myaw, &mh); n >= 0;
+			 n = SurvivalTest_MobNext(n,  &mt, &mp, &myaw, &mh)) count++;
+		for (n = SurvivalTest_DropNext(-1, &mp, &mt, &mh); n >= 0;
+			 n = SurvivalTest_DropNext(n,  &mp, &mt, &mh)) count++;
+		{
+			IVec3 pt; int pd; const char* pm;
+			for (n = SurvivalTest_PaintingNext(-1, &pt, &pd, &pm, &mp); n >= 0;
+				 n = SurvivalTest_PaintingNext(n,  &pt, &pd, &pm, &mp)) count++;
+		}
+	}
+	cur = Nbt_WriteList(cur, "Entities", NBT_DICT, count);
+	if (SurvivalTest_Enabled) {
+		static const cc_string localPlayer = String_FromConst("LocalPlayer");
+		invCount = 0;
+		for (n = 0; n < SURVIVAL_INV_SLOTS; n++) {
+			if (SurvivalTest_SlotCount(n) > 0) invCount++;
+		}
+		for (n = 0; n < SURVIVAL_ARMOR_SLOTS; n++) {
+			if (SurvivalTest_ArmorCount(n) > 0) invCount++;
+		}
+
+		cur = Nbt_WriteString(cur, "id", &localPlayer);
+		fv[0] = p->Base.Position.x; fv[1] = p->Base.Position.y + 1.62f; fv[2] = p->Base.Position.z;
+		cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+		fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+		cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+		fv[0] = p->Base.Yaw; fv[1] = p->Base.Pitch;
+		cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+		cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+		cur = Nbt_WriteUInt16(cur, "Fire", 0);
+		cur = Nbt_WriteUInt16(cur, "Air",  300);
+		cur = Nbt_WriteUInt16(cur, "Health", (cc_uint16)SurvivalTest_Health);
+		cur = Nbt_WriteUInt16(cur, "HurtTime", 0);
+		cur = Nbt_WriteUInt16(cur, "DeathTime", 0);
+		cur = Nbt_WriteUInt16(cur, "AttackTime", 0);
+		cur = Nbt_WriteInt32 (cur, "Score", SurvivalTest_Score());
+		cur = Nbt_WriteList  (cur, "Inventory", NBT_DICT, invCount);
+		if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+		cur = buffer;
+		for (n = 0; n < SURVIVAL_INV_SLOTS; n++) {
+			if (SurvivalTest_SlotCount(n) <= 0) continue;
+			cur = MCLevel_WriteItem(cur, n, SurvivalTest_SlotId(n),
+					SurvivalTest_SlotCount(n), SurvivalTest_SlotDamage(n));
+		}
+		/* worn armor uses the genuine Slot 100+index numbering */
+		for (n = 0; n < SURVIVAL_ARMOR_SLOTS; n++) {
+			if (SurvivalTest_ArmorCount(n) <= 0) continue;
+			cur = MCLevel_WriteItem(cur, 100 + n, SurvivalTest_ArmorId(n),
+					SurvivalTest_ArmorCount(n), SurvivalTest_ArmorDamage(n));
+		}
+		*cur++ = NBT_END; /* close player compound */
+		if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+		/* live mobs: id/Pos/Rotation/Health per the genuine writeToNBT set */
+		{
+			static const char* const mobNames[] = {
+				"Zombie", "Skeleton", "Pig", "Creeper", "Spider", "Sheep"
+			};
+			int mt, mh; float myaw; Vec3 mp;
+			for (n = SurvivalTest_MobNext(-1, &mt, &mp, &myaw, &mh); n >= 0;
+				 n = SurvivalTest_MobNext(n,  &mt, &mp, &myaw, &mh)) {
+				cc_string mobId;
+				if (mt < 0 || mt >= Array_Elems(mobNames)) continue;
+				mobId = String_FromReadonly(mobNames[mt]);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &mobId);
+				fv[0] = mp.x; fv[1] = mp.y; fv[2] = mp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = myaw; fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt16(cur, "Health", (cc_uint16)mh);
+				cur = Nbt_WriteUInt16(cur, "HurtTime", 0);
+				cur = Nbt_WriteUInt16(cur, "DeathTime", 0);
+				cur = Nbt_WriteUInt16(cur, "AttackTime", 0);
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+
+		/* item drops: "Item" entities with the ItemStack payload */
+		{
+			static const cc_string itemName = String_FromConst("Item");
+			int did, dcount; Vec3 dp;
+			for (n = SurvivalTest_DropNext(-1, &dp, &did, &dcount); n >= 0;
+				 n = SurvivalTest_DropNext(n,  &dp, &did, &dcount)) {
+				int outId = did;
+				if (outId > 0 && outId < 256) outId = IndevTest_BlockToIndev((BlockRaw)outId);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &itemName);
+				fv[0] = dp.x; fv[1] = dp.y; fv[2] = dp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt16(cur, "Health", 5);
+				cur = Nbt_WriteUInt16(cur, "Age", 0);
+				cur = Nbt_WriteDict  (cur, "Item");
+				{
+					cur = Nbt_WriteUInt16(cur, "id",    (cc_uint16)outId);
+					cur = Nbt_WriteUInt8 (cur, "Count", (cc_uint8)dcount);
+					cur = Nbt_WriteUInt16(cur, "Damage", 0);
+				} *cur++ = NBT_END;
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+
+		/* paintings: genuine EntityPainting.writeEntityToNBT */
+		{
+			static const cc_string paintingName = String_FromConst("Painting");
+			IVec3 pt; int pd; const char* pm; Vec3 pp;
+			for (n = SurvivalTest_PaintingNext(-1, &pt, &pd, &pm, &pp); n >= 0;
+				 n = SurvivalTest_PaintingNext(n,  &pt, &pd, &pm, &pp)) {
+				cc_string motive = String_FromReadonly(pm);
+
+				cur = buffer;
+				cur = Nbt_WriteString(cur, "id", &paintingName);
+				fv[0] = pp.x; fv[1] = pp.y; fv[2] = pp.z;
+				cur = MCLevel_WriteFloatList(cur, "Pos", fv, 3);
+				fv[0] = 0.0f; fv[1] = 0.0f; fv[2] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Motion", fv, 3);
+				fv[0] = (float)(pd * 90); fv[1] = 0.0f;
+				cur = MCLevel_WriteFloatList(cur, "Rotation", fv, 2);
+				cur = Nbt_WriteFloat (cur, "FallDistance", 0.0f);
+				cur = Nbt_WriteUInt16(cur, "Fire", 0);
+				cur = Nbt_WriteUInt16(cur, "Air",  300);
+				cur = Nbt_WriteUInt8 (cur, "Dir",  (cc_uint8)pd);
+				cur = Nbt_WriteString(cur, "Motive", &motive);
+				cur = Nbt_WriteInt32 (cur, "TileX", pt.x);
+				cur = Nbt_WriteInt32 (cur, "TileY", pt.y);
+				cur = Nbt_WriteInt32 (cur, "TileZ", pt.z);
+				*cur++ = NBT_END;
+				if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+			}
+		}
+		cur = buffer;
+	}
+
+	/* TileEntities: chests + furnaces with their contents. EVERY container */
+	/*  block needs an entry - even never-opened ones (whose tile entity is */
+	/*  created lazily and so isn't in the pool): genuine Indev NPE-crashes */
+	/*  when opening a chest block that has no tile entity behind it. */
+	count = 0;
+	if (IndevTest_Enabled) {
+		for (te = IndevTest_TENext(-1); te >= 0; te = IndevTest_TENext(te)) count++;
+		for (i = 0; i < World.Volume; i++) {
+			if (!IndevTest_IsContainerBlock(World.Blocks[i])) continue;
+			World_Unpack(i, blk, n, id); /* x=blk (unused vars reused) */
+			if (!IndevTest_HasTE(blk, n, id)) count++;
+		}
+	}
+	cur = Nbt_WriteList(cur, "TileEntities", NBT_DICT, count);
+	if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+
+	if (IndevTest_Enabled) {
+		static const cc_string chestId = String_FromConst("Chest");
+		static const cc_string furnId  = String_FromConst("Furnace");
+
+		for (te = IndevTest_TENext(-1); te >= 0; te = IndevTest_TENext(te)) {
+			IndevTest_TEInfo(te, &kind, &tpos, &burn, &cook);
+			slots = kind == INDEV_CONTAINER_FURNACE ? 3 : SURVIVAL_CONTAINER_SLOTS;
+
+			invCount = 0;
+			for (n = 0; n < slots; n++) {
+				IndevTest_TEItem(te, n, &id, &cnt, &dmg);
+				if (cnt > 0) invCount++;
+			}
+
+			cur = buffer;
+			cur = Nbt_WriteInt32(cur, "Pos", tpos.x + (tpos.y << 10) + (tpos.z << 20));
+			if (kind == INDEV_CONTAINER_FURNACE) {
+				cur = Nbt_WriteString(cur, "id", &furnId);
+				cur = Nbt_WriteUInt16(cur, "BurnTime", (cc_uint16)burn);
+				cur = Nbt_WriteUInt16(cur, "CookTime", (cc_uint16)cook);
+			} else {
+				cur = Nbt_WriteString(cur, "id", &chestId);
+			}
+			cur = Nbt_WriteList(cur, "Items", NBT_DICT, invCount);
+			for (n = 0; n < slots; n++) {
+				IndevTest_TEItem(te, n, &id, &cnt, &dmg);
+				if (cnt <= 0) continue;
+				cur = MCLevel_WriteItem(cur, n, id, cnt, dmg);
+			}
+			*cur++ = NBT_END; /* close tile entity compound */
+			if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+		}
+
+		/* Empty tile entities for container blocks never opened in-game */
+		for (i = 0; i < World.Volume; i++) {
+			int tx, ty, tz;
+			BlockRaw b = World.Blocks[i];
+			if (!IndevTest_IsContainerBlock(b)) continue;
+			World_Unpack(i, tx, ty, tz);
+			if (IndevTest_HasTE(tx, ty, tz)) continue;
+
+			cur = buffer;
+			cur = Nbt_WriteInt32(cur, "Pos", tx + (ty << 10) + (tz << 20));
+			if (IndevTest_CanonicalBlock(b) == 54) { /* chest (genuine id) */
+				cur = Nbt_WriteString(cur, "id", &chestId);
+			} else {
+				cur = Nbt_WriteString(cur, "id", &furnId);
+				cur = Nbt_WriteUInt16(cur, "BurnTime", 0);
+				cur = Nbt_WriteUInt16(cur, "CookTime", 0);
+			}
+			cur = Nbt_WriteList(cur, "Items", NBT_DICT, 0);
+			*cur++ = NBT_END; /* close tile entity compound */
+			if ((res = Stream_Write(stream, buffer, (int)(cur - buffer)))) return res;
+		}
+		cur = buffer;
+	}
+
+	*cur++ = NBT_END; /* close MinecraftLevel */
+	return Stream_Write(stream, buffer, (int)(cur - buffer));
 }
 
 

@@ -54,6 +54,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_CHAT_SCALE "gui-chatscale"
 #define OPT_CHAT_AUTO_SCALE "gui-autoscalechat"
 #define OPT_CROSSHAIR_SCALE "gui-crosshairscale"
+#define OPT_INDEV_GUI_SCALE "gui-indevscale"
 #define OPT_SHOW_FPS "gui-showfps"
 #define OPT_FONT_NAME "gui-fontname"
 #define OPT_BLACK_TEXT "gui-blacktextshadows"
@@ -84,6 +85,17 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_RAW_INPUT "win-raw-input"
 #define OPT_DPI_SCALING "win-dpi-scaling"
 #define OPT_GAME_VERSION "game-version"
+#define OPT_SURVIVAL_MODE "survival-mode"
+#define OPT_SURVIVAL_ENHANCED "survival-enhanced"
+#define OPT_INDEV_CREATIVE "indev-creative"
+#define OPT_INDEV_MODE "indev-mode"
+/* On servers WITHOUT the survival plugin: open the survival inventory screen
+/*  (as a local block stash) on its bind, instead of only the classic picker. */
+#define OPT_PLAIN_SURV_INVENTORY "survival-plain-inventory"
+/* THE authoritative gamemode key (0 off, 1 c0.30 survival, 2 indev). The two
+/*  legacy booleans above are only written for downgrade compat and only read
+/*  as a one-time migration when this key is absent. */
+#define OPT_SURVIVAL_GAMEMODE "survival-gamemode"
 #define OPT_INV_SCROLLBAR_SCALE "inv-scrollbar-scale"
 #define OPT_ANAGLYPH3D "anaglyph-3d"
 

@@ -98,7 +98,8 @@ static struct CpeExt
 	notifyAction_Ext    = { "NotifyAction", 1 },
 	toggleBlockList_Ext = { "ToggleBlockList", 1 },
 	extTextures_Ext     = { "ExtendedTextures", 1 },
-	extBlocks_Ext       = { "ExtendedBlocks", 1 };
+	extBlocks_Ext       = { "ExtendedBlocks", 1 },
+	survival_Ext        = { "SurvivalTest", 3 };
 
 static struct CpeExt* cpe_clientExtensions[] = {
 	&clickDist_Ext, &customBlocks_Ext, &heldBlock_Ext, &emoteFix_Ext, &textHotKey_Ext, &extPlayerList_Ext,
@@ -107,7 +108,7 @@ static struct CpeExt* cpe_clientExtensions[] = {
 	&blockDefsExt_Ext, &bulkBlockUpdate_Ext, &textColors_Ext, &envMapAspect_Ext, &entityProperty_Ext, &extEntityPos_Ext,
 	&twoWayPing_Ext, &invOrder_Ext, &instantMOTD_Ext, &fastMap_Ext, &setHotbar_Ext, &setSpawnpoint_Ext, &velControl_Ext,
 	&customParticles_Ext, &pluginMessages_Ext, &extTeleport_Ext, &lightingMode_Ext, &cinematicGui_Ext, &notifyAction_Ext,
-	&toggleBlockList_Ext,
+	&toggleBlockList_Ext, &survival_Ext,
 #ifdef CUSTOM_MODELS
 	&customModels_Ext,
 #endif
@@ -1045,6 +1046,9 @@ static void CPE_ExtEntry(cc_uint8* data) {
 		}
 	} else if (ext == &notifyAction_Ext) {
 		Server.SupportsNotifyAction = true;
+	} else if (ext == &survival_Ext) {
+		Server.SupportsSurvival   = true;
+		Server.SurvivalExtVersion = ext->serverVersion;
 	}
 #ifdef EXTENDED_TEXTURES
 	else if (ext == &extTextures_Ext) {

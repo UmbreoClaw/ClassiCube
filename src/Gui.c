@@ -1,4 +1,5 @@
 #include "Gui.h"
+#include "IndevTest.h"
 #include "String_.h"
 #include "Window.h"
 #include "Game.h"
@@ -44,6 +45,13 @@ static CC_NOINLINE int GetWindowScale(void) {
 #ifndef CC_BUILD_DUALSCREEN
 	}
 #endif
+	if (IndevTest_Enabled && Gui.IndevGuiScale) {
+		/* genuine ScaledResolution: the LARGEST integer scale that keeps a
+		    >= 320x240 virtual screen - exactly double the 640x480 step of
+		    the engine formula, so 720p renders 3x and 1080p 4x */
+		int s = (int)(min(widthScale * 2, heightScale * 2));
+		return s < 1 ? 1 : s;
+	}
 	return 1 + (int)(min(widthScale, heightScale));
 }
 
@@ -70,8 +78,26 @@ float Gui_GetCrosshairScale(void) {
 }
 
 
-void Gui_MakeTitleFont(struct FontDesc* font) { Font_Make(font, 16, FONT_FLAGS_BOLD); }
-void Gui_MakeBodyFont(struct FontDesc* font)  { Font_Make(font, 16, FONT_FLAGS_NONE); }
+int Gui_GetIndevMenuScale(void) {
+	int scale;
+	if (!IndevTest_Enabled || !Gui.IndevGuiScale) return 0;
+	if (Gui_TouchUI)                              return 0;
+	/* the same formula the survival HUD and Game Over screen use */
+	scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	return scale < 1 ? 1 : scale;
+}
+
+void Gui_MakeTitleFont(struct FontDesc* font) {
+	int s = Gui_GetIndevMenuScale();
+	/* genuine Indev menus draw everything in the 8-GUI-px font */
+	if (s) { Font_Make(font, 8 * s, FONT_FLAGS_BOLD); return; }
+	Font_Make(font, 16, FONT_FLAGS_BOLD);
+}
+void Gui_MakeBodyFont(struct FontDesc* font) {
+	int s = Gui_GetIndevMenuScale();
+	if (s) { Font_Make(font, 8 * s, FONT_FLAGS_NONE); return; }
+	Font_Make(font, 16, FONT_FLAGS_NONE);
+}
 
 int Gui_CalcPos(cc_uint8 anchor, int offset, int size, int axisLen) {
 	if (anchor == ANCHOR_MIN) return offset;
@@ -124,6 +150,7 @@ static void LoadOptions(void) {
 	Gui.ClassicChat      = Options_GetBool(OPT_CLASSIC_CHAT,      false) || Game_PureClassic;
 	Gui.ClassicInventory = Options_GetBool(OPT_CLASSIC_INVENTORY, false) || Game_ClassicMode;
 	Gui.ShowFPS          = Options_GetBool(OPT_SHOW_FPS, true);
+	Gui.IndevGuiScale    = Options_GetBool(OPT_INDEV_GUI_SCALE, true);
 	
 	Gui.RawInventoryScale = Options_GetFloat(OPT_INVENTORY_SCALE, 0.25f, 5.0f, 1.0f);
 #if defined CC_BUILD_SYMBIAN_3 || defined CC_BUILD_SYMBIAN_S60V5
@@ -456,11 +483,25 @@ void TextAtlas_AddInt(struct TextAtlas* atlas, int value, struct VertexTextured*
 /*########################################################################################################################*
 *-------------------------------------------------------Widget base-------------------------------------------------------*
 *#########################################################################################################################*/
+void Widget_SetIndevScaled(void* widget) {
+	((struct Widget*)widget)->flags |= WIDGET_FLAG_INDEV_SCALE;
+}
+
 void Widget_SetLocation(void* widget, cc_uint8 horAnchor, cc_uint8 verAnchor, int xOffset, int yOffset) {
 	struct Widget* w = (struct Widget*)widget;
+	int s;
 	w->horAnchor = horAnchor; w->verAnchor = verAnchor;
-	w->xOffset = Display_ScaleX(xOffset);
-	w->yOffset = Display_ScaleY(yOffset);
+
+	/* Indev-scaled menu widgets: the ClassiCube menu grid is authored at 2x
+	    classic GUI px, so offsets map to genuine GUI px * scale via s/2 -
+	    keeping row spacing proportional to the resized buttons. */
+	if ((w->flags & WIDGET_FLAG_INDEV_SCALE) && (s = Gui_GetIndevMenuScale())) {
+		w->xOffset = (xOffset * s) / 2;
+		w->yOffset = (yOffset * s) / 2;
+	} else {
+		w->xOffset = Display_ScaleX(xOffset);
+		w->yOffset = Display_ScaleY(yOffset);
+	}
 	if (w->VTABLE) Widget_Layout(w);
 }
 

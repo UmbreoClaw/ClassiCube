@@ -255,10 +255,23 @@ void Gfx_SetFaceCulling(cc_bool enabled) {
 	if (enabled) { _glEnable(GL_CULL_FACE); } else { _glDisable(GL_CULL_FACE); }
 }
 
-static void SetAlphaBlend(cc_bool enabled) { 
+static void SetAlphaBlend(cc_bool enabled) {
 	if (enabled) { _glEnable(GL_BLEND); } else { _glDisable(GL_BLEND); }
 }
 void Gfx_SetAlphaArgBlend(cc_bool enabled) { }
+
+void Gfx_SetAlphaBlendingAdditive(cc_bool enabled) {
+	Gfx_SetAlphaBlending(enabled);
+	/* dst = dst + src * alpha, instead of the usual dst = dst*(1-alpha) + src*alpha */
+	_glBlendFunc(GL_SRC_ALPHA, enabled ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+}
+
+void Gfx_SetInvertedBlending(cc_bool enabled) {
+	/* dst = src*(1-dst) + dst*(1-src): the genuine Indev crosshair invert. */
+	/* Function swap ONLY - the blending enable state belongs to the caller */
+	if (enabled) { _glBlendFunc(GL_ONE_MINUS_DST_COLOR, GL_ONE_MINUS_SRC_COLOR); }
+	else         { _glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); }
+}
 
 static void GL_ClearColor(PackedCol color) {
 	_glClearColor(PackedCol_R(color) / 255.0f, PackedCol_G(color) / 255.0f,
@@ -433,7 +446,11 @@ void Gfx_OnWindowResize(void) {
 }
 
 void Gfx_SetViewport(int x, int y, int w, int h) {
-	_glViewport(x, y, w, h);
+	/* Gfx viewport coordinates use a top-left origin (matching the scissor */
+	/*  region - see Graphics.h - and the Direct3D backends), but glViewport */
+	/*  uses a bottom-left origin, so the Y coordinate must be flipped - the */
+	/*  same way Gfx_SetScissor below flips it for glScissor. */
+	_glViewport(x, Game.Height - h - y, w, h);
 }
 
 void Gfx_SetScissor(int x, int y, int w, int h) {

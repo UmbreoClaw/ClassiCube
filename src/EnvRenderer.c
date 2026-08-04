@@ -1,4 +1,5 @@
 #include "EnvRenderer.h"
+#include "IndevTest.h"
 #include "String_.h"
 #include "ExtMath.h"
 #include "World.h"
@@ -279,6 +280,12 @@ void EnvRenderer_RenderSky(void) {
 	Gfx_SetVertexFormat(VERTEX_FORMAT_COLOURED);
 	Gfx_BindVb(sky_vb);
 
+	/* Indev: genuine renders the whole sky with glDepthMask(false). The
+	    ceiling sits only ~8 blocks above the camera, so letting it write
+	    depth would reject the Indev sun/moon/star quads (orbiting at
+	    camera +-100) across the entire upper hemisphere. */
+	if (IndevTest_Enabled) Gfx_SetDepthWrite(false);
+
 	if (skyY == normY) {
 		Gfx_DrawVb_IndexedTris(sky_vertices);
 	} else {
@@ -292,6 +299,8 @@ void EnvRenderer_RenderSky(void) {
 		Gfx_DrawVb_IndexedTris(sky_vertices);
 		Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	}
+
+	if (IndevTest_Enabled) Gfx_SetDepthWrite(true);
 }
 
 /*########################################################################################################################*

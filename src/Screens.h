@@ -28,6 +28,15 @@ void Screen_NullUpdate(void* screen, float delta);
 
 void InventoryScreen_Show(void);
 void InventoryScreen_Hide(void);
+/* Opens the survival inventory screen (only meaningful when SurvivalTest_Enabled). */
+void SurvivalInvScreen_Show(void);
+/* Closes the survival inventory/container screen WITHOUT sending the
+    CONT_CLOSE intent - used when the SERVER force-closes the view (the
+    container block was destroyed under the open screen). */
+void SurvivalInvScreen_ForceClose(void);
+/* Shows the Survival Test "Game over!" screen (permadeath, no respawn). */
+void GameOverScreen_Show(void);
+void GameOverScreen_Hide(void);
 void HUDScreen_Show(void);
 void LoadingScreen_Show(const cc_string* title, const cc_string* message);
 void GeneratingScreen_Show(void);
@@ -40,6 +49,9 @@ void TouchScreen_Show(void);
 #endif
 
 int HUDScreen_LayoutHotbar(void);
+/* Sets the pop animation on a hotbar slot (Inventory.popTime[slot] = time).
+   time=5 is a full-duration pop; 0 clears.  No-op if HUD is not yet active. */
+void HUDScreen_SetSlotPop(int slot, float time);
 void TabListOverlay_Show(cc_bool staysOpen);
 
 /* Opens chat input for the HUD with the given initial text. */

@@ -77,6 +77,12 @@ struct HotbarWidget {
 	int verticesCount;
 	int touchId[HOTBAR_MAX_INDEX];
 	float touchTime[HOTBAR_MAX_INDEX];
+	/* Per-slot pop animation timer (Inventory.popTime[]).  Set to 5 on pickup,
+	   counts down to 0 at 20 ticks/sec.  0 = no animation. */
+	float slotPopTime[INVENTORY_BLOCKS_PER_HOTBAR];
+	/* Pop animation style: false = c0.30 HUDScreen bounce, true = Indev
+	   GuiIngame squash. Set alongside slotPopTime by HUDScreen_SetSlotPop. */
+	cc_bool popSquash;
 };
 #define HOTBAR_MAX_VERTICES (4 + 4 + HOTBAR_CORE_VERTICES)
 

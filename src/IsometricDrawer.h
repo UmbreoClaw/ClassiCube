@@ -15,6 +15,8 @@ struct VertexTextured;
 void IsometricDrawer_BeginBatch(struct VertexTextured* vertices, int* state);
 /* Buffers the vertices needed to draw the given block at the given position */
 void IsometricDrawer_AddBatch(BlockID block, float size, float x, float y);
+/* Like AddBatch, but scaled asymmetrically about (x, y) - hotbar pop anims. */
+void IsometricDrawer_AddBatchScaled(BlockID block, float size, float scaleX, float scaleY, float x, float y);
 /* Returns the number of buffered vertices */
 int  IsometricDrawer_EndBatch(void);
 /* Draws the buffered vertices */

@@ -67,8 +67,18 @@ static int ClassicLighting_CalcHeightAt(int x, int maxY, int z, int hIndex) {
 }
 
 int ClassicLighting_GetLightHeight(int x, int z) {
-	int hIndex = Lighting_Pack(x, z);
-	int lightH = classic_heightmap[hIndex];
+	int hIndex, lightH;
+	/* A light query can race ahead of the heightmap being allocated - most
+	    notably an Indev world's post-load MobSpawner darkness check, which
+	    calls IndevTest_LightLevel before/around the lighting AllocState.
+	    Genuine Indev has light computed by gen time, so the faithful default
+	    for "not computed yet" is FULL DAYLIGHT (an all-sky column, sentinel
+	    -10): surface spawns behave, monsters don't flood a lit map, and no
+	    caller dereferences a NULL heightmap. Normal frames never hit this. */
+	if (!classic_heightmap) return -10;
+
+	hIndex = Lighting_Pack(x, z);
+	lightH = classic_heightmap[hIndex];
 	return lightH == HEIGHT_UNCALCULATED ? ClassicLighting_CalcHeightAt(x, World.Height - 1, z, hIndex) : lightH;
 }
 

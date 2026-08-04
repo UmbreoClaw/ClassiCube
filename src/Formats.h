@@ -38,6 +38,8 @@ cc_result Schematic_Save(struct Stream* stream);
 /* Exports a world to a .dat Classic map file */
 /* Used by MineCraft Classic */
 cc_result Dat_Save(struct Stream* stream);
+/* Exports a world to Minecraft Indev .mclevel format (survival-aware) */
+cc_result MCLevel_Save(struct Stream* stream);
 
 CC_END_HEADER
 #endif

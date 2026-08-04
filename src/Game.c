@@ -41,6 +41,10 @@
 #include "SystemFonts.h"
 #include "Formats.h"
 #include "EntityRenderers.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
+#include "SurvivalNet.h"
+#include "IndevFire.h"
 
 struct _GameData Game;
 static cc_uint64 frameStart;
@@ -227,16 +231,30 @@ void Game_UpdateBlock(int x, int y, int z, BlockID block) {
 	}
 	Lighting.OnBlockChanged(x, y, z, old, block);
 	MapRenderer_OnBlockChanged(x, y, z, block);
+
+	/* Indev setBlockWithNotify: EVERY mutation (player, physics, fire,
+	    farming, explosions) notifies neighbours so torches/crops/farmland/
+	    fire/tile entities re-validate - see IndevTest_BlockUpdated. */
+	if (IndevTest_Enabled && old != block) IndevTest_BlockUpdated(x, y, z, old, block);
 }
 
 void Game_ChangeBlock(int x, int y, int z, BlockID block) {
 	BlockID old = World_GetBlock(x, y, z);
+	/* Indev directional variants (wall torches) must be resolved BEFORE the
+	    send: the classic place packet carries no clicked face, so a canonical
+	    torch id makes the server neighbour-scan a mount - always the same
+	    wall of a tunnel, overriding the face the player actually clicked. */
+	block = IndevTest_PlacedVariant(x, y, z, block);
 	Game_UpdateBlock(x, y, z, block);
 	Server.SendBlock(x, y, z, old, block);
 }
 
 cc_bool Game_CanPick(BlockID block) {
 	if (Blocks.Draw[block] == DRAW_GAS)    return false;
+	/* BlockFire.isCollidable() is false: the pick ray passes straight */
+	/*  through fire (no selection box, can't be punched out - left-clicking */
+	/*  its supporting face extinguishes it instead, see IndevFire.c) */
+	if (IndevFire_IsFire(block))           return false;
 	if (Blocks.Draw[block] == DRAW_SPRITE) return true;
 	return Blocks.Collide[block] != COLLIDE_LIQUID || Game_BreakableLiquids;
 }
@@ -440,6 +458,9 @@ static void Game_Load(void) {
 	Game_AddComponent(&AxisLinesRenderer_Component);
 	Game_AddComponent(&Formats_Component);
 	Game_AddComponent(&EntityRenderers_Component);
+	Game_AddComponent(&IndevTest_Component);
+	Game_AddComponent(&SurvivalTest_Component);
+	Game_AddComponent(&SurvivalNet_Component);
 
 	Plugins_LoadAll();
 	for (comp = comps_head; comp; comp = comp->next) {
@@ -492,6 +513,7 @@ static void Render3DFrame(float delta, float t) {
 	Vec3 pos;
 
 	Camera.Active->GetView(&Gfx.View);
+	SurvivalTest_ApplyHurtTilt(&Gfx.View, t);
 	/*Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
 	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
 	Frustum_CalcPlanes(&Gfx.Projection, &Gfx.View);*/
@@ -501,10 +523,15 @@ static void Render3DFrame(float delta, float t) {
 	if (EnvRenderer_ShouldRenderSkybox()) EnvRenderer_RenderSkybox();
 	AxisLinesRenderer_Render();
 	Entities_RenderModels(delta, t);
+	SurvivalTest_RenderDrops(delta, t);
+	SurvivalTest_RenderMobs(delta, t);
+	SurvivalTest_RenderArrows(delta, t);
+	SurvivalTest_RenderTnt(delta, t);
 	EntityNames_Render();
 
 	Particles_Render(t);
 	EnvRenderer_RenderSky();
+	IndevTest_RenderSky(); /* Indev sun/moon/stars, between sky and clouds */
 	EnvRenderer_RenderClouds();
 
 	MapRenderer_Update(delta);
@@ -515,6 +542,7 @@ static void Render3DFrame(float delta, float t) {
 	if (Game_SelectedPos.valid && !Game_HideGui) {
 		SelOutlineRenderer_Render(&Game_SelectedPos, true);
 	}
+	SurvivalTest_RenderCracks(delta, t);
 
 	/* Render water over translucent blocks when under the water outside the map for proper alpha blending */
 	pos = Camera.CurrentPos;

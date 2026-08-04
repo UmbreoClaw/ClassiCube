@@ -9,6 +9,10 @@
 #include "Entity.h"
 #include "Model.h"
 #include "Options.h"
+#include "SurvivalTest.h"
+#include "IndevFire.h"
+#include "TexturePack.h"
+#include "IndevTest.h"
 
 cc_bool HeldBlockRenderer_Show;
 #if CC_BUILD_FPU_MODE >= CC_FPU_MODE_REDUCED
@@ -21,6 +25,53 @@ static float held_swingY;
 static float held_time, held_period = 0.25f;
 static BlockID held_lastBlock;
 
+/* ItemRenderer.updateEquippedItem (Indev): switching the selected stack
+    dips the held item down 0.6 and back up at a constant 0.4/tick, and
+    the OLD item keeps rendering until the dip passes below 0.1 - only
+    then does the displayed item swap to the new one. Replaces the
+    engine's sine switch animation while Indev mode is on. */
+static float held_equipProg = 1.0f, held_prevEquipProg = 1.0f;
+static float held_equipAcc;
+static int   held_equipDispKey = -1; /* (hotbar index << 16) | slot id */
+
+static int HeldEquip_CurKey(void) {
+	return (Inventory.SelectedIndex << 16) | SurvivalTest_SlotId(Inventory.SelectedIndex);
+}
+
+/* The id whose held form is currently DRAWN (lags the selection while the
+    equip dip plays out). 0 = empty hand. */
+static int HeldEquip_DisplayedId(void) {
+	if (!IndevTest_Enabled || held_equipDispKey < 0)
+		return SurvivalTest_SlotId(Inventory.SelectedIndex);
+	return held_equipDispKey & 0xFFFF;
+}
+
+static void HeldEquip_Tick(void) {
+	float target, d;
+	held_prevEquipProg = held_equipProg;
+
+	target = HeldEquip_CurKey() == held_equipDispKey ? 1.0f : 0.0f;
+	d = target - held_equipProg;
+	if (d < -0.4f) d = -0.4f;
+	if (d >  0.4f) d =  0.4f;
+	held_equipProg += d;
+
+	if (held_equipProg < 0.1f) held_equipDispKey = HeldEquip_CurKey();
+}
+
+static void HeldEquip_Update(float delta) {
+	if (!IndevTest_Enabled) return;
+	if (held_equipDispKey < 0) held_equipDispKey = HeldEquip_CurKey();
+
+	/* genuine updates once per 20Hz tick, rendering interpolates between
+	    the last two ticks - reproduce with a fixed-step accumulator */
+	held_equipAcc += delta;
+	while (held_equipAcc >= 1.0f / 20.0f) {
+		held_equipAcc -= 1.0f / 20.0f;
+		HeldEquip_Tick();
+	}
+}
+
 /* Since not using Entity_SetModel, which normally automatically does this */
 static void SetHeldModel(struct Model* model) {
 #ifdef CC_BUILD_CONSOLE
@@ -32,6 +83,146 @@ static void SetHeldModel(struct Model* model) {
 #endif
 }
 
+/*########################################################################################################################*
+*------------------------------------------Indev extruded held item (ItemRenderer)----------------------------------------*
+*#########################################################################################################################*/
+/* ItemRenderer.renderItemInFirstPerson's non-block branch: the item sprite
+    extruded 1/16 deep - front + back quads plus 16 strip quads along each
+    edge - baked with the genuine local transform chain (translate(-15/16,
+    -1/16, 0) -> rotZ 335 -> rotY 50 -> scale 1.5 -> translate(0,-0.3,0)),
+    then placed/animated by the SAME held-entity transform and swing/dig
+    animations the block-in-hand path uses. */
+static PackedCol HeldBlockRenderer_GetCol(struct Entity* entity);
+
+#define HELDITEM_QUADS (2 + 4 * 16)
+static struct VertexTextured helditem_verts[HELDITEM_QUADS * 4];
+static GfxResourceID helditem_vb;
+static int helditem_lastId = -1;
+static PackedCol helditem_lastCol;
+
+static void HeldItem_Vertex(struct VertexTextured* v, const struct Matrix* m,
+							float x, float y, float z, float u, float vv, PackedCol col) {
+	v->x = x * m->row1.x + y * m->row2.x + z * m->row3.x + m->row4.x;
+	v->y = x * m->row1.y + y * m->row2.y + z * m->row3.y + m->row4.y;
+	v->z = x * m->row1.z + y * m->row2.z + z * m->row3.z + m->row4.z;
+	v->Col = col; v->U = u; v->V = vv;
+}
+
+static void HeldItem_BuildMesh(TextureRec rec, PackedCol col) {
+	struct VertexTextured* v = helditem_verts;
+	struct Matrix m, r;
+	float x, u, y, vv, eu, ev;
+	int i;
+	/* verbatim genuine renderItemInFirstPerson mapping: model x=0 samples
+	    the icon's RIGHT edge (u2) and y=0 its BOTTOM row (v2). No sign
+	    adaptations anywhere any more - the whole transform chain below and
+	    in HeldItem_Render is now the genuine one applied in the genuine
+	    frame, so the mesh must be genuine too. */
+	float u1 = rec.u2, u2 = rec.u1, v1 = rec.v2, v2 = rec.v1;
+
+	/* genuine ItemRenderer's item-local chain, composed row-major in
+	    reverse GL order: T(-15/16,-1/16,0) <- RotZ 335 <- RotY 50 <-
+	    S(1.5) <- T(0,-0.3,0) <- S(0.4). The 0.4 scale is genuine's
+	    step just inside the swing rotations, so it lives at the end of
+	    the mesh-side chain and HeldItem_Render applies swing rotations,
+	    the 45-degree base yaw and the hand translate after it. */
+	Matrix_Translate(&m, -15.0f/16.0f, -1.0f/16.0f, 0.0f);
+	Matrix_RotateZ(&r, 335.0f * MATH_DEG2RAD);  Matrix_MulBy(&m, &r);
+	Matrix_RotateY(&r, 50.0f * MATH_DEG2RAD);   Matrix_MulBy(&m, &r);
+	Matrix_Scale(&r, 1.5f, 1.5f, 1.5f);         Matrix_MulBy(&m, &r);
+	Matrix_Translate(&r, 0.0f, -0.3f, 0.0f);    Matrix_MulBy(&m, &r);
+	Matrix_Scale(&r, 0.4f, 0.4f, 0.4f);         Matrix_MulBy(&m, &r);
+
+	eu = (rec.u2 - rec.u1) * (0.5f / 16.0f); /* the genuine 0.001953125 half-texel */
+	ev = (rec.v2 - rec.v1) * (0.5f / 16.0f);
+
+	#define HI_V(px, py, pz, uu, vvv) HeldItem_Vertex(v, &m, px, py, pz, uu, vvv, col); v++;
+	/* front (z = 0) and back (z = -1/16) faces */
+	HI_V(0,0,0, u1,v1) HI_V(1,0,0, u2,v1) HI_V(1,1,0, u2,v2) HI_V(0,1,0, u1,v2)
+	HI_V(0,1,-1.0f/16, u1,v2) HI_V(1,1,-1.0f/16, u2,v2) HI_V(1,0,-1.0f/16, u2,v1) HI_V(0,0,-1.0f/16, u1,v1)
+
+	for (i = 0; i < 16; i++) {
+		x = i / 16.0f;
+		u = u1 + (u2 - u1) * x - eu;
+		/* -X edge strips */
+		HI_V(x,0,-1.0f/16, u,v1) HI_V(x,0,0, u,v1) HI_V(x,1,0, u,v2) HI_V(x,1,-1.0f/16, u,v2)
+	}
+	for (i = 0; i < 16; i++) {
+		x = i / 16.0f + 1.0f/16.0f;
+		u = u1 + (u2 - u1) * (x - 1.0f/16.0f) - eu;
+		/* +X edge strips */
+		HI_V(x,1,-1.0f/16, u,v2) HI_V(x,1,0, u,v2) HI_V(x,0,0, u,v1) HI_V(x,0,-1.0f/16, u,v1)
+	}
+	for (i = 0; i < 16; i++) {
+		y  = i / 16.0f + 1.0f/16.0f;
+		vv = v1 + (v2 - v1) * (y - 1.0f/16.0f) - ev;
+		/* +Y edge strips */
+		HI_V(0,y,0, u1,vv) HI_V(1,y,0, u2,vv) HI_V(1,y,-1.0f/16, u2,vv) HI_V(0,y,-1.0f/16, u1,vv)
+	}
+	for (i = 0; i < 16; i++) {
+		y  = i / 16.0f;
+		vv = v1 + (v2 - v1) * y - ev;
+		/* -Y edge strips */
+		HI_V(1,y,0, u2,vv) HI_V(0,y,0, u1,vv) HI_V(0,y,-1.0f/16, u1,vv) HI_V(1,y,-1.0f/16, u2,vv)
+	}
+	#undef HI_V
+}
+
+static void HeldItem_Render(int heldId) {
+	struct Matrix m, r, final;
+	TextureRec rec;
+	PackedCol col;
+	float t, s4, s5;
+
+	if (!IndevTest_BindHeldTexture(heldId, &rec)) return;
+	col = HeldBlockRenderer_GetCol(&held_entity);
+
+	if (heldId != helditem_lastId || col != helditem_lastCol) {
+		HeldItem_BuildMesh(rec, col);
+		helditem_lastId  = heldId;
+		helditem_lastCol = col;
+	}
+	if (!helditem_vb) {
+		helditem_vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, HELDITEM_QUADS * 4);
+		if (!helditem_vb) return;
+	}
+
+	/* The genuine renderItemInFirstPerson outer chain, NOT the engine's
+	    held-block entity transform (whose model-yaw conventions mirror the
+	    sprite and flip every rotation - the source of the old -50/unflip
+	    workarounds). The held pass already renders in genuine's frame: an
+	    identity-orientation camera at the eye (SetMatrix) with the fixed
+	    70-degree projection, and held_entity.Position already carries the
+	    genuine hand anchor (0.56,-0.52,-0.72 via SetBaseOffset) plus the
+	    genuine swing translate / equip dip (DoAnimation). So all that is
+	    left is: [dig rotations] <- RotY 45 <- T(hand position). */
+	m = Matrix_Identity;
+	if (held_animating && held_breaking && !held_swinging) {
+		/* genuine swing rotations, GL order RotY(-20*sin(t*t*pi)),
+		    RotZ(-20*s5), RotX(-80*s5) - reversed here for row-major */
+		t  = held_time / held_period;
+		s4 = Math_SinF(t * t * MATH_PI);
+		s5 = Math_SinF(Math_SqrtF(t) * MATH_PI);
+		Matrix_RotateX(&r, -s5 * 80.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+		Matrix_RotateZ(&r, -s5 * 20.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+		Matrix_RotateY(&r, -s4 * 20.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	}
+	Matrix_RotateY(&r, 45.0f * MATH_DEG2RAD); Matrix_MulBy(&m, &r);
+	Matrix_Translate(&r, held_entity.Position.x, held_entity.Position.y, held_entity.Position.z);
+	Matrix_MulBy(&m, &r);
+	Matrix_Mul(&final, &m, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_VIEW, &final);
+
+	Gfx_SetAlphaTest(true);
+	Gfx_SetFaceCulling(false); /* thin shell; winding varies per strip */
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetDynamicVbData(helditem_vb, helditem_verts, HELDITEM_QUADS * 4);
+	Gfx_DrawVb_IndexedTris(HELDITEM_QUADS * 4);
+	Gfx_SetFaceCulling(true);
+
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+}
+
 static void HeldBlockRenderer_RenderModel(void) {
 	struct Model* model;
 
@@ -41,11 +232,43 @@ static void HeldBlockRenderer_RenderModel(void) {
 	/* TODO: Need to properly reallocate per model VB here */
 
 	if (Blocks.Draw[held_block] == DRAW_GAS) {
-		model = Entities.CurPlayer->Base.Model;
-		SetHeldModel(model);
-		Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
+		/* When survival holds an ITEM id, its sprite is drawn by SurvivalTest's */
+		/*  drop-sprite pass anchored in front of the camera (rendering it here */
+		/*  with raw quads proved unreliable across the held renderer's matrix/ */
+		/*  culling state) - skip the bare arm then, so the sprite reads as the */
+		/*  held item rather than floating beside an empty hand. The genuine */
+		/*  extruded ItemRenderer mesh + swing is a future port (back-burnered). */
+		int heldId = HeldEquip_DisplayedId();
+		cc_bool holdingItem = IndevTest_HeldIsExtruded(heldId);
+		if (holdingItem) {
+			/* Indev's first-person extruded item sprite, riding the same */
+			/*  swing/dig animations as the held block */
+			HeldItem_Render(heldId);
+			/* HeldItem_Render enables alpha test for its cutout mesh - it MUST
+			    be turned back off before the 2D pass, exactly like the bare-arm
+			    branch below. Leaking it discards every GUI pixel whose alpha is
+			    below the 0.5 test threshold on fixed-function backends (D3D9):
+			    the pause-menu dim gradient (alpha 105 top -> 162 bottom) lost
+			    its whole upper part whenever an item was held. */
+			Gfx_SetAlphaTest(false);
+		} else {
+			/* Bare arm - skipped when holding an item id (its sprite renders */
+			/*  in SurvivalTest's drop pass); must still fall through to the */
+			/*  depth/cull teardown below or the 2D HUD/menus get corrupted. */
+			model = Entities.CurPlayer->Base.Model;
+			SetHeldModel(model);
+			Vec3_Set(held_entity.ModelScale, 1.0f, 1.0f, 1.0f);
 
-		Model_RenderArm(model, &held_entity);
+			Model_RenderArm(model, &held_entity);
+			Gfx_SetAlphaTest(false);
+		}
+	}
+	else if (IndevTest_HeldIsExtruded(held_block)) {
+		/* genuine ItemRenderer: only renderType 0 blocks are held as 3D
+		    blocks - torches/flowers/mushrooms/saplings render as the same
+		    extruded terrain-tile sprite items use, IN the hand (the block
+		    model path drew the torch at arm's length, visibly floating) */
+		HeldItem_Render(held_block);
 		Gfx_SetAlphaTest(false);
 	}
 	else {
@@ -97,12 +320,22 @@ static void SetBaseOffset(void) {
 	cc_bool sprite = Blocks.Draw[held_block] == DRAW_SPRITE;
 	Vec3 normalOffset = { 0.56f, -0.72f, -0.72f };
 	Vec3 spriteOffset = { 0.46f, -0.52f, -0.72f };
+	Vec3 itemOffset   = { 0.56f, -0.52f, -0.72f }; /* ItemRenderer's hand anchor */
 	Vec3 offset = sprite ? spriteOffset : normalOffset;
+	if (IndevTest_HeldIsExtruded(HeldEquip_DisplayedId())) offset = itemOffset;
 
 	Vec3_AddBy(&held_entity.Position, &offset);
 	if (!sprite && Blocks.Draw[held_block] != DRAW_GAS) {
 		float height = Blocks.MaxBB[held_block].y - Blocks.MinBB[held_block].y;
 		held_entity.Position.y += 0.2f * (1.0f - height);
+	}
+
+	if (IndevTest_Enabled) {
+		/* the equip dip: glTranslatef(0.56, -0.52 - (1 - progress)*0.6, -0.72),
+		    with progress interpolated between the last two 20Hz ticks */
+		float p = held_prevEquipProg +
+			(held_equipProg - held_prevEquipProg) * (held_equipAcc * 20.0f);
+		held_entity.Position.y -= (1.0f - p) * 0.6f;
 	}
 }
 
@@ -171,9 +404,14 @@ void HeldBlockRenderer_ClickAnim(cc_bool digging) {
 	held_animating = true;
 	/* Start place animation at bottom of cycle */
 	if (!digging) held_time = held_period / 2;
+
+	/* Third-person arm swing on the player model (AnimatedComp_StartPunch) is */
+	/*  disabled for now - deferred, see SURVIVAL_TEST_NOTES.md. */
 }
 
 static void DoSwitchBlockAnim(void* obj) {
+	/* Indev drives switching through the genuine equip-dip instead */
+	if (IndevTest_Enabled) return;
 	if (held_swinging) {
 		/* Like graph -sin(x) : x=0.5 and x=2.5 have same y values,
 		   but increasing x causes y to change in opposite directions */
@@ -219,6 +457,64 @@ static void DoAnimation(float delta, float lastSwingY) {
 	}
 }
 
+/* ItemRenderer.renderOverlays' burning half: while the player is alight,
+    two flame sheets fill the bottom of the view - one per animated flame
+    tile, mirrored and yawed +/-10 degrees, alpha 0.9 blended. Drawn in
+    plain camera space (identity view) with the held pass projection. */
+static GfxResourceID fireoverlay_vb;
+static void HeldBlockRenderer_FireOverlay(void) {
+	struct VertexTextured verts[8];
+	struct VertexTextured* v = verts;
+	struct Matrix m;
+	PackedCol col = PackedCol_Make(255, 255, 255, 229); /* alpha 0.9 */
+	TextureLoc locs[2];
+	float u1, u2, v1, v2, side, c, sn, tx, ty;
+	int i;
+
+	locs[0] = INDEV_FIRE_TEX_LOC; locs[1] = INDEV_FIRE_TEX_LOC2;
+	if (!fireoverlay_vb) {
+		fireoverlay_vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, 8);
+		if (!fireoverlay_vb) return;
+	}
+	/* both flame tiles share the 1D atlas for 16px packs; fall back if not */
+	if (Atlas1D_Index(locs[1]) != Atlas1D_Index(locs[0])) locs[1] = locs[0];
+
+	for (i = 0; i < 2; i++) {
+		side = (float)((i << 1) - 1); /* -1, +1 */
+		c    = Math_CosF(side * 10.0f * MATH_DEG2RAD);
+		sn   = Math_SinF(side * 10.0f * MATH_DEG2RAD);
+		tx   = -side * 0.24f; ty = -0.3f;
+		u1 = 0.0f; u2 = UV2_Scale;
+		v1 = Atlas1D_RowId(locs[i]) * Atlas1D.InvTileSize;
+		v2 = v1 + Atlas1D.InvTileSize * UV2_Scale;
+
+		/* glTranslatef(-(2i-1)*0.24, -0.3, 0); glRotatef((2i-1)*10, 0,1,0);
+		    quad (+/-0.5, +/-0.5, z -0.5), u mirrored like genuine */
+		#define FOV_V(px, py, FU, FVV) \
+			v->x = tx + (px)*c + 0.5f*sn; v->y = ty + (py); v->z = (px)*sn - 0.5f*c; \
+			v->Col = col; v->U = (FU); v->V = (FVV); v++;
+		FOV_V(-0.5f, -0.5f, u2, v2)
+		FOV_V( 0.5f, -0.5f, u1, v2)
+		FOV_V( 0.5f,  0.5f, u1, v1)
+		FOV_V(-0.5f,  0.5f, u2, v1)
+		#undef FOV_V
+	}
+
+	m = Matrix_Identity;
+	Gfx_LoadMatrix(MATRIX_VIEW, &m);
+
+	Gfx_BindTexture(Atlas1D.TexIds[Atlas1D_Index(locs[0])]);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetDepthTest(false);
+	Gfx_SetFaceCulling(false);
+	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	Gfx_SetDynamicVbData(fireoverlay_vb, verts, 8);
+	Gfx_DrawVb_IndexedTris(8);
+	Gfx_SetAlphaBlending(false);
+	Gfx_SetDepthTest(true);
+}
+
 void HeldBlockRenderer_Render(float delta) {
 	float lastSwingY;
 	struct Matrix view;
@@ -229,6 +525,15 @@ void HeldBlockRenderer_Render(float delta) {
 	held_block  = Inventory_SelectedBlock;
 	view = Gfx.View;
 
+	HeldEquip_Update(delta);
+	if (IndevTest_Enabled) {
+		/* render the item the equip dip says is in the hand: the OLD one
+		    until the dip bottoms out (ids < 256 are blocks; item ids fall
+		    to BLOCK_AIR here and draw via HeldItem_Render below) */
+		int dispId = HeldEquip_DisplayedId();
+		held_block = dispId < 256 ? (BlockID)dispId : BLOCK_AIR;
+	}
+
 	Gfx_LoadMatrix(MATRIX_PROJ, &held_blockProj);
 	SetMatrix();
 
@@ -236,6 +541,9 @@ void HeldBlockRenderer_Render(float delta) {
 	DoAnimation(delta, lastSwingY);
 	SetBaseOffset();
 	if (!Camera.Active->isThirdPerson) HeldBlockRenderer_RenderModel();
+	if (!Camera.Active->isThirdPerson && SurvivalTest_PlayerBurning()) {
+		HeldBlockRenderer_FireOverlay();
+	}
 
 	Gfx.View = view;
 	Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
@@ -244,6 +552,8 @@ void HeldBlockRenderer_Render(float delta) {
 
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&held_entity.ModelVB);
+	Gfx_DeleteDynamicVb(&helditem_vb);
+	helditem_lastId = -1;
 }
 
 static const struct EntityVTABLE heldEntity_VTABLE = {

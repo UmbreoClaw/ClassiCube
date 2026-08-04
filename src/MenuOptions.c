@@ -33,6 +33,7 @@
 #include "Input.h"
 #include "Utils.h"
 #include "Errors.h"
+#include "SurvivalTest.h"
 #include "SystemFonts.h"
 
 typedef void (*Button_GetText)(struct ButtonWidget* btn, cc_string* raw);
@@ -905,6 +906,15 @@ static void    GuO_SetShowFPS(cc_bool v) {
 	Options_SetBool(OPT_SHOW_FPS, v);
 }
 
+static cc_bool GuO_GetIndevScale(void) { return Gui.IndevGuiScale; }
+static void    GuO_SetIndevScale(cc_bool v) {
+	Gui.IndevGuiScale = v;
+	Options_SetBool(OPT_INDEV_GUI_SCALE, v);
+	/* menu fonts/button sizes are baked at screen build time - a full
+	    refresh rebuilds every open screen at the new scale immediately */
+	Gui_RefreshAll();
+}
+
 static void GuO_GetHotbar(cc_string* v) { String_AppendFloat(v, Gui.RawHotbarScale, 1); }
 static void GuO_SetHotbar(const cc_string* v) { 
 	ChatOptionsScreen_SetScale(v, &Gui.RawHotbarScale, OPT_HOTBAR_SCALE); 
@@ -947,6 +957,8 @@ static void GuiOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 		MenuOptionsScreen_AddNum(s,  "Crosshair scale",
 			0.25f, 4.00f, 1,
 			GuO_GetCrosshair, GuO_SetCrosshair, NULL);
+		MenuOptionsScreen_AddBool(s, "Indev GUI scale",
+			GuO_GetIndevScale, GuO_SetIndevScale, NULL);
 		
 		MenuOptionsScreen_AddBool(s, "Black text shadows",
 			GuO_GetShadows,   GuO_SetShadows, NULL);
@@ -1148,6 +1160,25 @@ static void    MiO_SetPhysics(cc_bool v) {
 	Options_SetBool(OPT_BLOCK_PHYSICS, v);
 }
 
+static cc_bool MiO_GetSurvivalEnhanced(void) { return SurvivalTest_Enhanced; }
+static void    MiO_SetSurvivalEnhanced(cc_bool v) {
+	SurvivalTest_Enhanced = v;
+	Options_SetBool(OPT_SURVIVAL_ENHANCED, v);
+}
+
+static cc_bool MiO_GetIndevCreative(void) { return SurvivalTest_Creative; }
+static void    MiO_SetIndevCreative(cc_bool v) {
+	Options_SetBool(OPT_INDEV_CREATIVE, v);
+	/* MP: creative is SERVER-dictated per session/map (SURV_HELLO bit1) - the
+	    local option only ever applies in singleplayer. */
+	if (!Server.IsSinglePlayer) return;
+	SurvivalTest_Creative = v;
+	/* Damage/break/HUD already read CreativeActive() live; flight is player
+	    state set at map load, so re-apply it now - turning creative off stops
+	    flying immediately instead of on the next map load. */
+	SurvivalTest_CreativeUpdateHacks();
+}
+
 static cc_bool MiO_GetInvert(void) { return Camera.Invert; }
 static void    MiO_SetInvert(cc_bool v) { 
 	Camera.Invert = v;
@@ -1185,19 +1216,29 @@ static void MiscSettingsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			MiO_GetViewBob, MiO_SetViewBob, NULL);
 		MenuOptionsScreen_AddBool(s, "Invert mouse",
 			MiO_GetInvert,  MiO_SetInvert, NULL);
-		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity", 
+		MenuOptionsScreen_AddInt(s,  "Mouse sensitivity",
 #ifdef CC_BUILD_WIN
 			   1, 200, 40,
 #else
 			   1, 200, 30,
 #endif
 			MiO_GetSensitivity, MiO_SetSensitivity, NULL);
+		MenuOptionsScreen_AddBool(s, "Enhanced survival",
+			MiO_GetSurvivalEnhanced, MiO_SetSurvivalEnhanced,
+			"&eAdds non-classic survival extras, like the 3D\n&einventory paperdoll. Off keeps survival faithful\n&eto Minecraft Classic 0.30.");
+		MenuOptionsScreen_AddBool(s, "Indev creative",
+			MiO_GetIndevCreative, MiO_SetIndevCreative,
+			"&eNon-genuine convenience mode for the Indev gamemode:\n&efly, instant no-drop building with infinite blocks, no\n&edamage. Applies at once; the starter block palette fills\n&eon the next map load. Indev gamemode only.");
 	}
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 
 	/* Disable certain options */
 	if (!Server.IsSinglePlayer) Menu_Remove(s, 0);
 	if (!Server.IsSinglePlayer) Menu_Remove(s, 4);
+	/* "Enhanced survival" only applies while survival mode is active */
+	if (!SurvivalTest_Enabled)  Menu_Remove(s, 9);
+	/* "Indev creative" only applies in the Indev gamemode */
+	if (SurvivalTest_Gamemode() != SURVIVAL_GAMEMODE_INDEV) Menu_Remove(s, 10);
 }
 
 void MiscOptionsScreen_Show(void) {
@@ -1345,7 +1386,7 @@ static void NostalgiaFunctionalityScreen_InitWidgets(struct MenuOptionsScreen* s
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchNostalgia);
 	s->DoRecreateExtra = NostalgiaScreen_RecreateExtra;
 
-	TextWidget_Add(s, &nostalgia_desc);
+	TextWidget_Add(s, &nostalgia_desc); Widget_SetIndevScaled(&nostalgia_desc);
 	Widget_SetLocation(&nostalgia_desc, ANCHOR_CENTRE, ANCHOR_CENTRE, 0, 100);
 
 	NostalgiaScreen_UpdateVersionDisabled();

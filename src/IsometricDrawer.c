@@ -15,6 +15,10 @@ static int* iso_state;
 static cc_bool iso_cacheInited;
 static PackedCol iso_colorXSide, iso_colorZSide, iso_colorYBottom;
 static float iso_posX, iso_posY;
+/* Asymmetric X/Y scale about (iso_posX, iso_posY) - only ever set by
+    IsometricDrawer_AddBatchScaled (the hotbar pop animation); plain
+    AddBatch resets both to 1 so no scale leaks between batch entries. */
+static float iso_scaleX = 1.0f, iso_scaleY = 1.0f;
 
 #define iso_cosX  (0.86602540378443864f) /* cos(30  * MATH_DEG2RAD) */
 #define iso_sinX  (0.50000000000000000f) /* sin(30  * MATH_DEG2RAD) */
@@ -56,8 +60,8 @@ static void IsometricDrawer_Flat(BlockID block, float size) {
 	/*  Default hotbar size:    28px -> 24px */
 	scale = Game_ClassicMode ? 0.70f : 0.88f;
 	size  = Math_Ceil(size * scale);
-	minX  = iso_posX - size; maxX = iso_posX + size;
-	minY  = iso_posY - size; maxY = iso_posY + size;
+	minX  = iso_posX - size * iso_scaleX; maxX = iso_posX + size * iso_scaleX;
+	minY  = iso_posY - size * iso_scaleY; maxY = iso_posY + size * iso_scaleY;
 
 	v = iso_vertices;
 	v->x = minX; v->y = minY; v->z = 0; v->Col = color; v->U = rec.u1; v->V = rec.v1; v++;
@@ -113,8 +117,8 @@ static void IsometricDrawer_Angled(BlockID block, float size) {
 		x = v->x * iso_cosY                              + v->z * -iso_sinY;
 		y = v->x * iso_sinX * iso_sinY + v->y * iso_cosX + v->z * iso_sinX * iso_cosY;
 
-		v->x = x + iso_posX;
-		v->y = y + iso_posY;
+		v->x = x * iso_scaleX + iso_posX;
+		v->y = y * iso_scaleY + iso_posY;
 	}
 }
 
@@ -126,6 +130,7 @@ void IsometricDrawer_BeginBatch(struct VertexTextured* vertices, int* state) {
 }
 
 void IsometricDrawer_AddBatch(BlockID block, float size, float x, float y) {
+	iso_scaleX = 1.0f; iso_scaleY = 1.0f;
 	if (Blocks.Draw[block] == DRAW_GAS) return;
 
 	iso_posX = x; iso_posY = y;
@@ -139,6 +144,28 @@ void IsometricDrawer_AddBatch(BlockID block, float size, float x, float y) {
 		IsometricDrawer_Angled(block, size);
 	}
 #endif
+}
+
+/* AddBatch with an asymmetric X/Y scale about the (x, y) centre - the
+    genuine hotbar pop/squash animations scale their icon cell this way
+    (c0.30 HUDScreen sin curves / Indev GuiIngame squash). */
+void IsometricDrawer_AddBatchScaled(BlockID block, float size, float scaleX, float scaleY,
+									 float x, float y) {
+	if (Blocks.Draw[block] == DRAW_GAS) return;
+
+	iso_scaleX = scaleX; iso_scaleY = scaleY;
+	iso_posX = x; iso_posY = y;
+
+#if CC_BUILD_FPU_MODE <= CC_FPU_MODE_MINIMAL
+	IsometricDrawer_Flat(block, size);
+#else
+	if (Blocks.Draw[block] == DRAW_SPRITE) {
+		IsometricDrawer_Flat(block, size);
+	} else {
+		IsometricDrawer_Angled(block, size);
+	}
+#endif
+	iso_scaleX = 1.0f; iso_scaleY = 1.0f;
 }
 
 int IsometricDrawer_EndBatch(void) {

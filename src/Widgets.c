@@ -18,6 +18,7 @@
 #include "Input.h"
 #include "InputHandler.h"
 #include "Launcher.h"
+#include "SurvivalTest.h"
 
 static void Widget_NullFunc(void* widget) { }
 static int  Widget_Pointer(void* elem, int id, int x, int y) { return false; }
@@ -254,13 +255,22 @@ static const struct WidgetVTABLE ButtonWidget_VTABLE = {
 };
 
 void ButtonWidget_Init(struct ButtonWidget* w, int minWidth, Widget_LeftClick onClick) {
+	int s = Gui_GetIndevMenuScale();
 	Widget_Reset(w);
 	w->VTABLE    = &ButtonWidget_VTABLE;
 	w->color     = PACKEDCOL_WHITE;
 	w->optName   = NULL;
 	w->flags     = WIDGET_FLAG_SELECTABLE;
-	w->minWidth  = Display_ScaleX(minWidth);
-	w->minHeight = Display_ScaleY(40);
+	if (s) {
+		/* genuine Indev buttons are 200x20 GUI px; ClassiCube authors menu
+		    widths at 2x classic GUI px, so genuine px = minWidth / 2 */
+		w->flags    |= WIDGET_FLAG_INDEV_SCALE;
+		w->minWidth  = (minWidth / 2) * s;
+		w->minHeight = 20 * s;
+	} else {
+		w->minWidth  = Display_ScaleX(minWidth);
+		w->minHeight = Display_ScaleY(40);
+	}
 	w->MenuClick = onClick;
 }
 
@@ -440,7 +450,7 @@ static void HotbarWidget_BuildOutlineMesh(struct HotbarWidget* w, struct VertexT
 
 static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexTextured** vertices) {
 	int i, x, y;
-	float scale;
+	float scale, yOff, t, sinT2;
 
 	IsometricDrawer_BeginBatch(*vertices, w->state);
 	scale = w->elemSize / 2.0f;
@@ -451,7 +461,34 @@ static void HotbarWidget_BuildEntriesMesh(struct HotbarWidget* w, struct VertexT
 
 		if (i == HOTBAR_MAX_INDEX && Gui_TouchUI) continue;
 
-		IsometricDrawer_AddBatch(Inventory_Get(i), scale, x, y);
+		if (w->slotPopTime[i] > 0.0f && w->popSquash) {
+			/* Indev GuiIngame: k = 1 + t/5 over the 5-tick pop -
+			   scaleX = 1/k (0.5..1), scaleY = (k+1)/2 (1..1.5) - a tall
+			   squash, no bounce, pivoted 4 GUI px BELOW the icon centre
+			   (x+8, y+12), reproduced by shifting the centre up as it
+			   stretches. Count text stays outside the transform. */
+			float k  = 1.0f + w->slotPopTime[i] / 5.0f;
+			float sX = 1.0f / k;
+			float sY = (k + 1.0f) / 2.0f;
+			float f  = w->height / 22.0f; /* GUI px factor */
+			IsometricDrawer_AddBatchScaled(Inventory_Get(i), scale, sX, sY,
+				(float)x, (float)y + 4.0f * f * (1.0f - sY));
+		} else if (w->slotPopTime[i] > 0.0f) {
+			/* c0.30 HUDScreen: t = popTime/5; the cell scales about its
+			   centre with DIFFERENT curves per axis - X by sin(t*t*pi)+1,
+			   Y by sin(t*pi)+1 - while the centre rides up sin(t*t*pi)*8
+			   GUI px. Count text stays outside the transform. */
+			float sX, sY;
+			t     = w->slotPopTime[i] / 5.0f;
+			sinT2 = Math_SinF(t * t * MATH_PI);
+			sX    = sinT2 + 1.0f;
+			sY    = Math_SinF(t * MATH_PI) + 1.0f;
+			yOff  = -sinT2 * 8.0f * (w->height / 22.0f);
+			IsometricDrawer_AddBatchScaled(Inventory_Get(i), scale, sX, sY,
+				(float)x, (float)y + yOff);
+		} else {
+			IsometricDrawer_AddBatch(Inventory_Get(i), scale, (float)x, (float)y);
+		}
 	}
 	w->verticesCount = IsometricDrawer_EndBatch();
 }
@@ -500,15 +537,23 @@ static int HotbarWidget_MaxVertices(void* w) { return HOTBAR_MAX_VERTICES; }
 
 void HotbarWidget_Update(struct HotbarWidget* w, float delta) {
 	int i;
+
+	/* Inventory.tick(): count down per-slot pop animations at 20 ticks/sec */
+	for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+		if (w->slotPopTime[i] <= 0.0f) continue;
+		w->slotPopTime[i] -= delta * 20.0f;
+		if (w->slotPopTime[i] < 0.0f) w->slotPopTime[i] = 0.0f;
+	}
+
 	if (!Gui_TouchUI) return;
 
-	for (i = 0; i < HOTBAR_MAX_INDEX; i++) 
+	for (i = 0; i < HOTBAR_MAX_INDEX; i++)
 	{
 		if (w->touchId[i] < 0) continue;
-		
+
 		w->touchTime[i] += delta;
 		if (w->touchTime[i] <= 1.0f) continue;
-		
+
 		w->touchId[i]   = -1;
 		w->touchTime[i] =  0;
 		Inventory_Set(i, 0);
@@ -621,7 +666,10 @@ static int HotbarWidget_PointerDown(void* widget, int id, int x, int y) {
 
 		if (Gui_TouchUI) {
 			if (i == HOTBAR_MAX_INDEX) {
-				InventoryScreen_Show(); return TOUCH_TYPE_GUI;
+				/* Routed through SurvivalInvScreen_Show so survival rules apply: */
+				/*  faithful c0.30-s opens nothing, Enhanced opens the paperdoll */
+				/*  screen, and non-survival opens the normal block-grid inventory. */
+				SurvivalInvScreen_Show(); return TOUCH_TYPE_GUI;
 			} else {
 				w->touchId[i]   = id;
 				w->touchTime[i] = 0;
@@ -931,7 +979,14 @@ static int TableWidget_PointerDown(void* widget, int id, int x, int y) {
 	if (Elem_HandlesPointerDown(&w->scroll, id, x, y)) {
 		return TOUCH_TYPE_GUI;
 	} else if (w->selectedIndex != -1 && w->blocks[w->selectedIndex] != BLOCK_AIR) {
-		Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
+		/* Indev creative: picks deposit a stack into the Indev inventory
+		    (the palette flow) instead of poking the classic hotbar - see
+		    the matching branch in InventoryScreen_KeyDown. */
+		if (SurvivalTest_CreativeActive()) {
+			SurvivalTest_CreativeGive(w->blocks[w->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(w->blocks[w->selectedIndex]);
+		}
 		w->pendingClose = true;
 		return TOUCH_TYPE_GUI;
 	} else if (Gui_Contains(Table_X(w), Table_Y(w), Table_Width(w), Table_Height(w), x, y)) {
@@ -1755,11 +1810,19 @@ static const struct WidgetVTABLE TextInputWidget_VTABLE = {
 	TextInputWidget_BuildMesh,   TextInputWidget_Render2, TextInputWidget_MaxVertices
 };
 void TextInputWidget_Create(struct TextInputWidget* w, int width, const cc_string* text, struct MenuInputDesc* desc) {
+	int s = Gui_GetIndevMenuScale();
 	InputWidget_Reset(&w->base);
 	w->base.VTABLE = &TextInputWidget_VTABLE;
 
-	w->minWidth  = Display_ScaleX(width);
-	w->minHeight = Display_ScaleY(30);
+	if (s) {
+		/* menu-only widget: follow the genuine Indev menu scale like the
+		    buttons (authored at 2x classic GUI px; genuine box ~20 GUI px) */
+		w->minWidth  = (width / 2) * s;
+		w->minHeight = 20 * s;
+	} else {
+		w->minWidth  = Display_ScaleX(width);
+		w->minHeight = Display_ScaleY(30);
+	}
 	w->desc      = *desc;
 
 	w->base.convertPercents = false;
@@ -1780,6 +1843,7 @@ void TextInputWidget_Create(struct TextInputWidget* w, int width, const cc_strin
 
 void TextInputWidget_Add(void* screen, struct TextInputWidget* w, int width, const cc_string* text, struct MenuInputDesc* d) {
 	TextInputWidget_Create(w, width, text, d);
+	Widget_SetIndevScaled(w); /* menu-only widget - offsets track the scale */
 	AddWidget(screen, w);
 }
 

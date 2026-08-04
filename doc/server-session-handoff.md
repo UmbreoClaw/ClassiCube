@@ -1,0 +1,213 @@
+# Handoff: MCGalaxy server session ← ClassiCube client session
+
+*Originally written by the client session for the Claude session picking up
+`UmbreoClaw/mcgalaxy`. It tells you what the client implements, what was
+verified against the server, and what to build next. Read
+`doc/networking-plan.md` (§25 wire format, §20 gating) and
+`doc/survival-handshake.md` alongside this.*
+
+> **HISTORICAL.** §0's standing rules still apply and §2's wire-contract notes
+> are still correct, but this document describes the two-repo split as it stood
+> at the handoff, and both sides have moved a long way past it. The current
+> state of the server work lives in the mcgalaxy repo's
+> `doc/survival-support/roadmap.md`; the client log is `SURVIVAL_TEST_NOTES.md`.
+>
+> In particular, §1's implementation is **no longer parked**. It was reverted
+> once so it could be re-landed from a combined two-repo session, and that
+> happened — it is in the tree. Do not cherry-pick `ed604b6`; you would be
+> re-applying work that is already there.
+
+## 0. Session conventions (carry these over — they are standing rules)
+
+- **Ground truths**: fetch them and cross-reference EVERY mechanic against the
+  Java before changing behavior — fixes must be genuine ports, not patches:
+  ```
+  git clone --depth 1 https://github.com/EaglerPorts/in-20100223
+  git clone --depth 1 https://github.com/ManiaDevelopment/MCraft-Client
+  ```
+  Put them somewhere that survives the session (the scratchpad, not `/tmp`),
+  and re-fetch whenever the container recycles — both are public.
+
+  For c0.30 there is a better source than the decompile: the **real
+  `c0.30_01c` client jar**, from Mojang's `piston-meta` version manifest, read
+  with `javap -p -c`. It is the actual shipped artifact rather than somebody's
+  reconstruction, so it settles arguments the decompiles cannot. Obfuscated,
+  but the classes that matter are identifiable by inspection
+  (`com.mojang.minecraft.Entity`, `mob.Mob`, `level.Level`, `level.b` =
+  MobSpawner, `mob.Skeleton`, `item.Arrow`). Export `JAVA_TOOL_OPTIONS=` first
+  to silence the picked-up-options banner. This is what proved `Mob.footSize
+  = 0.5F` and killed a backwards audit finding — see `AUDIT_FINDINGS.md`.
+- **c0.30 vs Indev isolation**: c0.30 Survival Test behavior must NEVER be
+  altered by Indev features. Gate on `IndevTest_Enabled` / mode checks in SP;
+  in MP gate ALL sim handover through `SurvivalNet_ServerDriven()`, never raw
+  mode checks.
+- **Branches**: work on whatever branch the session names, in BOTH repos, and
+  never push to a different one without being asked. (`survival-test` /
+  `survival-support` were the original pair and are named here only so old
+  references make sense — do not assume them.) Push with
+  `git push -u origin <branch>`. Do NOT open pull requests unless asked.
+- **Logs**: session log in `SURVIVAL_TEST_NOTES.md`, audit results in
+  `AUDIT_FINDINGS.md` (findings #1–#45 exist; continue numbering). Both are
+  APPEND-ONLY — append via shell heredoc (`cat >> file << 'EOF'`), never
+  rewrite in place (a rewrite once truncated the audit log to 0 bytes).
+- **Wire changes**: any layout change to an existing message = bump the
+  `SurvivalTest` CPE ext version on BOTH sides in the same change, and update
+  `networking-plan.md` §25 + the mcgalaxy `doc/survival-support/reference/`
+  snapshots together.
+- **Client test rig** (headless): `Xvfb :99` + `./ClassiCube --singleplayer`.
+  Prereqs: seed `texpacks/default.zip` from `misc/ps1/classicube.zip`, write
+  `options.txt` with `survival-gamemode=2` (Indev; 1 = c0.30). Before every
+  run: `pkill -f ClassiCube; pkill Xvfb; rm -f /tmp/.X*-lock`. To poke game
+  state use gdb ATTACHED to the live process (`gdb -p`), never `gdb run`
+  (unusably slow under ptrace). Screenshot with `import -window root`.
+- **Integration test**: MCGalaxy CLI with `SurvivalMode=Indev` + this client
+  connecting — expect HELLO/WORLDINFO/TIME/HEALTH chat lines client-side and
+  HELD_SLOT/RESPAWN intents in the server debug log; a death must HOLD the
+  Game Over screen (MP shows a single Respawn button) until the server
+  revives.
+- **Restore caveat**: `ed604b6` predates later fidelity work (17+ commits:
+  Indev sky lighting, finite fluids, Indev GUI scaling, audio table, mob
+  hurt-flash overhaul, world-time reset...) all touching SurvivalTest.c /
+  IndevTest.c / Screens.c — expect cherry-pick conflicts; re-apply the §1
+  gating points deliberately rather than taking either side wholesale.
+
+## 0.5. Setup: read the client from your session
+
+Your GitHub scope is the mcgalaxy repo, but this repo is public — clone it
+read-only for reference exactly like the client session did with yours:
+
+```
+git clone --depth 1 --branch <the session's branch> \
+    https://github.com/UmbreoClaw/ClassiCube
+```
+
+`src/SurvivalNet.h` is the wire contract; `src/SurvivalNet.c` is the reference
+implementation of the client side. **Refresh your `doc/survival-support/reference/`
+snapshots** — the client's `networking-plan.md` §25 changed (see §2 below).
+
+## 1. What the client now implements (your phases 0 + 2 are fully consumed)
+
+- **Capability**: `SurvivalTest` v1 CPE ext negotiated; `Server.SupportsSurvival`.
+- **Activation**: `SURV_HELLO` applier — mode byte flips the client between
+  classic / c0.30-survival / Indev **per map**, flags byte sets
+  enhanced/creative/pvp/deathDrops. Mode 0 (your `/Survival` live refresh)
+  deactivates mid-map. Activation clears on every map change (no `/goto` leaks).
+- **Sim handover**: with activation up, `SurvivalNet_ServerDriven()` is true and
+  the client stops running ALL local survival mutation: damage (fall, lava,
+  fire, drowning — one central gate in `SurvivalTest_Damage`), mob spawner+AI,
+  drops, arrows, paintings, TNT, furnace smelting, day/night clock advance,
+  eating, tool wear, container GUIs, survival inventory UI, void death,
+  farmland trampling. The client renders, predicts nothing, and sends intents.
+- **`SURV_WORLDINFO`** (your v1 single-byte layout) → Indev out-of-bounds
+  horizon planes.
+- **`SURV_HEALTH`** → HUD + presentation: decrease plays the hurt tilt/sound;
+  0 shows the death camera + Game Over screen; a rise while dead revives and
+  removes the screen. **No local inventory drop on death** — drops are yours.
+- **`SURV_TIME`** → `worldTime` drives the genuine Indev celestial day/night
+  (sun/sky/fog colour scaling). Your `skyLight` ramp byte is ignored by this
+  client — don't spend effort refining it for us.
+- **Intents**: `SURV_RESPAWN`, `SURV_HELD_SLOT` (sent automatically on hotbar
+  change), `SURV_DROP_ITEM` (Q key) are live today — your logs should show them.
+  `ATTACK`/`USE_ITEM`/`SLOT_CLICK`/`RESULT_CLICK`/`CONT_CLOSE` senders exist and
+  get wired as you stream the state they act on.
+- Hack permissions: in MP the client defers entirely to your `HackControl`
+  packets (it no longer force-sets fly/speed locally, even in creative).
+  **Send `HackControl` fly/speed-allowed to creative sessions** so genuine
+  creative flight works — resolve it from the same per-session creative
+  decision as HELLO's bit1 so they never disagree.
+
+## 2. Wire-contract corrections found while matching your code
+
+- **`SURV_HEALTH` score is i32 BE** (your `SendHealth` bytes 2–5). The client
+  and the plan's §25 now say i32; early §25 drafts said i16 — if your
+  `reference/networking-plan.md` snapshot still says i16, re-snapshot.
+- **`SURV_WORLDINFO` v1** single-byte heights layout (your `SendWorldInfo`) is
+  now recorded verbatim in §25 next to the planned fuller int16 revision. When
+  you upgrade to the fuller layout, **bump the SurvivalTest ext version**.
+- `SURV_HELLO` flags byte matches your `HelloFlags` exactly
+  (bit0 enhanced, bit1 creative, bit2 pvp, bit3 deathDrops).
+
+## 3. Server TODOs the client's behavior now makes visible
+
+1. **Death-screen dwell** (you already have this planned): `OnPlayerDied`
+   currently sends `SetHealth(0)` then `SetHealth(MAX)` back-to-back, so the
+   client's death screen appears and is revived away within a tick or two.
+   Genuine flow: hold health at 0 (client shows Game Over + death camera),
+   respawn only when the client sends `SURV_RESPAWN` (or after a timeout for
+   safety), then send health 20. The client already handles exactly that state
+   machine — its MP death screen shows a single **Respawn** button that sends
+   `SURV_RESPAWN` and waits for your authoritative revive.
+2. **Void death on floating maps**: the client no longer kills the player
+   below the world in MP — your hazard detection owns dying. Floating Indev
+   maps are bottomless; make sure your fall/void handling covers y below 0.
+3. **Per-map world time**: your v1 clock is global; Indev worlds each keep
+   their own `TimeOfDay` (it round-trips through the `.mclevel`).
+4. **Burning state**: the client doesn't fake the on-fire overlay in MP and
+   you can't signal it yet — consider a flag when you do mob/fire work
+   (`SURV_MOB_STATE` has an onFire bit for mobs; the player needs a carrier,
+   e.g. a reserved bit or a small `SURV_PLAYER_STATE` message — bump the ext
+   version if you add one).
+5. ~~**Custom blocks on Indev maps** (your phase 1)~~ ✅ done (server
+   `SurvivalBlocks.cs`): Indev-mode maps carry the full block set as
+   level-scoped BlockDefinitions (1:1 port of `IndevBlocks_Define` — torch 50,
+   fire 51, sources 52/53, chest 54, gears 55, diamond 56/57, workbench 58,
+   furnace 61/62, views 71–82, farmland 83/84, crops 85–92, wall torches
+   94–97), applied/stripped live with the survival mode, with classic fallback
+   ids for pre-BlockDefs clients. *(Correction to the line that used to be
+   here: the fork client DOES locally define the set on server maps — a
+   `SURV_HELLO(mode=Indev)` runs `IndevTest_NetworkModeChanged` →
+   `IndevBlocks_Define`, restoring the genuine torch/fire/wall-torch models
+   over the server defs. The server defs are what stock CPE clients render.)*
+
+   **Architecture decision (user-approved): metadata is the MODEL, the
+   multi-id table is the VIEW/WIRE ENCODING.** Store level data server-side
+   as genuine `id + metadata nibble` (identical to the `.mclevel` format and
+   the genuine sim logic). Translate on the wire only: outbound SetBlock maps
+   `(id, meta)` -> the view id (crop stage 3 -> 88, chest facing -> 71-74,
+   etc. — the client's `IndevTest_BlockToIndev`/`_FromIndev` pair is the
+   authoritative bijection, ported as `SurvivalBlocks.ToIndev/FromIndev/`
+   `DataMeta/ApplyDataMeta`. As landed, the server's LEVEL ARRAY holds view
+   ids — the classic protocol reads it directly — and the bijection runs at
+   the I/O boundaries (`.mclevel`, generator, sim logic), which §18.2 of the
+   networking plan endorses: view id ≡ (id, meta) losslessly for every
+   visible state); inbound SetBlock from any client maps
+   the view id back to `(id, meta)` before your sim logic runs. Result:
+   EVERY CPE client (stock ClassiCube included) watches crops grow and
+   furnaces light over plain SetBlock + BlockDefinitions — no sub-protocol
+   needed for visible state; pick sensible per-stage fallback ids for
+   pre-CPE clients. `SURV_BLOCKMETA` (0x40) is then only ever needed for
+   INVISIBLE metadata (sapling growth stage, fire age) if you want fork
+   clients to export byte-perfect local `.mclevel` saves of server worlds —
+   optional polish, not required for rendering or gameplay.
+
+## 4. What to build next (recommended order)
+
+1. ~~**Death dwell + `SURV_RESPAWN` round-trip**~~ ✅ done (combined session):
+   health held at 0, revive on intent or 30 s safety timeout, stray intents
+   rejected with an authoritative echo. Integration-tested live.
+2. ~~**Phase 3 mob streaming** (`0x10–0x13`)~~ ✅ done (combined session):
+   server-side `SurvivalMobs` sim (20 TPS scheduler; BasicAI wander/chase/melee,
+   creeper fuse+blast, fall damage, knockback, invuln windows, spawner/despawn
+   rolls, graduated player damage) streaming to the client's puppet appliers.
+   `SURV_ATTACK` validated + applied. V1 deviations (all documented in the
+   mcgalaxy session-notes): no Indev A* pathing yet, skeletons melee (arrows
+   need phase-5 wire), brightness = sky-exposure x day/night approximation,
+   explosions damage players but never blocks, no drops, mobs freeze on
+   empty maps and don't persist across server restarts.
+3. ~~**Phase 4 inventory** (`0x20–0x25`)~~ 🔶 first slice done: full streaming
+   (`INV_FULL`/`INV_SLOT`/`CURSOR`), GuiContainer click model server-side,
+   mine→pickup / place→consume bridge. Remaining: containers 0x22–0x24,
+   recipes, `USE_ITEM`, per-id item tables, `PLAYER_EQUIP 0x50`.
+4. 🔶 **Phase 1 steps 1+2 done** — the Indev block set (`SurvivalBlocks.cs`,
+   see §3 item 5) and the world generator (`Generator/IndevGenerator.cs`,
+   ported from this repo's `IndevGen.c`; `/NewLvl name w h l indev [theme]
+   [type] [seed]`, maps come out survival-ready with genuine WORLDINFO
+   ground/water/fluid from the level env config). Next in phase 1:
+   `.mclevel` I/O (§18); placement facing + `SURV_BLOCKMETA 0x40` after.
+5. **Phase 5 drops** (`0x30–0x32`) — `SURV_DROP_ITEM` intents already arrive.
+   Also unlocks: skeleton arrows, mob death drops, wool from shearing.
+
+Integration testing: the client session verified everything by build + code
+audit; the natural end-to-end check is your CLI server on `SurvivalMode=Indev`
+with this client connecting — you should see HELLO/WORLDINFO/TIME/HEALTH chat
+lines on the client and HELD_SLOT/RESPAWN intents in your debug log.

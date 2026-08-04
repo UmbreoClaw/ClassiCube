@@ -953,8 +953,8 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 	Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLeg, false);
 
 	Models.Rotation = ROTATE_ORDER_XZY;
-	Model_DrawRotate(e->Anim.LeftArmX,  0, e->Anim.LeftArmZ,  &set->leftArm,  false);
-	Model_DrawRotate(e->Anim.RightArmX, 0, e->Anim.RightArmZ, &set->rightArm, false);
+	Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &set->leftArm,  false);
+	Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &set->rightArm, false);
 	Models.Rotation = ROTATE_ORDER_ZYX;
 
 	if (type != SKIN_64x32) {
@@ -963,8 +963,8 @@ static void HumanModel_DrawCore(struct Entity* e, struct ModelSet* model, cc_boo
 		Model_DrawRotate(e->Anim.RightLegX, 0, e->Anim.RightLegZ, &set->rightLegLayer, false);
 
 		Models.Rotation = ROTATE_ORDER_XZY;
-		Model_DrawRotate(e->Anim.LeftArmX,  0, e->Anim.LeftArmZ,  &set->leftArmLayer,  false);
-		Model_DrawRotate(e->Anim.RightArmX, 0, e->Anim.RightArmZ, &set->rightArmLayer, false);
+		Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &set->leftArmLayer,  false);
+		Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &set->rightArmLayer, false);
 		Models.Rotation = ROTATE_ORDER_ZYX;
 	}
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &model->hat, true);
@@ -1000,6 +1000,10 @@ static void HumanModel_DrawArmCore(struct Entity* e, struct ModelSet* model) {
 
 
 static struct ModelSet human_set;
+/* c0.30's shared "humanoid.armor" overlay parts (HumanoidMob.renderModel) - */
+/*  used by ZombieModel_Draw below. See MobArmor_Draw for the full picture. */
+static struct ModelPart human_armorHead, human_armorTorso, human_armorLeftArm, human_armorRightArm;
+
 static void HumanModel_MakeParts(void) {
 	static const struct BoxDesc head = {
 		BoxDesc_Tex(0,0),
@@ -1141,6 +1145,42 @@ static void HumanModel_MakeParts(void) {
 	setSlim->rightLegLayer = set64->rightLegLayer;
 	BoxDesc_BuildBox(&setSlim->leftArmLayer,  &thin_lArmL);
 	BoxDesc_BuildBox(&setSlim->rightArmLayer, &thin_rArmL);
+
+	/* c0.30's "humanoid.armor" model is built via `new HumanoidModel(1.0F)` - */
+	/*  exact same box dims/tex coords as the plain body parts above (var1 only */
+	/*  feeds setBounds' inflate), so these reuse head/torso/lArm/rArm's own Tex */
+	/*  coords with a flat +1 unit inflate on every face (HumanoidMob.renderModel */
+	/*  never uses the legs, so no armored leg parts exist here). */
+	{
+		static const struct BoxDesc armorHead = {
+			BoxDesc_Tex(0,0),
+			BoxDesc_Dims(-4,24,-4, 4,32,4),
+			BoxDesc_Bounds(-5,23,-5, 5,33,5),
+			BoxDesc_Rot(0,24,0),
+		};
+		static const struct BoxDesc armorTorso = {
+			BoxDesc_Tex(16,16),
+			BoxDesc_Dims(-4,12,-2, 4,24,2),
+			BoxDesc_Bounds(-5,11,-3, 5,25,3),
+			BoxDesc_Rot(0,12,0),
+		};
+		static const struct BoxDesc armorLArm = {
+			BoxDesc_Tex(40,16),
+			BoxDesc_Dims(-8,12,-2, -4,24,2),
+			BoxDesc_Bounds(-9,11,-3, -3,25,3),
+			BoxDesc_Rot(-5,22,0),
+		};
+		static const struct BoxDesc armorRArm = {
+			BoxDesc_Tex(40,16),
+			BoxDesc_Dims(4,12,-2, 8,24,2),
+			BoxDesc_Bounds(3,11,-3, 9,25,3),
+			BoxDesc_Rot(5,22,0),
+		};
+		BoxDesc_BuildBox(&human_armorHead,     &armorHead);
+		BoxDesc_BuildBox(&human_armorTorso,    &armorTorso);
+		BoxDesc_BuildBox(&human_armorLeftArm,  &armorLArm);
+		BoxDesc_BuildBox(&human_armorRightArm, &armorRArm);
+	}
 }
 
 static void HumanModel_Draw(struct Entity* e) {
@@ -1156,7 +1196,7 @@ static float HumanModel_GetEyeY(struct Entity* e)  { return 26.0f/16.0f; }
 static void HumanModel_GetSize(struct Entity* e)   { Model_RetSize(8.6f,28.1f,8.6f); }
 static void HumanModel_GetBounds(struct Entity* e) { Model_RetAABB(-8,0,-4, 8,32,4); }
 
-static CC_BIG_VAR struct ModelVertex human_vertices[MODEL_BOX_VERTICES * (7 + 7 + 4)];
+static CC_BIG_VAR struct ModelVertex human_vertices[MODEL_BOX_VERTICES * (7 + 7 + 4 + 4)];
 static struct ModelTex human_tex = { "char.png" };
 static struct Model  human_model = { 
 	"humanoid", human_vertices, &human_tex,
@@ -1175,6 +1215,138 @@ static void HumanoidModel_Register(void) {
 	human_model.maxVertices    = HUMAN_MAX_VERTICES;
 
 	Model_Register(&human_model);
+}
+
+
+/*########################################################################################################################*
+*--------------------------------------------------------MobArmorModel----------------------------------------------------*
+*#########################################################################################################################*/
+/* c0.30's HumanoidMob.helmet/armor - a purely cosmetic plate-armor overlay */
+/*  drawn on top of zombies/skeletons (the only two HumanoidMob subclasses), */
+/*  rolled independently ~20% each at spawn time (see SurvivalTest's */
+/*  SurvivalTest_SpawnMobAt). HumanoidMob.renderModel always reuses the SAME */
+/*  single "humanoid.armor" model regardless of mob type, copying the */
+/*  current arm/head pose straight off whichever model is active - so this */
+/*  one function (called from both ZombieModel_Draw and SkeletonModel_Draw) */
+/*  mirrors that exactly. Notably, c0.30 never gave Skeleton its own thinner */
+/*  armor geometry (SkeletonModel.java's thin arms get the regular/thicker */
+/*  humanoid-shaped overlay regardless), so that mismatch is faithfully kept */
+/*  here too rather than "fixed". Legs are never armoured either way. */
+static GfxResourceID armor_texId;
+
+/* Minecraft Classic's /armor/plate.png (64x32 RGBA). Resources.c now pulls */
+/*  the real asset from the classic jar into default.zip (same as char.png/ */
+/*  zombie.png/etc.), so this embedded copy is just a fallback for before */
+/*  that resource exists (e.g. very first launch) - otherwise armor_texId */
+/*  would stay 0 and MobArmor_Draw would bail, leaving every armored zombie/ */
+/*  skeleton's overlay invisible. A custom pack CAN still override either */
+/*  source via the armor_entry TextureEntry below (Game_UpdateTexture */
+/*  deletes whichever texture was active first, so no leak). */
+static const cc_uint8 plate_png[] = {
+	0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+	0x00,0x00,0x00,0x40,0x00,0x00,0x00,0x20,0x08,0x06,0x00,0x00,0x00,0xA2,0x9D,0x7E,
+	0x84,0x00,0x00,0x00,0x04,0x67,0x41,0x4D,0x41,0x00,0x00,0xB1,0x8F,0x0B,0xFC,0x61,
+	0x05,0x00,0x00,0x00,0x18,0x74,0x45,0x58,0x74,0x53,0x6F,0x66,0x74,0x77,0x61,0x72,
+	0x65,0x00,0x50,0x61,0x69,0x6E,0x74,0x2E,0x4E,0x45,0x54,0x20,0x76,0x33,0x2E,0x33,
+	0x36,0xA9,0xE7,0xE2,0x25,0x00,0x00,0x02,0x79,0x49,0x44,0x41,0x54,0x68,0x43,0xED,
+	0x98,0xDB,0x4A,0xC4,0x40,0x0C,0x86,0xEB,0x0B,0x08,0x7A,0xA1,0xE8,0xFB,0x5F,0x79,
+	0xC4,0x03,0xAE,0xE7,0xE3,0x2A,0x2A,0x2A,0xAE,0xE2,0x01,0x45,0x10,0x41,0xBD,0x53,
+	0xF0,0x7E,0x77,0xE4,0x1B,0xF8,0x97,0x10,0xBB,0x6B,0x2F,0xEC,0x6E,0xD7,0xB6,0x50,
+	0x3A,0xD3,0x64,0x66,0x92,0x3F,0x99,0x99,0x24,0x43,0xC9,0x2F,0xCF,0xDB,0xFB,0x57,
+	0xF8,0xFC,0xFC,0x48,0x46,0x46,0x46,0x13,0xBE,0xCD,0x66,0x33,0x8E,0x68,0xB5,0x5A,
+	0xC9,0xD8,0xD8,0x78,0x32,0x39,0x31,0x3C,0xF4,0xDB,0x1C,0x03,0x4D,0xBF,0xB9,0x7D,
+	0x0E,0x3B,0xBB,0x67,0x61,0x61,0x71,0x33,0xAC,0xD4,0xF6,0xC2,0xEA,0x5A,0xBD,0xFD,
+	0x5E,0x5D,0x3F,0x85,0x81,0x56,0x2E,0x8B,0xF0,0x02,0x00,0xC5,0xD7,0x37,0x8E,0xC2,
+	0xD6,0xF6,0x49,0xFB,0x5B,0x0A,0x00,0x2E,0x1B,0x8F,0x61,0x69,0x79,0x27,0xBE,0xD6,
+	0xFA,0xB4,0x4B,0x01,0x00,0x4A,0x62,0xF9,0xFA,0x61,0x23,0x7E,0x4B,0xB7,0x05,0xEE,
+	0xEE,0x5F,0xA2,0xDB,0x73,0x0E,0x58,0x00,0x68,0x43,0xCB,0xB2,0x8D,0x06,0x9A,0x87,
+	0x33,0x60,0xFF,0xE0,0xE2,0x87,0xF5,0xF1,0x04,0x68,0x03,0xAD,0x5C,0x16,0xE1,0xB9,
+	0x06,0xD9,0x06,0x58,0x9B,0x36,0x67,0x02,0x7D,0xBD,0x59,0xE6,0x28,0x34,0x0F,0x4A,
+	0x49,0x49,0x2C,0x8A,0xA2,0x7C,0xA5,0xA0,0xE8,0xFC,0xF7,0x34,0xF8,0xD2,0xE8,0xE2,
+	0x15,0x68,0xF0,0xF8,0xB1,0x85,0x01,0x10,0xE1,0xEC,0xC1,0xE6,0xEF,0x7A,0xD1,0xFD,
+	0x2D,0x00,0x1F,0x67,0x03,0x74,0xCE,0x03,0x7F,0x46,0x68,0x4E,0xE8,0xD0,0x38,0x44,
+	0xE1,0xE7,0xBF,0xD6,0x60,0x5C,0xDF,0xBD,0x03,0x4B,0x58,0xE1,0x11,0xCE,0x06,0x3D,
+	0xD0,0x2D,0x28,0xB4,0x01,0x43,0xFF,0xA0,0x4B,0x29,0xD1,0xFC,0x4D,0x61,0xFB,0x8C,
+	0x55,0x3C,0xC1,0xBA,0x7D,0x07,0xE0,0xFC,0xE2,0x3E,0x2A,0x6C,0x85,0xC4,0x52,0x27,
+	0xA7,0xB7,0xD1,0x62,0xDD,0xEE,0x7A,0xC5,0x02,0x1A,0x6B,0xBD,0x44,0x20,0x31,0x7F,
+	0xDA,0x2D,0xA2,0x31,0x7D,0x07,0x40,0x16,0xFC,0x2B,0x81,0xD2,0xC2,0x65,0xB9,0xBE,
+	0x0F,0xA4,0xE0,0xED,0x3B,0x00,0x79,0x0B,0xA0,0x2D,0xE4,0xD7,0x51,0x4C,0x91,0xF7,
+	0xFA,0xD5,0xFC,0x15,0x02,0xFF,0x0C,0x01,0x1B,0xB7,0x94,0x22,0x19,0xF3,0xF6,0xB3,
+	0xD7,0x72,0x29,0x01,0xB0,0x81,0x5B,0x29,0x72,0x91,0x34,0x0F,0x20,0x1F,0x01,0x88,
+	0x42,0x00,0xA0,0x3D,0x89,0x30,0x36,0x37,0xF0,0x82,0x4B,0x60,0xBF,0x87,0xD5,0x4F,
+	0xE3,0xC7,0xC5,0x3B,0xCD,0xEF,0xD7,0xF3,0xB9,0x4B,0xCF,0x72,0x0D,0xE5,0x02,0x0A,
+	0x80,0xAC,0x8B,0x4A,0x29,0xFB,0x8F,0xB6,0x8D,0x3C,0xB3,0xF0,0x33,0x37,0xEF,0xD1,
+	0xF1,0x75,0x04,0xC4,0x06,0x54,0xDD,0xFA,0x3D,0x09,0xB4,0x40,0xDA,0x26,0x39,0xFE,
+	0x90,0xB2,0x7D,0x85,0xD6,0x36,0x21,0x52,0xC5,0x89,0xBC,0x80,0x36,0xEE,0x2D,0x30,
+	0x67,0x66,0x6B,0x81,0x50,0xDA,0xE6,0x2A,0xF0,0xD8,0x5C,0x44,0x35,0x4B,0x05,0x56,
+	0xF4,0x19,0xA3,0x0A,0x56,0xEE,0x97,0x20,0x69,0x2E,0x02,0xF2,0x22,0xB8,0x2C,0x82,
+	0xB2,0x36,0x03,0x94,0xD5,0x6C,0xE8,0x0D,0xBF,0x0F,0xC5,0xD3,0xCA,0x6E,0xF6,0x9F,
+	0x00,0x9D,0x9B,0x5F,0x8F,0xEB,0x09,0x30,0x25,0x71,0x02,0x54,0xD9,0x6A,0xEE,0x00,
+	0x78,0x05,0x6C,0xB1,0x04,0xC1,0xA9,0x26,0x3D,0x3C,0xBC,0xC6,0xF3,0x41,0xC9,0x93,
+	0xCD,0x36,0x6D,0xD5,0x79,0x6A,0xBA,0xD6,0xB6,0xBE,0xDC,0x1E,0x6B,0x32,0x4E,0x55,
+	0x29,0x0F,0x20,0x00,0xD8,0x2D,0x25,0xBA,0xEA,0x98,0x3D,0x01,0xC0,0x5B,0x48,0xE9,
+	0xAE,0xB2,0x43,0x5B,0x52,0x93,0xC2,0x78,0x08,0x56,0xF4,0x00,0xA2,0x0C,0xAE,0xAF,
+	0x6D,0x90,0xBB,0x02,0x79,0x2C,0xD0,0xA9,0x38,0xD2,0x69,0x2D,0x5B,0x50,0x91,0xD7,
+	0x14,0xA2,0x58,0x92,0x07,0x38,0xD5,0x9C,0x15,0x02,0x15,0x02,0x15,0x02,0x45,0x42,
+	0xE0,0x1B,0x51,0x2E,0xC9,0x25,0xF3,0xBE,0x9B,0xBB,0x00,0x00,0x00,0x00,0x49,0x45,
+	0x4E,0x44,0xAE,0x42,0x60,0x82,
+};
+
+static void MobArmor_EnsureTexture(void) {
+	struct Stream src;
+	struct Bitmap bmp;
+	if (armor_texId) return;
+
+	Stream_ReadonlyMemory(&src, (void*)plate_png, (cc_uint32)sizeof(plate_png));
+	if (Png_Decode(&bmp, &src)) { Mem_Free(bmp.scan0); return; }
+
+	armor_texId = Gfx_CreateTexture(&bmp, 0, false);
+	Mem_Free(bmp.scan0);
+}
+
+static void ArmorPngProcess(struct Stream* stream, const cc_string* name) {
+	Game_UpdateTexture(&armor_texId, stream, name, NULL, NULL);
+}
+static struct TextureEntry armor_entry = { "plate.png", ArmorPngProcess };
+
+#define ARMOR_HEAD_VERTICES  (1 * MODEL_BOX_VERTICES)
+#define ARMOR_BODY_VERTICES  (3 * MODEL_BOX_VERTICES) /* torso + both arms */
+
+/* HumanoidMob.renderModel's armor pass - head/torso/arms only, in their own */
+/*  separate draw call against plate.png (a different texture than the */
+/*  mob's own skin), so this can't share the body's Model_LockVB range. */
+static void MobArmor_Draw(struct Entity* e, struct ModelPart* head, struct ModelPart* torso,
+	struct ModelPart* leftArm, struct ModelPart* rightArm) {
+	cc_bool helmet = e->Anim.HasHelmet, armor = e->Anim.HasArmor;
+	int count = 0;
+	if (!helmet && !armor) return;
+
+	MobArmor_EnsureTexture();
+	if (!armor_texId) return;
+
+	if (helmet) count += ARMOR_HEAD_VERTICES;
+	if (armor)  count += ARMOR_BODY_VERTICES;
+	Model_LockVB(e, count);
+	/* Model_DrawPart/Model_DrawRotate emit into Models.Vertices[model->index] and */
+	/*  bump model->index. Model_SetupState zeroes it once per entity, but the body */
+	/*  draw (HumanModel_DrawCore) already consumed that range and left model->index */
+	/*  at its own vertex count - so this fresh, smaller armor VB must restart from 0, */
+	/*  else the armor verts spill past the locked region and the count we draw from */
+	/*  offset 0 is uninitialised garbage (the "broken armor" look). */
+	Models.Active->index = 0;
+
+	if (helmet) Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, head, true);
+	if (armor) {
+		Model_DrawPart(torso);
+		Models.Rotation = ROTATE_ORDER_XZY;
+		Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  leftArm,  false);
+		Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, rightArm, false);
+		Models.Rotation = ROTATE_ORDER_ZYX;
+	}
+
+	Model_UnlockVB();
+	Gfx_BindTexture(armor_texId);
+	Gfx_DrawVb_IndexedTris(count);
 }
 
 
@@ -1756,8 +1928,24 @@ static void SheepModel_MakeParts(void) {
 	BoxDesc_BuildBox(&fur_rightLegBack,  &frBack);
 }
 
+/* Sheep.renderModel's grazing head-dip: the head part's render origin is */
+/*  moved down 8 and forward 1 model units * graze. Since DrawRotate emits */
+/*  R*(v-p)+p, translating the origin equals translating the emitted verts - */
+/*  so shift the just-drawn head's vertices in place. */
+static void SheepModel_DipHead(struct Entity* e, int headStart) {
+	struct VertexTextured* v = &Models.Vertices[headStart];
+	float dy = e->Anim.Graze * (8.0f/16.0f);
+	float dz = e->Anim.Graze * (1.0f/16.0f);
+	int i;
+	if (e->Anim.Graze <= 0.0f) return;
+
+	for (i = 0; i < MODEL_BOX_VERTICES; i++, v++) { v->y -= dy; v->z -= dz; }
+}
+
 static void SheepModel_DrawBody(struct Entity* e) {
+	int headStart = Models.Active->index;
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &sheep_head, true);
+	SheepModel_DipHead(e, headStart);
 	Model_DrawPart(&sheep_torso);
 	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &sheep_leftLegFront,  false);
 	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &sheep_rightLegFront, false);
@@ -1780,7 +1968,11 @@ static void SheepModel_Draw(struct Entity* e) {
 	Model_LockVB(e, SHEEP_BODY_VERTICES + SHEEP_FUR_VERTICES);
 
 	SheepModel_DrawBody(e);
-	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &fur_head, true);
+	{
+		int furHeadStart = Models.Active->index;
+		Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &fur_head, true);
+		SheepModel_DipHead(e, furHeadStart); /* fur head copies the dip (Sheep.renderModel) */
+	}
 	Model_DrawPart(&fur_torso);
 	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &fur_leftLegFront,  false);
 	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &fur_rightLegFront, false);
@@ -1829,6 +2021,10 @@ static void NoFurModel_Register(void) {
 *#########################################################################################################################*/
 static struct ModelPart skeleton_head, skeleton_torso, skeleton_leftLeg;
 static struct ModelPart skeleton_rightLeg, skeleton_leftArm, skeleton_rightArm;
+/* Skeleton's own copy of the shared "humanoid.armor" overlay parts (same */
+/*  geometry as human_armor* - see HumanModel_MakeParts - just built into */
+/*  skeleton_vertices since each model owns its own vertex array). */
+static struct ModelPart skeleton_armorHead, skeleton_armorTorso, skeleton_armorLeftArm, skeleton_armorRightArm;
 #define SKELETON_MAX_VERTICES (6 * MODEL_BOX_VERTICES)
 
 static void SkeletonModel_MakeParts(void) {
@@ -1869,21 +2065,62 @@ static void SkeletonModel_MakeParts(void) {
 	BoxDesc_BuildBox(&skeleton_rightLeg, &rLeg);
 	BoxDesc_BuildBox(&skeleton_leftArm,  &lArm);
 	BoxDesc_BuildBox(&skeleton_rightArm, &rArm);
+
+	/* Same +1 inflate overlay as human_armor* (HumanoidMob.renderModel always */
+	/*  uses the thick humanoid-shaped armor model, never Skeleton's own thin */
+	/*  arms), duplicated here purely because it must live in skeleton_vertices. */
+	{
+		static const struct BoxDesc armorHead = {
+			BoxDesc_Tex(0,0),
+			BoxDesc_Dims(-4,24,-4, 4,32,4),
+			BoxDesc_Bounds(-5,23,-5, 5,33,5),
+			BoxDesc_Rot(0,24,0),
+		};
+		static const struct BoxDesc armorTorso = {
+			BoxDesc_Tex(16,16),
+			BoxDesc_Dims(-4,12,-2, 4,24,2),
+			BoxDesc_Bounds(-5,11,-3, 5,25,3),
+			BoxDesc_Rot(0,12,0),
+		};
+		static const struct BoxDesc armorLArm = {
+			BoxDesc_Tex(40,16),
+			BoxDesc_Dims(-8,12,-2, -4,24,2),
+			BoxDesc_Bounds(-9,11,-3, -3,25,3),
+			BoxDesc_Rot(-5,22,0),
+		};
+		static const struct BoxDesc armorRArm = {
+			BoxDesc_Tex(40,16),
+			BoxDesc_Dims(4,12,-2, 8,24,2),
+			BoxDesc_Bounds(3,11,-3, 9,25,3),
+			BoxDesc_Rot(5,22,0),
+		};
+		BoxDesc_BuildBox(&skeleton_armorHead,     &armorHead);
+		BoxDesc_BuildBox(&skeleton_armorTorso,    &armorTorso);
+		BoxDesc_BuildBox(&skeleton_armorLeftArm,  &armorLArm);
+		BoxDesc_BuildBox(&skeleton_armorRightArm, &armorRArm);
+	}
 }
 
+/* SkeletonModel extends ZombieModel in c0.30, so it shares the exact same arm */
+/*  pose formula (defined down in the ZombieModel section). */
+static void ZombieModel_SetArmPose(struct Entity* e);
+
 static void SkeletonModel_Draw(struct Entity* e) {
+	ZombieModel_SetArmPose(e);
 	Model_ApplyTexture(e);
 	Model_LockVB(e, SKELETON_MAX_VERTICES);
 
 	Model_DrawRotate(-e->Pitch * MATH_DEG2RAD, 0, 0, &skeleton_head, true);
 	Model_DrawPart(&skeleton_torso);
-	Model_DrawRotate(e->Anim.LeftLegX,  0, 0,                      &skeleton_leftLeg,  false);
-	Model_DrawRotate(e->Anim.RightLegX, 0, 0,                      &skeleton_rightLeg, false);
-	Model_DrawRotate(90.0f * MATH_DEG2RAD,   0, e->Anim.LeftArmZ,  &skeleton_leftArm,  false);
-	Model_DrawRotate(90.0f * MATH_DEG2RAD,   0, e->Anim.RightArmZ, &skeleton_rightArm, false);
+	Model_DrawRotate(e->Anim.LeftLegX,  0, 0, &skeleton_leftLeg,  false);
+	Model_DrawRotate(e->Anim.RightLegX, 0, 0, &skeleton_rightLeg, false);
+	Model_DrawRotate(e->Anim.LeftArmX,  e->Anim.LeftArmY,  e->Anim.LeftArmZ,  &skeleton_leftArm,  false);
+	Model_DrawRotate(e->Anim.RightArmX, e->Anim.RightArmY, e->Anim.RightArmZ, &skeleton_rightArm, false);
 
 	Model_UnlockVB();
 	Gfx_DrawVb_IndexedTris(SKELETON_MAX_VERTICES);
+
+	MobArmor_Draw(e, &skeleton_armorHead, &skeleton_armorTorso, &skeleton_armorLeftArm, &skeleton_armorRightArm);
 }
 
 static void SkeletonModel_DrawArm(struct Entity* e) {
@@ -1899,7 +2136,7 @@ static void SkeletonModel_DrawArm(struct Entity* e) {
 static void SkeletonModel_GetSize(struct Entity* e)   { Model_RetSize(8.0f,28.1f,8.0f); }
 static void SkeletonModel_GetBounds(struct Entity* e) { Model_RetAABB(-4,0,-4, 4,32,4); }
 
-static struct ModelVertex skeleton_vertices[MODEL_BOX_VERTICES * 6];
+static struct ModelVertex skeleton_vertices[MODEL_BOX_VERTICES * (6 + 4)];
 static struct ModelTex skeleton_tex = { "skeleton.png" };
 static struct Model skeleton_model  = { "skeleton", skeleton_vertices, &skeleton_tex,
 	SkeletonModel_MakeParts, SkeletonModel_Draw,
@@ -2006,6 +2243,9 @@ static struct Model spider_model  = { "spider", spider_vertices, &spider_tex,
 static void SpiderModel_Register(void) {
 	Model_Init(&spider_model);
 	spider_model.maxVertices = SPIDER_MAX_VERTICES;
+	/* Spider.java sets bobStrength = 0.0F - unlike every other mob, spiders */
+	/*  don't bounce while walking. */
+	spider_model.bobbing     = false;
 	Model_Register(&spider_model);
 }
 
@@ -2013,10 +2253,46 @@ static void SpiderModel_Register(void) {
 /*########################################################################################################################*
 *--------------------------------------------------------ZombieModel------------------------------------------------------*
 *#########################################################################################################################*/
+/* c0.30's ZombieModel.setRotationAngles (inherited by SkeletonModel) - fully */
+/*  replaces the walk-cycle arm swing super.setRotationAngles would otherwise */
+/*  give a HumanoidModel, with a static forward pose plus three independent */
+/*  effects, all driven straight off the decompiled formula:
+     v1 = sin(grounded*PI), v2 = sin((1-(1-grounded)^2)*PI)   [grounded = Anim.AttackSwing]
+     yaw   = +-(0.1 - v1*0.6)         outward splay; widens during the attack chop
+     pitch = -PI/2 - (v1*1.2 - v2*0.4)   <- the attack chop itself (both arms equal)
+     roll  = +-(cos(age*0.09)*0.05 + 0.05)   slow always-on idle sway (age = Mob.tickCount)
+     pitch += +-sin(age*0.067)*0.05          slow always-on idle sway, added to the chop
+   At grounded==0 and age==0 this reduces to the plain forward pose, so it's a
+   no-op for the player and any non-zombie/skeleton model.
+   Sign/axis notes (unverified - no display in this dev environment, flag for
+   visual check once testable):
+   - Pitch (X): CC's static pose is +90deg where Java's is -90deg, i.e. mirrored,
+     so Java's `pitch -= X` becomes `+= X` here for both the attack and idle term.
+   - Yaw (Y) and roll->Z have no established CC precedent (arm Y was always 0
+     before this); ported as a direct, unmirrored read of Java's value. If the
+     splay/sway looks inverted or like it fights the attack chop, try flipping
+     the sign of LeftArmY/RightArmY and/or LeftArmZ/RightArmZ below first. */
+static void ZombieModel_SetArmPose(struct Entity* e) {
+	float g = e->Anim.AttackSwing, age = e->Anim.Age;
+	float v1 = Math_SinF(g * MATH_PI);
+	float v2 = Math_SinF((1.0f - (1.0f - g) * (1.0f - g)) * MATH_PI);
+	float chop      = 90.0f * MATH_DEG2RAD + (v1 * 1.2f - v2 * 0.4f);
+	float yaw       = 0.1f - v1 * 0.6f;
+	float idleRoll  = Math_CosF(age * 0.09f)  * 0.05f + 0.05f;
+	float idlePitch = Math_SinF(age * 0.067f) * 0.05f;
+
+	e->Anim.LeftArmX  = chop + idlePitch;
+	e->Anim.RightArmX = chop - idlePitch;
+	e->Anim.LeftArmY  =  yaw;
+	e->Anim.RightArmY = -yaw;
+	e->Anim.LeftArmZ  = -idleRoll;
+	e->Anim.RightArmZ =  idleRoll;
+}
+
 static void ZombieModel_Draw(struct Entity* e) {
-	e->Anim.LeftArmX  = 90.0f * MATH_DEG2RAD;
-	e->Anim.RightArmX = 90.0f * MATH_DEG2RAD;
+	ZombieModel_SetArmPose(e);
 	HumanModel_DrawCore(e, &human_set, false);
+	MobArmor_Draw(e, &human_armorHead, &human_armorTorso, &human_armorLeftArm, &human_armorRightArm);
 }
 static void ZombieModel_DrawArm(struct Entity* e) {
 	HumanModel_DrawArmCore(e, &human_set);
@@ -2392,6 +2668,7 @@ static void RegisterDefaultModels(void) {
 	Model_RegisterTexture(&spider_tex);
 	Model_RegisterTexture(&zombie_tex);
 	Model_RegisterTexture(&skinnedCube_tex);
+	TextureEntry_Register(&armor_entry);
 #endif
 
 	HumanoidModel_Register();

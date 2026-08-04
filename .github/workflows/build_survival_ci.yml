@@ -1,0 +1,145 @@
+name: Survival branch CI (compile check + artifacts)
+# Lightweight compile-only verification for the survival test branch.
+# Cross-compiles the Windows builds with mingw (as the main Windows workflow
+# does) using -Werror, so any compilation regression fails the check.
+# Artifacts are uploaded so the branch can be tested without a local toolchain.
+on:
+  push:
+    branches:
+      - 'survival-test'
+      - 'claude/**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}-survival-ci
+  cancel-in-progress: true
+
+# needed to move the rolling release tag + upload its assets
+permissions:
+  contents: write
+
+jobs:
+#============================================
+# ============== 32 BIT WINDOWS =============
+# ===========================================
+  build-win32:
+    name: Windows 32-bit (mingw)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mingw
+        shell: bash
+        run: sudo apt-get -y install gcc-mingw-w64-i686
+
+      - name: Compile 32 bit Windows builds
+        shell: bash
+        env:
+          LIBS: "-lwinmm -limagehlp"
+          SRCS: "src/*.c third_party/bearssl/*.c"
+          COMMON_FLAGS: "-O1 -fno-stack-protector -fno-math-errno -Qn -Werror"
+          WIN32_FLAGS:  "-mwindows -nostartfiles -Wl,-e_main_real -DCC_NOMAIN"
+        run: |
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-d3d9.exe  ${{ env.LIBS }}
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
+          i686-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN32_FLAGS }} -o cc-w32-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
+
+      - name: Upload 32-bit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-SurvivalTest-Win32
+          path: |
+            cc-w32-d3d9.exe
+            cc-w32-ogl.exe
+            cc-w32-d3d11.exe
+          retention-days: 14
+
+      # rolling release (see build_mac_survival.yml for the pattern rationale)
+      - name: Move rolling release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        run: |
+          git tag -f survival-latest
+          git push -f origin survival-latest
+
+      - name: Publish to rolling release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: survival-latest
+          name: SurvivalTest client - latest branch build
+          prerelease: true
+          body: |
+            Rolling build of the survival branch - updated automatically on every
+            push. Assets are replaced as each platform's workflow finishes, so all
+            assets match the newest push once its runs complete.
+            macOS: unzip, then right-click > Open the app the first time
+            (unsigned build). Windows: pick the exe for your renderer
+            (d3d9 is the safe default).
+          files: |
+            cc-w32-d3d9.exe
+            cc-w32-ogl.exe
+            cc-w32-d3d11.exe
+
+#============================================
+# ============== 64 BIT WINDOWS =============
+# ===========================================
+  build-win64:
+    name: Windows 64-bit (mingw)
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mingw
+        shell: bash
+        run: sudo apt-get -y install gcc-mingw-w64-x86-64
+
+      - name: Compile 64 bit Windows builds
+        shell: bash
+        env:
+          LIBS: "-lwinmm -limagehlp"
+          SRCS: "src/*.c third_party/bearssl/*.c"
+          COMMON_FLAGS: "-O1 -fno-stack-protector -fno-math-errno -Qn -Werror"
+          WIN64_FLAGS:  "-mwindows -nostartfiles -Wl,-emain_real -DCC_NOMAIN"
+        run: |
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d9.exe  ${{ env.LIBS }}
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-ogl.exe   -DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 ${{ env.LIBS }}
+          x86_64-w64-mingw32-gcc ${{ env.SRCS }} ${{ env.COMMON_FLAGS }} ${{ env.WIN64_FLAGS }} -o cc-w64-d3d11.exe -DCC_GFX_BACKEND=CC_GFX_BACKEND_D3D11 ${{ env.LIBS }}
+
+      - name: Upload 64-bit artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClassiCube-SurvivalTest-Win64
+          path: |
+            cc-w64-d3d9.exe
+            cc-w64-ogl.exe
+            cc-w64-d3d11.exe
+          retention-days: 14
+
+      # rolling release (see build_mac_survival.yml for the pattern rationale)
+      - name: Move rolling release tag
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        run: |
+          git tag -f survival-latest
+          git push -f origin survival-latest
+
+      - name: Publish to rolling release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/claude/mock-survival-server-33jx1q'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: survival-latest
+          name: SurvivalTest client - latest branch build
+          prerelease: true
+          body: |
+            Rolling build of the survival branch - updated automatically on every
+            push. Assets are replaced as each platform's workflow finishes, so all
+            assets match the newest push once its runs complete.
+            macOS: unzip, then right-click > Open the app the first time
+            (unsigned build). Windows: pick the exe for your renderer
+            (d3d9 is the safe default).
+          files: |
+            cc-w64-d3d9.exe
+            cc-w64-ogl.exe
+            cc-w64-d3d11.exe

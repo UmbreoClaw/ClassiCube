@@ -41,6 +41,9 @@ extern struct CustomParticleEffect Particles_CustomEffects[256];
 
 /* http://www.opengl-tutorial.org/intermediate-tutorials/billboards-particles/billboards/ */
 void Particle_DoRender(const Vec2* size, const Vec3* pos, const TextureRec* rec, PackedCol col, struct VertexTextured* vertices);
+/* The shared particles.png atlas texture (top-left 8 cells of its 16-wide grid */
+/*  are the classic smoke-puff animation frames). 0 until the pack has loaded. */
+GfxResourceID Particles_TexId(void);
 void Particles_Render(float t);
 void Particles_BreakBlockEffect(IVec3 coords, BlockID oldBlock, BlockID block);
 void Particles_RainSnowEffect(float x, float y, float z);

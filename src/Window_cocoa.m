@@ -265,6 +265,13 @@ static void RefreshWindowBounds(void) {
 @implementation CCWindowDelegate
 - (void)windowDidResize:(NSNotification *)notification {
 	RefreshWindowBounds();
+#if CC_GFX_BACKEND_IS_GL()
+	/* NSOpenGLContext must be told its view's frame changed, same as in
+	    windowDidMove below - without this the GL drawable keeps its OLD size,
+	    so after enlarging the window the game renders into a stale-sized
+	    rectangle in the bottom-left corner (GL origin) of the window. */
+	GLContext_Update();
+#endif
 	Event_RaiseVoid(&WindowEvents.Resized);
 }
 
@@ -811,6 +818,19 @@ void GLContext_Create(void) {
 	ctxHandle = [NSOpenGLContext alloc];
 	ctxHandle = [ctxHandle initWithFormat:fmt shareContext:Nil];
 	if (!ctxHandle) Process_Abort("Failed to create OpenGL context");
+
+	/* Apps linked against the macOS 10.15+ SDK get a Retina-resolution (2x)
+	    GL surface by default - but the engine sizes its viewport and mouse
+	    input in points (1x), so on a Retina display the game rendered into
+	    the bottom-left QUARTER of the window. Opt out so the surface stays
+	    1x point-sized, the same behavior as builds linked on older SDKs
+	    (AppKit scales it up; proper HiDPI rendering is a separate project). */
+	if ([viewHandle respondsToSelector:@selector(setWantsBestResolutionOpenGLSurface:)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+		[viewHandle setWantsBestResolutionOpenGLSurface:NO];
+#pragma clang diagnostic pop
+	}
 
 	[ctxHandle setView:viewHandle];
 	[ctxHandle makeCurrentContext];

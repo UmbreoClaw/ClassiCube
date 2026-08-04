@@ -77,6 +77,10 @@ static void Gen_Run(void) {
 cc_bool Gen_IsDone(void) { return gen_done; }
 #endif
 
+/* Generators outside this file can't reach the gen_done static - the
+    Indev generator calls this at the end of its Generate(). */
+void Gen_SetDone(void) { gen_done = true; }
+
 static void Gen_Reset(void) {
 	Gen_CurrentProgress = 0.0f;
 	Gen_CurrentState    = "";
@@ -446,7 +450,7 @@ static void NotchyGen_CarveCaves(void) {
 		caveY = (float)Random_Next(&rnd, World.Height);
 		caveZ = (float)Random_Next(&rnd, World.Length);
 
-		caveLen = (int)(Random_Float(&rnd) * Random_Float(&rnd) * 200.0f);
+		caveLen = (int)((Random_Float(&rnd) + Random_Float(&rnd)) * 200.0f);
 		theta   = Random_Float(&rnd) * 2.0f * MATH_PI; deltaTheta = 0.0f;
 		phi     = Random_Float(&rnd) * 2.0f * MATH_PI; deltaPhi   = 0.0f;
 		caveRadius = Random_Float(&rnd) * Random_Float(&rnd);
@@ -490,7 +494,7 @@ static void NotchyGen_CarveOreVeins(float abundance, const char* state, BlockRaw
 		veinY = (float)Random_Next(&rnd, World.Height);
 		veinZ = (float)Random_Next(&rnd, World.Length);
 
-		veinLen = (int)(Random_Float(&rnd) * Random_Float(&rnd) * 75 * abundance);
+		veinLen = (int)((Random_Float(&rnd) + Random_Float(&rnd)) * 75 * abundance);
 		theta = Random_Float(&rnd) * 2.0f * MATH_PI; deltaTheta = 0.0f;
 		phi   = Random_Float(&rnd) * 2.0f * MATH_PI; deltaPhi   = 0.0f;
 
@@ -499,7 +503,7 @@ static void NotchyGen_CarveOreVeins(float abundance, const char* state, BlockRaw
 			veinZ += Math_CosF(theta) * Math_CosF(phi);
 			veinY += Math_SinF(phi);
 
-			theta      = deltaTheta * 0.2f;
+			theta      = theta + deltaTheta * 0.2f;
 			deltaTheta = deltaTheta * 0.9f + Random_Float(&rnd) - Random_Float(&rnd);
 			phi        = phi * 0.5f + deltaPhi * 0.25f;
 			deltaPhi   = deltaPhi   * 0.9f + Random_Float(&rnd) - Random_Float(&rnd);

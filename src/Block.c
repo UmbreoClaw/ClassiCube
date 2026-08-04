@@ -9,6 +9,7 @@
 #include "Picking.h"
 #include "Lighting.h"
 #include "Audio.h"
+#include "IndevTest.h"
 
 struct _BlockLists Blocks;
 
@@ -298,6 +299,10 @@ static void Block_RecalculateAllSpriteBB(void) {
 	int block;
 	for (block = BLOCK_AIR; block < BLOCK_COUNT; block++) {
 		if (Blocks.Draw[block] != DRAW_SPRITE) continue;
+		/* Indev crops keep BlockCrops' fixed 1 x 0.25 x 1 selection box - */
+		/*  the texture-alpha derived sprite box would override it here on */
+		/*  every atlas change. */
+		if (IndevTest_IsCropBlock((BlockID)block)) continue;
 
 		Block_RecalculateBB((BlockID)block);
 	}

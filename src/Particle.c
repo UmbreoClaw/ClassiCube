@@ -598,6 +598,8 @@ static void ParticlesPngProcess(struct Stream* stream, const cc_string* name) {
 }
 static struct TextureEntry particles_entry = { "particles.png", ParticlesPngProcess };
 
+GfxResourceID Particles_TexId(void) { return particles_TexId; }
+
 
 static void OnContextLost(void* obj) {
 	Gfx_DeleteDynamicVb(&particles_VB); 

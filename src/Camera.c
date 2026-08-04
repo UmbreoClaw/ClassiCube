@@ -10,6 +10,7 @@
 #include "InputHandler.h"
 #include "Event.h"
 #include "Options.h"
+#include "SurvivalTest.h"
 #include "Picking.h"
 #include "Platform.h"
 #include "Protocol.h"
@@ -48,7 +49,8 @@ void Camera_KeyLookUpdate(float delta) {
 *--------------------------------------------------Perspective camera-----------------------------------------------------*
 *#########################################################################################################################*/
 static void PerspectiveCamera_GetProjection(struct Matrix* proj) {
-	float fovy = Camera.Fov * MATH_DEG2RAD;
+	/* Survival Test's death camera divides the FOV, slowly zooming in (1x->3x) */
+	float fovy = Camera.Fov * MATH_DEG2RAD / SurvivalTest_DeathFovZoom();
 	float aspectRatio = (float)Game.Width / (float)Game.Height;
 	Gfx_CalcPerspectiveMatrix(proj, fovy, aspectRatio, (float)Game_ViewDistance);
 }

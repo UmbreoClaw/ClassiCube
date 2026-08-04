@@ -14,6 +14,10 @@
 #include "Vectors.h"
 #include "Chat.h"
 #include "Audio.h"
+#include "SurvivalTest.h"
+#include "IndevTest.h"
+#include "IndevFire.h"
+#include "SurvivalNet.h"
 
 /* Data for a resizable queue, used for liquid physic tick entries. */
 struct TickQueue {
@@ -98,7 +102,13 @@ static struct TickQueue lavaQ, waterQ;
 #define PHYSICS_DELAY_SHIFT 27
 #define PHYSICS_ONE_DELAY   (1U << PHYSICS_DELAY_SHIFT)
 #define PHYSICS_LAVA_DELAY (30U << PHYSICS_DELAY_SHIFT)
+/* Indev BlockFlowing.tickRate(): lava reflows every 25 ticks, not 30 */
+#define PHYSICS_LAVA_DELAY_NOW ((IndevTest_Enabled ? 25U : 30U) << PHYSICS_DELAY_SHIFT)
 #define PHYSICS_WATER_DELAY (5U << PHYSICS_DELAY_SHIFT)
+
+/* c0.30 Level.tick's random-update state (see Physics_TickRandomBlocksC030) */
+static int physics_unprocessed;
+static cc_uint32 physics_randId;
 
 static void Physics_OnNewMapLoaded(void* obj) {
 	TickQueue_Clear(&lavaQ);
@@ -111,6 +121,11 @@ static void Physics_OnNewMapLoaded(void* obj) {
 	Tree_Blocks = World.Blocks;
 	Random_SeedFromCurrentTime(&physics_rnd);
 	Tree_Rnd = &physics_rnd;
+
+	/* c0.30 Level.initTransient: randId = random.nextInt() */
+	physics_randId = ((cc_uint32)Random_Next(&physics_rnd, 65536) << 16)
+	               |  (cc_uint32)Random_Next(&physics_rnd, 65536);
+	physics_unprocessed = 0;
 }
 
 void Physics_SetEnabled(cc_bool enabled) {
@@ -200,23 +215,163 @@ static void Physics_TickRandomBlocks(void) {
 }
 
 
+/* c0.30 Level.tick's random block updates, at the genuine rate: unprocessed
+    accumulates the world volume every tick and pays out volume/200 updates
+    (the remainder carries), coordinates unpacked from the genuine randId LCG
+    (randId*3 + 1013904223, >> 2, x from the low bits, z next, y highest).
+    The engine loop above is 3 per 16^3 chunk = volume/1365 - about 6.8x
+    sparser, so grass/saplings/flowers/mushrooms/liquid activation all ran
+    visibly slow in c0.30 survival. Handlers are the same OnRandomTick table
+    (genuine gates on Block.physics[], the same block set). Masks assume
+    power-of-two dims like genuine; the bounds check skips (biased) picks on
+    odd-sized imports. Mirrors IndevTest_TickRandomBlocks. */
+/* Genuine c0.30 GrassTile.tick (tile q.a, from the jar): a 1-in-4 gate on the
+    WHOLE tick; an unlit grass block turns to dirt; a lit one makes FOUR spread
+    attempts at x+rand(3)-1, y+rand(5)-3, z+rand(3)-1, each converting a lit
+    dirt block to grass. "Lit" is Level.isLit = pure sky exposure (c0.30 has no
+    block light). The dirt tile has NO tick method at all - dirt only greens by
+    spread from adjacent grass, never spontaneously. The classic-creative
+    handlers below (Physics_HandleDirt/HandleGrass) mimic classic SERVER
+    physics instead and stay registered for that mode; c0.30 survival must not
+    use them (no 1/4 gate = 4x die-back, no spread, and spontaneous greening
+    ignores adjacency entirely). */
+static void Physics_TickGrassC030(int index) {
+	int x, y, z, i, xi, yi, zi;
+	World_Unpack(index, x, y, z);
+
+	if (Random_Next(&physics_rnd, 4) != 0) return;
+	if (!Lighting.IsLit(x, y, z)) {
+		Game_UpdateBlock(x, y, z, BLOCK_DIRT);
+		return;
+	}
+	for (i = 0; i < 4; i++) {
+		xi = x + Random_Next(&physics_rnd, 3) - 1;
+		yi = y + Random_Next(&physics_rnd, 5) - 3;
+		zi = z + Random_Next(&physics_rnd, 3) - 1;
+		if (!World_Contains(xi, yi, zi))                 continue;
+		if (World_GetBlock(xi, yi, zi) != BLOCK_DIRT)    continue;
+		if (!Lighting.IsLit(xi, yi, zi))                 continue;
+		Game_UpdateBlock(xi, yi, zi, BLOCK_GRASS);
+	}
+}
+
+/* Genuine c0.30 SaplingTile.tick (tile n.a, from the jar): the stay-check pops
+    the sapling unless it is lit AND rooted in dirt or grass; then a 1-in-5 gate;
+    then remove, try a tree of height nextInt(3)+4 = 4-6, and RESTORE the
+    sapling if the tree could not grow. The classic-creative handler
+    (Physics_HandleSapling) is inert on dirt, attempts every tick, grows 5-7
+    tall and never restores - all four axes wrong for survival. */
+static void Physics_TickSaplingC030(int index) {
+	IVec3 coords[TREE_MAX_COUNT];
+	BlockRaw blocks[TREE_MAX_COUNT];
+	int i, count, height, x, y, z;
+	BlockID below;
+	World_Unpack(index, x, y, z);
+
+	below = BLOCK_AIR;
+	if (y > 0) below = World.Blocks[index - World.OneY];
+	if (!Lighting.IsLit(x, y, z) || (below != BLOCK_DIRT && below != BLOCK_GRASS)) {
+		Game_UpdateBlock(x, y, z, BLOCK_AIR);
+		return;
+	}
+	if (Random_Next(&physics_rnd, 5) != 0) return;
+
+	Game_UpdateBlock(x, y, z, BLOCK_AIR);
+	height = 4 + Random_Next(&physics_rnd, 3);
+	if (TreeGen_CanGrow(x, y, z, height)) {
+		count = TreeGen_Grow(x, y, z, height, coords, blocks);
+		for (i = 0; i < count; i++)
+		{
+			Game_UpdateBlock(coords[i].x, coords[i].y, coords[i].z, blocks[i]);
+		}
+	} else {
+		Game_UpdateBlock(x, y, z, BLOCK_SAPLING);
+	}
+}
+
+static void Physics_TickRandomBlocksC030(void) {
+	int shiftX = 1, shiftZ = 1;
+	int maskX, maskY, maskZ;
+	int count, i, x, y, z, index;
+	cc_uint32 bits;
+	BlockID block;
+	PhysicsHandler tick;
+
+	while ((1 << shiftX) < World.Width)  shiftX++;
+	while ((1 << shiftZ) < World.Length) shiftZ++;
+	maskX = World.Width - 1; maskZ = World.Length - 1; maskY = World.Height - 1;
+
+	physics_unprocessed += World.Volume;
+	count = physics_unprocessed / 200;
+	physics_unprocessed -= count * 200;
+
+	for (i = 0; i < count; i++) {
+		physics_randId = physics_randId * 3u + 1013904223u;
+		bits = physics_randId >> 2;
+		x = (int)(bits & maskX);
+		z = (int)((bits >> shiftX) & maskZ);
+		y = (int)((bits >> (shiftX + shiftZ)) & maskY);
+		if (x >= World.Width || y >= World.Height || z >= World.Length) continue;
+
+		index = World_Pack(x, y, z);
+		block = World.Blocks[index];
+		/* survival-only overrides: the shared OnRandomTick table keeps the
+		    classic-creative behaviour for the engine's own physics loop */
+		if (block == BLOCK_GRASS)   { Physics_TickGrassC030(index);   continue; }
+		if (block == BLOCK_DIRT)    continue; /* genuine dirt never ticks */
+		if (block == BLOCK_SAPLING) { Physics_TickSaplingC030(index); continue; }
+		/* Bush.tick returns immediately when Level.growTrees is true - and the
+		    survival gamemode sets growTrees = TRUE, so c0.30 Survival Test
+		    flowers are immortal (only creative pops dark/bad-soil flowers).
+		    Mushrooms (tile t) override tick WITHOUT the gate and keep popping. */
+		if (block == BLOCK_DANDELION || block == BLOCK_ROSE) continue;
+		/* tile l (sand/gravel) never registers shouldTick and has no tick
+		    override - genuine c0.30 sand falls ONLY from the neighbour-change
+		    hooks, so an undisturbed floating pillar floats forever. (The
+		    shared OnRandomTick entry stays for the engine's classic loop.) */
+		if (block == BLOCK_SAND || block == BLOCK_GRAVEL) continue;
+		tick  = Physics.OnRandomTick[block];
+		if (tick) tick(index, block);
+	}
+}
+
 static void Physics_DoFalling(int index, BlockID block) {
 	int found = -1, start = index;
 	BlockID other;
 	int x, y, z;
 
-	/* Find lowest block can fall into */
+	/* Find lowest block can fall into. Indev BlockSand.tryToFall also falls
+	    THROUGH fire (extinguishing it en route). */
 	while (index >= World.OneY) {
 		index -= World.OneY;
 		other  = World.Blocks[index];
 
-		if (other == BLOCK_AIR || (other >= BLOCK_WATER && other <= BLOCK_STILL_LAVA))
+		if (other == BLOCK_AIR || (other >= BLOCK_WATER && other <= BLOCK_STILL_LAVA)) {
 			found = index;
-		else
+		} else if (IndevTest_Enabled && other == INDEV_BLOCK_FIRE) {
+			found = index;
+			World_Unpack(index, x, y, z);
+			Game_UpdateBlock(x, y, z, BLOCK_AIR);
+		} else {
 			break;
+		}
 	}
 
 	if (found == -1) return;
+
+	/* Genuine tryToFall: past the world bottom (getBlockId clamps y<0 to the
+	    y=0 layer - air on a floating map) the faller is DESTROYED, not rested
+	    on an invisible floor. Only reachable on Indev floating maps. */
+	if (IndevTest_Enabled && found < World.OneY) {
+		World_Unpack(found, x, y, z);
+		if (World_GetPhysicsBlock(x, -1, z) == BLOCK_AIR) {
+			World_Unpack(start, x, y, z);
+			Game_UpdateBlock(x, y, z, BLOCK_AIR);
+			Physics_ActivateNeighbours(x, y, z, start);
+			return;
+		}
+	}
+
 	World_Unpack(found, x, y, z);
 	Game_UpdateBlock(x, y, z, block);
 
@@ -318,7 +473,9 @@ static void Physics_HandleMushroom(int index, BlockID block) {
 
 	below = BLOCK_STONE;
 	if (y > 0) below = World.Blocks[index - World.OneY];
-	if (!(below == BLOCK_STONE || below == BLOCK_COBBLE)) {
+	/* genuine soil set is rock, gravel or cobblestone (tile t.a checks
+	    a.e / a.q / a.h = ids 1, 13, 4) */
+	if (!(below == BLOCK_STONE || below == BLOCK_COBBLE || below == BLOCK_GRAVEL)) {
 		Game_UpdateBlock(x, y, z, BLOCK_AIR);
 		Physics_ActivateNeighbours(x, y, z, index);
 	}
@@ -326,11 +483,15 @@ static void Physics_HandleMushroom(int index, BlockID block) {
 
 
 static void Physics_PlaceLava(int index, BlockID block) {
-	TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY | index);
+	TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY_NOW | index);
 }
 
 static void Physics_PropagateLava(int posIndex, int x, int y, int z) {
 	BlockID block = World.Blocks[posIndex];
+
+	/* Indev lava ignites flammable blocks it tries to flow against
+	    (BlockFlowing/BlockFluid's fireSpread) instead of flowing */
+	if (IndevFire_LavaFlowInto(x, y, z)) return;
 
 	if (block >= BLOCK_WATER && block <= BLOCK_STILL_LAVA) {
 		/* Lava spreading into water turns the water solid */
@@ -338,7 +499,7 @@ static void Physics_PropagateLava(int posIndex, int x, int y, int z) {
 			Game_UpdateBlock(x, y, z, BLOCK_STONE);
 		}
 	} else if (Blocks.Draw[block] == DRAW_GAS) {
-		TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY | posIndex);
+		TickQueue_Enqueue(&lavaQ, PHYSICS_LAVA_DELAY_NOW | posIndex);
 		Game_UpdateBlock(x, y, z, BLOCK_LAVA);
 	}
 }
@@ -495,6 +656,12 @@ static void Physics_HandleTnt(int index, BlockID block) {
 	int x, y, z;
 	int dx, dy, dz, xx, yy, zz;
 
+	/* TNTPhysics.onPlace is a no-op in Survival Test - placing TNT there */
+	/*  does nothing special, only mining an already-placed TNT block ignites */
+	/*  a fuse (see SurvivalTest_ArmTnt). This instant-explode-on-place is a */
+	/*  separate, older classic-multiplayer feature that survival must skip. */
+	if (SurvivalTest_Enabled) return;
+
 	World_Unpack(index, x, y, z);
 	Game_UpdateBlock(x, y, z, BLOCK_AIR);
 	Physics_ActivateNeighbours(x, y, z, index);
@@ -573,5 +740,26 @@ void Physics_Tick(void) {
 	Physics_TickWater();
 	/*}*/
 	physics_tickCount++;
-	Physics_TickRandomBlocks();
+	/* Indev mode uses the genuine World.tick rate (volume/200 random
+	    updates per tick) - this loop's 3-per-chunk is ~6.8x sparser,
+	    which visibly stalled crop growth and farmland moisture. c0.30
+	    and creative keep the engine loop untouched. */
+	if (IndevTest_Enabled) {
+		/* MP: the server owns ALL Indev world simulation (growth, leaf decay,
+		    fire, finite fluids - SurvivalGrowth/SurvivalPhysics) and streams
+		    every change as a SetBlock. The client must not run it locally or it
+		    would double up and diverge. Ambient display ticks (fire crackle,
+		    lava embers) are a separate path (IndevTest_RandomDisplayTicks) and
+		    keep running. */
+		if (SurvivalNet_ServerDriven()) return;
+		/* the ONE shared scheduled-update list (fire + fluids, genuine
+		    World.tickList) runs before random ticks */
+		IndevTest_TickFluids();
+		IndevTest_TickRandomBlocks();
+	} else if (SurvivalTest_Enabled) {
+		/* c0.30 survival: the genuine volume/200 Level.tick rate */
+		Physics_TickRandomBlocksC030();
+	} else {
+		Physics_TickRandomBlocks();
+	}
 }

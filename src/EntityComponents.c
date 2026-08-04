@@ -23,6 +23,13 @@
 #define ANIM_IDLE_MAX (3.0f * MATH_DEG2RAD)
 #define ANIM_IDLE_XPERIOD (2.0f * MATH_PI / 5.0f)
 #define ANIM_IDLE_ZPERIOD (2.0f * MATH_PI / 3.5f)
+/* Attack/punch swing: ~6-tick (0.3s) one-shot, peaking mid-swing. The arm */
+/*  rotates forward-and-up (positive arm X = toward the facing direction, since */
+/*  Model_RotateX is a standard +angle rotation) with a small outward splay. */
+#define ANIM_PUNCH_TICKS 6.0f
+#define ANIM_PUNCH_SPEED (20.0f / ANIM_PUNCH_TICKS) /* per-tick progress * (1/delta) */
+#define ANIM_PUNCH_XMAX (85.0f * MATH_DEG2RAD)
+#define ANIM_PUNCH_ZMAX (15.0f * MATH_DEG2RAD)
 
 static void AnimatedComp_DoTilt(float* tilt, cc_bool reduce) {
 	if (reduce) {
@@ -57,6 +64,15 @@ void AnimatedComp_Init(struct AnimatedComp* anim) {
 	anim->BobStrengthO = 1.0f; anim->BobStrengthN = 1.0f;
 }
 
+void AnimatedComp_StartPunch(struct AnimatedComp* anim) {
+	/* Don't restart a swing already in progress - let it finish, so holding to */
+	/*  mine produces back-to-back full swings rather than a frozen half-swing. */
+	if (anim->Punching) return;
+	anim->Punching = true;
+	anim->PunchO   = 0.0f;
+	anim->PunchN   = 0.0f;
+}
+
 void AnimatedComp_Update(struct Entity* e, Vec3 oldPos, Vec3 newPos, float delta) {
 	struct AnimatedComp* anim = &e->Anim;
 	float dx = newPos.x - oldPos.x;
@@ -76,6 +92,14 @@ void AnimatedComp_Update(struct Entity* e, Vec3 oldPos, Vec3 newPos, float delta
 		anim->SwingN -= delta * 3;
 	}
 	Math_Clamp(anim->SwingN, 0.0f, 1.0f);
+
+	/* Advance a one-shot punch swing; it holds at 1 (arm back at rest, since */
+	/*  sin(PI)=0) until StartPunch resets it for the next swing. */
+	anim->PunchO = anim->PunchN;
+	if (anim->Punching) {
+		anim->PunchN += delta * ANIM_PUNCH_SPEED;
+		if (anim->PunchN >= 1.0f) { anim->PunchN = 1.0f; anim->Punching = false; }
+	}
 
 	/* TODO: the Tilt code was designed for 60 ticks/second, fix it up for 20 ticks/second */
 	anim->BobStrengthO = anim->BobStrengthN;
@@ -106,6 +130,15 @@ void AnimatedComp_GetCurrent(struct Entity* e, float t) {
 
 	if (e->Model->calcHumanAnims && !Game_SimpleArmsAnim) {
 		AnimatedComp_CalcHumanAnim(anim, idleXRot, idleZRot);
+	}
+
+	/* Layer the attack/punch swing on top of whatever arm pose was computed */
+	/*  above. Only the main (right) arm swings; sin(progress*PI) eases it out */
+	/*  and back so it's 0 at both ends (rest -> forward-up -> rest). */
+	if (anim->PunchN > 0.0f) {
+		float punch = Math_SinF(Math_Lerp(anim->PunchO, anim->PunchN, t) * MATH_PI);
+		anim->RightArmX += punch * ANIM_PUNCH_XMAX;
+		anim->RightArmZ += punch * ANIM_PUNCH_ZMAX;
 	}
 }
 

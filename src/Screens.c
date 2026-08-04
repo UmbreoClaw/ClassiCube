@@ -24,6 +24,12 @@
 #include "Options.h"
 #include "InputHandler.h"
 #include "Protocol.h"
+#include "SurvivalTest.h"
+#include "SurvivalNet.h"
+#include "IndevTest.h"
+#include "IndevArmor.h"
+#include "IndevGen.h"
+#include "IsometricDrawer.h"
 
 #define CHAT_MAX_STATUS Array_Elems(Chat_Status)
 #define CHAT_MAX_BOTTOMRIGHT Array_Elems(Chat_BottomRight)
@@ -72,6 +78,9 @@ static struct HUDScreen {
 	struct FontDesc font;
 	struct TextWidget line1, line2;
 	struct TextAtlas posAtlas;
+	/* Separate, unpadded digit atlas for hotbar stack counts, so the glyph */
+	/*  metrics are exact (the padded posAtlas threw off corner alignment). */
+	struct TextAtlas countAtlas;
 	float accumulator;
 	int frames, posCount;
 	cc_bool hacksChanged;
@@ -79,13 +88,48 @@ static struct HUDScreen {
 	int lastFov;
 	int lastX, lastY, lastZ;
 	struct HotbarWidget hotbar;
+	/* Survival HUD text labels, rasterised on change like line1/line2: */
+	/*  "Score: &eN" top-right and "Arrows: N" beside the heart row. */
+	struct TextWidget score, arrows, indevTitle;
+	int heartCount;     /* number of heart vertices built last frame */
+	int countVertices;  /* number of stack-count vertices built last frame */
+	int bubbleCount;    /* number of air-bubble vertices built last frame */
+	int lastHealth;     /* SurvivalTest_Health value from last rebuild */
+	int lastInvVersion; /* SurvivalTest_InvVersion() from last rebuild */
+	int lastArrows;     /* SurvivalTest_ArrowCount() value from last rebuild */
+	int lastScore;      /* SurvivalTest_Score() value from last rebuild */
 } HUDScreen_Instance CC_BIG_VAR;
 
 /* Each integer can be at most 10 digits + minus prefix */
 #define POSITION_VAL_CHARS 11
 /* [PREFIX] [(] [X] [,] [Y] [,] [Z] [)] */
 #define POSITION_HUD_CHARS (1 + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1 + POSITION_VAL_CHARS + 1)
-#define HUD_MAX_VERTICES (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES + POSITION_HUD_CHARS * 4)
+/* 10 heart backgrounds + up to 10 ghost hearts (invuln glow) + up to 10 */
+/*  filled hearts + up to 10 armor icons = 40 quads = 160 vertices. (The */
+/*  old budget of 80 could overflow into the counts region while glowing.) */
+#define SURVIVAL_HEARTS_MAX_VERTICES 160
+/* Up to 2 digits per hotbar slot for stack counts (4 vertices per digit) */
+#define SURVIVAL_COUNTS_MAX_VERTICES (SURVIVAL_HOTBAR_SLOTS * 2 * 4)
+/* Air bubble row when the head is underwater: up to 10 bubbles (4 verts each) */
+#define SURVIVAL_BUBBLES_MAX_VERTICES (10 * 4)
+
+/* Absolute vertex offsets of each region within the HUD vertex buffer. The */
+/*  crosshair (4) + line1 (4) + line2 (4) + hotbar are built sequentially up */
+/*  front (4 + TEXTWIDGET_MAX*2 + HOTBAR_MAX_VERTICES vertices); the survival */
+/*  regions after that live at these fixed offsets. The Score and Arrows */
+/*  labels are one textured quad each (TEXTWIDGET_MAX vertices). */
+#define HUD_OFS_POSITION (4 + TEXTWIDGET_MAX * 2 + HOTBAR_MAX_VERTICES)
+#define HUD_OFS_HEARTS   (HUD_OFS_POSITION + POSITION_HUD_CHARS * 4)
+#define HUD_OFS_COUNTS   (HUD_OFS_HEARTS   + SURVIVAL_HEARTS_MAX_VERTICES)
+#define HUD_OFS_BUBBLES  (HUD_OFS_COUNTS   + SURVIVAL_COUNTS_MAX_VERTICES)
+#define HUD_OFS_SCORE    (HUD_OFS_BUBBLES  + SURVIVAL_BUBBLES_MAX_VERTICES)
+#define HUD_OFS_ARROWS   (HUD_OFS_SCORE    + TEXTWIDGET_MAX)
+#define HUD_MAX_VERTICES (HUD_OFS_ARROWS   + TEXTWIDGET_MAX)
+
+/* Defined further down (beside the survival mesh builders), forward-declared */
+/*  here since ContextRecreated rebuilds these label textures. */
+static void HUDScreen_RemakeScore(struct HUDScreen* s);
+static void HUDScreen_RemakeArrows(struct HUDScreen* s);
 
 static void HUDScreen_RemakeLine1(struct HUDScreen* s) {
 	cc_string status; char statusBuffer[STRING_SIZE * 2];
@@ -196,16 +240,22 @@ static void HUDScreen_ContextLost(void* screen) {
 	Screen_ContextLost(screen);
 
 	TextAtlas_Free(&s->posAtlas);
+	TextAtlas_Free(&s->countAtlas);
 	Elem_Free(&s->hotbar);
 	Elem_Free(&s->line1);
 	Elem_Free(&s->line2);
+	Elem_Free(&s->score);
+	Elem_Free(&s->arrows);
 }
 
-static void HUDScreen_ContextRecreated(void* screen) {	
+static void HUDScreen_ContextRecreated(void* screen) {
 	static const cc_string chars  = String_FromConst("0123456789-, ()");
 	static const cc_string prefix = String_FromConst("Position: ");
+	static const cc_string digits = String_FromConst("0123456789");
+	static const cc_string empty  = String_FromConst("");
 
 	struct HUDScreen* s = (struct HUDScreen*)screen;
+	struct FontDesc countFont;
 	Screen_UpdateVb(s);
 
 	Font_Make(&s->font, 16, FONT_FLAGS_PADDING);
@@ -215,6 +265,26 @@ static void HUDScreen_ContextRecreated(void* screen) {
 	HUDScreen_RemakeLine1(s);
 	TextAtlas_Make(&s->posAtlas, &chars, &s->font, &prefix);
 	HUDScreen_RemakeLine2(s);
+
+	/* Unpadded digit atlas for stack counts (exact glyph metrics). The font */
+	/*  is only needed to rasterise the atlas, so it can be freed right after. */
+	Font_Make(&countFont, 16, FONT_FLAGS_NONE);
+	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
+	Font_Free(&countFont);
+
+	/* Survival Score / Arrows label textures (rebuilt here since ContextLost */
+	/*  freed them); their text is refreshed on change in HUDScreen_Update. */
+	HUDScreen_RemakeScore(s);
+	if (IndevTest_Enabled) {
+		struct FontDesc font;
+		Gui_MakeBodyFont(&font);
+		/* The compile stamp makes every build self-identifying - "which
+		    artifact am I actually running" kept coming up during testing. */
+		TextWidget_SetConst(&s->indevTitle, "Minecraft Indev (" __DATE__ " " __TIME__ ")", &font);
+		s->indevTitle.tex.x = 2; s->indevTitle.tex.y = 2;
+		Font_Free(&font);
+	}
+	HUDScreen_RemakeArrows(s);
 }
 
 int HUDScreen_LayoutHotbar(void) {
@@ -222,6 +292,13 @@ int HUDScreen_LayoutHotbar(void) {
 	s->hotbar.scale     = Gui_GetHotbarScale();
 	Widget_Layout(&s->hotbar);
 	return s->hotbar.height;
+}
+
+void HUDScreen_SetSlotPop(int slot, float time) {
+	if (!Gui_HUD || slot < 0 || slot >= INVENTORY_BLOCKS_PER_HOTBAR) return;
+	Gui_HUD->hotbar.slotPopTime[slot] = time;
+	/* Indev GuiIngame squashes; c0.30 HUDScreen bounces (see BuildEntriesMesh) */
+	Gui_HUD->hotbar.popSquash = IndevTest_Enabled;
 }
 
 static void HUDScreen_Layout(void* screen) {
@@ -308,7 +385,10 @@ static void HUDScreen_Init(void* screen) {
 	HotbarWidget_Create(&s->hotbar);
 	TextWidget_Init(&s->line1);
 	TextWidget_Init(&s->line2);
-	
+	TextWidget_Init(&s->score);
+	TextWidget_Init(&s->indevTitle);
+	TextWidget_Init(&s->arrows);
+
 	s->line1.flags  |= WIDGET_FLAG_MAINSCREEN;
 	s->line2.flags  |= WIDGET_FLAG_MAINSCREEN;
 
@@ -350,6 +430,48 @@ static void HUDScreen_Update(void* screen, float delta) {
 	if (pos.x != s->lastX || pos.y != s->lastY || pos.z != s->lastZ) {
 		s->dirty = true;
 	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_Health != s->lastHealth) {
+		s->lastHealth = SurvivalTest_Health;
+		s->dirty      = true;
+	}
+	/* Survival Test: the heart bar jitters while at 2 hearts (4 HP) or less, */
+	/*  and flashes while the invulnerability window is live - keep rebuilding */
+	/*  the HUD each frame to animate both. */
+	if (SurvivalTest_Enabled &&
+		((SurvivalTest_Health > 0 && SurvivalTest_Health <= 4) || SurvivalTest_InvulnTicks() > 0)) {
+		s->dirty = true;
+	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_InvVersion() != s->lastInvVersion) {
+		s->lastInvVersion = SurvivalTest_InvVersion();
+		s->dirty          = true;
+	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_ArrowCount() != s->lastArrows) {
+		HUDScreen_RemakeArrows(s); /* updates lastArrows */
+		s->dirty      = true;
+	}
+
+	if (SurvivalTest_Enabled && SurvivalTest_Score() != s->lastScore) {
+		HUDScreen_RemakeScore(s);  /* updates lastScore */
+		s->dirty      = true;
+	}
+
+	/* Air bubbles deplete continuously while the head is underwater, so keep */
+	/*  rebuilding the HUD to animate them (like the low-health heart shake). */
+	if (SurvivalTest_Enabled && SurvivalTest_HeadUnderwater()) {
+		s->dirty = true;
+	}
+
+	/* Rebuild each frame while any slot pop animation is running so the */
+	/*  animated slot (which HotbarWidget_Update just decremented) is redrawn */
+	if (SurvivalTest_Enabled) {
+		int i;
+		for (i = 0; i < INVENTORY_BLOCKS_PER_HOTBAR; i++) {
+			if (s->hotbar.slotPopTime[i] > 0.0f) { s->dirty = true; break; }
+		}
+	}
 }
 
 #define CH_EXTENT 16
@@ -357,6 +479,21 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	/* Only top quarter of icons.png is used */
 	static struct Texture tex = { 0, Tex_Rect(0,0,0,0), Tex_UV(0.0f,0.0f, 15/256.0f,15/64.0f) };
 	int extent;
+
+	if (SurvivalTest_Enabled) {
+		/* GuiIngame/HUDScreen: a 16x16 icon anchored at (w/2-7, h/2-7) -
+		    one GUI px up-left of exact centring - sampling the full
+		    (0,0)-(16,16) sprite */
+		float scale = Gui_GetCrosshairScale();
+		tex.x = (Window_Main.Width  / 2) - (int)(7 * scale * 2);
+		tex.y = (Window_Main.Height / 2) - (int)(7 * scale * 2);
+		tex.width  = (int)(16 * scale * 2);
+		tex.height = (int)(16 * scale * 2);
+		tex.uv.u2 = 16/256.0f; tex.uv.v2 = 16/64.0f;
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, ptr);
+		tex.uv.u2 = 15/256.0f; tex.uv.v2 = 15/64.0f;
+		return;
+	}
 
 	extent = (int)(CH_EXTENT * Gui_GetCrosshairScale());
 	tex.x  = (Window_Main.Width  / 2) - extent;
@@ -367,12 +504,291 @@ static void HUDScreen_BuildCrosshairsMesh(struct VertexTextured** ptr) {
 	Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, ptr);
 }
 
+/* UV coordinates for hearts in icons.png (256 wide, top 64 pixels used) */
+/* Empty heart background: 9x9 at pixel (16,0) */
+#define HEART_BG_U1  (16/256.0f)
+#define HEART_BG_U2  (25/256.0f)
+/* Full heart: 9x9 at pixel (52,0) */
+#define HEART_FULL_U1  (52/256.0f)
+#define HEART_FULL_U2  (61/256.0f)
+/* Half heart: 9x9 at pixel (61,0) */
+#define HEART_HALF_U1  (61/256.0f)
+#define HEART_HALF_U2  (70/256.0f)
+#define HEART_V1  (0/64.0f)
+#define HEART_V2  (9/64.0f)
+/* White-flash heart background: 9x9 at pixel (25,0) */
+#define HEART_FLASH_BG_U1 (25/256.0f)
+#define HEART_FLASH_BG_U2 (34/256.0f)
+/* Armor icons (GuiIngame): empty outline (16,9), half (25,9), full (34,9) */
+#define ARMOR_EMPTY_U1 (16/256.0f)
+#define ARMOR_EMPTY_U2 (25/256.0f)
+#define ARMOR_HALF_U1  (25/256.0f)
+#define ARMOR_HALF_U2  (34/256.0f)
+#define ARMOR_FULL_U1  (34/256.0f)
+#define ARMOR_FULL_U2  (43/256.0f)
+#define ARMOR_V1 ( 9/64.0f)
+#define ARMOR_V2 (18/64.0f)
+/* Ghost (lastHealth) hearts drawn while the invuln window flashes: (70,0)/(79,0) */
+#define HEART_GHOST_FULL_U1 (70/256.0f)
+#define HEART_GHOST_FULL_U2 (79/256.0f)
+#define HEART_GHOST_HALF_U1 (79/256.0f)
+#define HEART_GHOST_HALF_U2 (88/256.0f)
+
+static int HUDScreen_BuildHeartsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct Texture tex;
+	struct VertexTextured* cur = dst;
+	int fullHearts, i, x, y, heartSize, step, invuln;
+	int jitter[10];
+	RNGState jitterRng;
+	cc_bool hasHalf, glow, shaking;
+	float scale;
+
+	if (!SurvivalTest_Enabled) return 0;
+	if (SurvivalTest_CreativeActive()) return 0; /* creative: no health/armor HUD */
+
+	/* Match the hotbar's TRUE on-screen scale (Gui_GetHotbarScale bakes out */
+	/*  DPI, then HotbarWidget_Reposition multiplies it back in via */
+	/*  DisplayInfo.ScaleY). Using the bare hotbar scale here left the hearts */
+	/*  smaller than the hotbar on HiDPI/fullscreen; folding ScaleY back in */
+	/*  keeps the whole survival HUD scaling as one unit. No-op when ScaleY==1. */
+	scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
+	heartSize = (int)(9.0f * scale);
+	step      = (int)(8.0f * scale); /* genuine packs icons 8 units apart (9px sprites overlap 1px) */
+
+	/* HUDScreen.render: glow = invulnerableTime / 3 % 2 == 1 (and only during */
+	/*  the fresher half of the window) - background flashes white and the */
+	/*  pre-hit "lastHealth" ghost hearts are drawn over it. */
+	invuln = SurvivalTest_InvulnTicks();
+	glow   = invuln >= 10 && (invuln / 3) % 2 == 1;
+
+	/* Survival Test draws the heart row flush with the hotbar's left edge */
+	/*  (not centred), so the bar grows rightwards from the first slot. */
+	x = s->hotbar.x;
+	y = s->hotbar.y - heartSize - (int)(1.0f * scale);
+
+	/* HUDScreen seeds its jitter RNG with ticks * 312871, so the offsets are */
+	/*  stable within a tick but reroll each tick - and each heart jitters */
+	/*  INDEPENDENTLY (only at 2 hearts / 4 HP or less). */
+	Random_Seed(&jitterRng, (int)(Game.Time * 20.0) * 312871);
+	shaking = SurvivalTest_Health <= 4; /* genuine shakes at 0 too */
+
+	tex.ID = Gui.IconsTex;
+
+	/* Draw 10 heart backgrounds (white-flash variant while glowing) */
+	if (glow) { Tex_SetUV(tex, HEART_FLASH_BG_U1, HEART_V1, HEART_FLASH_BG_U2, HEART_V2); }
+	else      { Tex_SetUV(tex, HEART_BG_U1,       HEART_V1, HEART_BG_U2,       HEART_V2); }
+	for (i = 0; i < 10; i++) {
+		jitter[i] = shaking ? Random_Next(&jitterRng, 2) : 0;
+		Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	/* While glowing, the health from before the hit is drawn as ghost hearts */
+	if (glow) {
+		int last = SurvivalTest_LastHealth();
+		fullHearts = last / 2;
+		Tex_SetUV(tex, HEART_GHOST_FULL_U1, HEART_V1, HEART_GHOST_FULL_U2, HEART_V2);
+		for (i = 0; i < fullHearts; i++) {
+			Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
+		if (last & 1) {
+			Tex_SetUV(tex, HEART_GHOST_HALF_U1, HEART_V1, HEART_GHOST_HALF_U2, HEART_V2);
+			Tex_SetRect(tex, x + fullHearts * step, y + jitter[fullHearts], heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
+	}
+
+	/* Draw filled hearts according to current health (2 HP per heart) */
+	fullHearts = SurvivalTest_Health / 2;
+	hasHalf    = (SurvivalTest_Health & 1) != 0;
+
+	Tex_SetUV(tex, HEART_FULL_U1, HEART_V1, HEART_FULL_U2, HEART_V2);
+	for (i = 0; i < fullHearts; i++) {
+		Tex_SetRect(tex, x + i * step, y + jitter[i], heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	if (hasHalf) {
+		Tex_SetUV(tex, HEART_HALF_U1, HEART_V1, HEART_HALF_U2, HEART_V2);
+		Tex_SetRect(tex, x + fullHearts * step, y + jitter[fullHearts], heartSize, heartSize);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+
+	/* GuiIngame's armor bar (Indev): 10 icons on the hearts row, flush with
+	    the hotbar's RIGHT edge and filling right-to-left - icon i covers
+	    protection points 2i+1/2i+2, full below the wear-weighted
+	    getPlayerArmorValue, half at it, empty outline above it. The whole
+	    row only appears while some armor is worn (value > 0), and never
+	    shakes with the low-health hearts (genuine adds the jitter after
+	    the armor draw). */
+	if (IndevTest_Enabled) {
+		int armor = SurvivalTest_PlayerArmorValue();
+		int ax    = s->hotbar.x + s->hotbar.width - heartSize;
+		for (i = 0; i < 10 && armor > 0; i++) {
+			int threshold = (i << 1) + 1;
+			if (threshold < armor) {
+				Tex_SetUV(tex, ARMOR_FULL_U1,  ARMOR_V1, ARMOR_FULL_U2,  ARMOR_V2);
+			} else if (threshold == armor) {
+				Tex_SetUV(tex, ARMOR_HALF_U1,  ARMOR_V1, ARMOR_HALF_U2,  ARMOR_V2);
+			} else {
+				Tex_SetUV(tex, ARMOR_EMPTY_U1, ARMOR_V1, ARMOR_EMPTY_U2, ARMOR_V2);
+			}
+			Tex_SetRect(tex, ax - i * step, y, heartSize, heartSize);
+			Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+		}
+	}
+
+	return (int)(cur - dst);
+}
+
+/* Builds the stack-count digits drawn over each hotbar slot. Survival Test */
+/*  (HUDScreen.java) draws these with the 8px-tall GUI font in its 240-unit- */
+/*  tall virtual screen space, where the hotbar is 22 units tall and each slot */
+/*  cell is 20 units wide. Our HotbarWidget bakes that exact scale into its */
+/*  pixel geometry (w->height = 22 * hotbarScale * ScaleY, slotWidth = 20 * */
+/*  hotbarScale * ScaleX), so a faithful digit is (8/22) of the hotbar height, */
+/*  right-aligned to each slot cell's right edge. Counts of 1 are left implicit. */
+static int HUDScreen_BuildCountsMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct TextAtlas* atlas = &s->countAtlas;
+	struct HotbarWidget* w  = &s->hotbar;
+	struct VertexTextured* cur = dst;
+	struct Texture part;
+	char digits[STRING_INT_CHARS];
+	int i, j, count, nDigits, d;
+	float f, digitH, totalW, penX, slotRight, top, bottom;
+
+	if (!SurvivalTest_Enabled) return 0;
+	if (!atlas->tex.ID)        return 0; /* digit atlas not created yet */
+	if (!atlas->tex.height)    return 0;
+
+	/* 8px-tall font glyphs in the original's 22-unit-tall hotbar space. */
+	digitH = w->height * (8.0f / 22.0f);
+	f      = digitH / atlas->tex.height;
+
+	/* Original font top y = slotY + 6, with slotY = screenBottom - 16, i.e. */
+	/*  10 virtual units above the hotbar's bottom edge (so the digit's bottom */
+	/*  sits 2 units above it). */
+	bottom = (float)(w->y + w->height);
+	top    = bottom - w->height * (10.0f / 22.0f);
+
+	part.ID     = atlas->tex.ID;
+	part.uv.v1  = atlas->tex.uv.v1;
+	part.uv.v2  = atlas->tex.uv.v2;
+	part.height = (cc_uint16)digitH;
+	part.y      = (short)top;
+
+	for (i = 0; i < SURVIVAL_HOTBAR_SLOTS; i++) {
+		count = SurvivalTest_HotbarCount(i);
+		if (count <= 1) continue;
+
+		nDigits = String_MakeUInt32((cc_uint32)count, digits);
+		totalW  = 0.0f;
+		for (j = 0; j < nDigits; j++) totalW += atlas->widths[digits[j] - '0'] * f;
+
+		/* Right-align to slot i's cell right edge: slotWidth*(i+1) from the */
+		/*  hotbar's left edge, matching var26 + 19 in HUDScreen.java (no inset). */
+		slotRight = w->x + w->slotWidth * (i + 1);
+		penX      = slotRight - totalW;
+
+		/* String_MakeUInt32 writes least-significant first, so emit reversed */
+		for (j = nDigits - 1; j >= 0; j--) {
+			d           = digits[j] - '0';
+			part.x      = (short)penX;
+			part.width  = (cc_uint16)(atlas->widths[d] * f);
+			part.uv.u1  = atlas->offsets[d] * atlas->uScale;
+			part.uv.u2  = part.uv.u1 + atlas->widths[d] * atlas->uScale;
+			Gfx_Make2DQuad(&part, PACKEDCOL_WHITE, &cur);
+			penX += part.width;
+		}
+	}
+	return (int)(cur - dst);
+}
+
+/* UV coordinates for the air bubbles in icons.png (HUDScreen.java): a full */
+/*  bubble at pixel (16,18) and a bursting one at (25,18), both 9x9. */
+#define BUBBLE_FULL_U1 (16/256.0f)
+#define BUBBLE_FULL_U2 (25/256.0f)
+#define BUBBLE_POP_U1  (25/256.0f)
+#define BUBBLE_POP_U2  (34/256.0f)
+#define BUBBLE_V1      (18/64.0f)
+#define BUBBLE_V2      (27/64.0f)
+
+/* Builds the depleting air bubble row shown above the hearts while the head */
+/*  is underwater (HUDScreen.java's isUnderWater() block). The full/bursting */
+/*  split is the original's: full = ceil((air-2)*10/300), and one extra */
+/*  bursting bubble appears as the current one drains, total = ceil(air*10/300). */
+static int HUDScreen_BuildBubblesMesh(struct HUDScreen* s, struct VertexTextured* dst) {
+	struct Texture tex;
+	struct VertexTextured* cur = dst;
+	int air, full, total, i, x, y, size;
+	float scale;
+
+	if (!SurvivalTest_Enabled)         return 0;
+	if (SurvivalTest_CreativeActive()) return 0; /* creative: no air/breath HUD */
+	if (!SurvivalTest_HeadUnderwater()) return 0;
+	if (!Gui.IconsTex)                 return 0;
+
+	scale = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
+	size  = (int)(9.0f * scale);
+
+	air   = SurvivalTest_AirSupply();
+	full  = Math_Ceil((air - 2) * 10.0f / 300.0f);
+	total = Math_Ceil( air      * 10.0f / 300.0f);
+	if (full  < 0)  full  = 0;
+	if (total > 10) total = 10;
+
+	/* Bubbles sit flush atop the heart row: genuine height-32-9 vs hearts */
+	/*  at height-32 - the same 1px gap the hearts keep above the hotbar. */
+	x = s->hotbar.x;
+	y = s->hotbar.y - size - (int)(1.0f * scale) - size;
+
+	tex.ID = Gui.IconsTex;
+	for (i = 0; i < total; i++) {
+		if (i < full) {
+			Tex_SetUV(tex, BUBBLE_FULL_U1, BUBBLE_V1, BUBBLE_FULL_U2, BUBBLE_V2);
+		} else {
+			Tex_SetUV(tex, BUBBLE_POP_U1,  BUBBLE_V1, BUBBLE_POP_U2,  BUBBLE_V2);
+		}
+		/* Genuine packs icons 8 units apart (9px sprites overlap 1px) */
+		Tex_SetRect(tex, x + i * (int)(8.0f * scale), y, size, size);
+		Gfx_Make2DQuad(&tex, PACKEDCOL_WHITE, &cur);
+	}
+	return (int)(cur - dst);
+}
+
+/* HUDScreen.java's SurvivalGameMode labels, rasterised on change like the FPS */
+/*  line: "Score: &eN" (yellow number) and "Arrows: N". Their on-screen */
+/*  positions are pinned per-frame in HUDScreen_BuildMesh. */
+static void HUDScreen_RemakeScore(struct HUDScreen* s) {
+	cc_string str; char buf[STRING_SIZE];
+	int score = SurvivalTest_Score();
+	String_InitArray(str, buf);
+	String_Format1(&str, "Score: &e%i", &score);
+	TextWidget_Set(&s->score, &str, &s->font);
+	s->lastScore = score;
+}
+
+static void HUDScreen_RemakeArrows(struct HUDScreen* s) {
+	cc_string str; char buf[STRING_SIZE];
+	int arrows = SurvivalTest_ArrowCount();
+	String_InitArray(str, buf);
+	String_Format1(&str, "Arrows: %i", &arrows);
+	TextWidget_Set(&s->arrows, &str, &s->font);
+	s->lastArrows = arrows;
+}
+
 static void HUDScreen_BuildMesh(void* screen) {
 	struct HUDScreen* s = (struct HUDScreen*)screen;
+	struct VertexTextured* base;
 	struct VertexTextured* data;
 	struct VertexTextured** ptr;
+	struct VertexTextured* p;
+	float scale;
+	int heartSize, rowY;
 
-	data = Screen_LockVb(s);
+	base = Screen_LockVb(s);
+	data = base;
 	ptr  = &data;
 
 	HUDScreen_BuildCrosshairsMesh(ptr);
@@ -380,8 +796,52 @@ static void HUDScreen_BuildMesh(void* screen) {
 	Widget_BuildMesh(&s->line2,  ptr);
 	Widget_BuildMesh(&s->hotbar, ptr);
 
-	if (!Game_ClassicMode) 
-		HUDScreen_BuildPosition(s, data);
+	if (!Game_ClassicMode)
+		HUDScreen_BuildPosition(s, base + HUD_OFS_POSITION);
+
+	s->heartCount    = HUDScreen_BuildHeartsMesh (s, base + HUD_OFS_HEARTS);
+	s->countVertices = HUDScreen_BuildCountsMesh (s, base + HUD_OFS_COUNTS);
+	s->bubbleCount   = HUDScreen_BuildBubblesMesh(s, base + HUD_OFS_BUBBLES);
+
+	/* Survival Score / Arrows labels. The text textures are rasterised once (on */
+	/*  change) at a fixed font size, but the hotbar/hearts scale with the GUI */
+	/*  scale, so at a large scale the labels looked tiny next to them. Stretch */
+	/*  each label's quad to the SAME on-screen height the original HUDScreen */
+	/*  draws its 8px font at - (8/22) of the hotbar height, exactly like the */
+	/*  stack-count digits - so they track the hotbar at any scale/DPI. Built as */
+	/*  a scaled copy of the widget's texture rather than mutating the widget */
+	/*  (which persists across frames and would compound the scaling). */
+	/* Genuine in-20100223's GuiIngame draws NEITHER label: no score HUD and
+	    arrows are ordinary inventory items - both are c0.30-only. */
+	if (SurvivalTest_Enabled && !IndevTest_Enabled) {
+		struct Texture lbl;
+		float labelH = s->hotbar.height * (8.0f / 22.0f);
+		scale     = Gui_GetHotbarScale() * DisplayInfo.ScaleY;
+		heartSize = (int)(9.0f * scale);
+		rowY      = s->hotbar.y - heartSize - (int)(2.0f * scale);
+
+		/* Score: top-right corner */
+		lbl = s->score.tex;
+		if (lbl.height) {
+			lbl.width  = (cc_uint16)(lbl.width * labelH / lbl.height);
+			lbl.height = (cc_uint16)labelH;
+		}
+		lbl.x = Window_Main.Width - lbl.width - (int)(2.0f * scale);
+		lbl.y = (int)(2.0f * scale);
+		p = base + HUD_OFS_SCORE;
+		Gfx_Make2DQuad(&lbl, s->score.color, &p);
+
+		/* Arrows: beside the heart row, vertically centred on it */
+		lbl = s->arrows.tex;
+		if (lbl.height) {
+			lbl.width  = (cc_uint16)(lbl.width * labelH / lbl.height);
+			lbl.height = (cc_uint16)labelH;
+		}
+		lbl.x = s->hotbar.x + s->hotbar.width / 2 + (int)(8.0f * scale);
+		lbl.y = rowY + (heartSize - (int)labelH) / 2;
+		p = base + HUD_OFS_ARROWS;
+		Gfx_Make2DQuad(&lbl, s->arrows.color, &p);
+	}
 	Gfx_UnlockDynamicVb(s->vb);
 }
 
@@ -400,7 +860,7 @@ static void HUDScreen_Render(void* screen, float delta) {
 	} else if (IsOnlyChatActive() && Gui.ShowFPS) {
 		Widget_Render2(&s->line2, 8);
 		Gfx_BindTexture(s->posAtlas.tex.ID);
-		Gfx_DrawVb_IndexedTris_Range(s->posCount, 12 + HOTBAR_MAX_VERTICES, DRAW_HINT_RECT);
+		Gfx_DrawVb_IndexedTris_Range(s->posCount, HUD_OFS_POSITION, DRAW_HINT_RECT);
 		/* TODO swap these two lines back */
 	}
 
@@ -411,7 +871,102 @@ static void HUDScreen_Render(void* screen, float delta) {
 		if (!Gui.HideCrosshair && Gui.IconsTex && !tablist_active) {
 			Gfx_BindTexture(Gui.IconsTex);
 			Gfx_BindDynamicVb(s->vb); /* Have to rebind for mobile right now... */
+			/* GuiIngame draws the Indev crosshair with the colour-inverting
+			    glBlendFunc(ONE_MINUS_DST_COLOR, ONE_MINUS_SRC_COLOR) */
+			if (IndevTest_Enabled) Gfx_SetInvertedBlending(true);
 			Gfx_DrawVb_IndexedTris_Range(4, 0, DRAW_HINT_SPRITE);
+			if (IndevTest_Enabled) Gfx_SetInvertedBlending(false);
+		}
+
+		/* Indev: item sprites over hotbar slots holding item ids (256+). */
+		/*  Drawn as immediate textures - slots are engine BLOCK_AIR there, so */
+		/*  nothing else occupies the cell. Bails without an items.png. */
+		if (IndevTest_Enabled && IndevTest_ItemsTex()) {
+			struct Texture itex;
+			float slotW = s->hotbar.width / (float)INVENTORY_BLOCKS_PER_HOTBAR;
+			/* GuiIngame: 16x16 GUI-px icons at (cell + 2, height - 19) -
+			    dead centre of the 20px cell (the old +3 shifted every
+			    sprite one GUI px right - most visible on compact sprites
+			    like coal/diamond, user report) */
+			int size = (int)(slotW * (16.0f / 20.0f)), k;
+
+			for (k = 0; k < SURVIVAL_HOTBAR_SLOTS; k++) {
+				int id = SurvivalTest_SlotId(k);
+				if (id < 256) continue;
+				if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
+
+				int maxDmg, dmg;
+				itex.ID     = IndevTest_ItemsTex();
+				itex.x      = (short)(s->hotbar.x + k * slotW + slotW * (2.0f / 20.0f));
+				itex.y      = (short)(s->hotbar.y + s->hotbar.height * (3.0f / 22.0f));
+				itex.width  = (cc_uint16)size;
+				itex.height = (cc_uint16)size;
+				Texture_Render(&itex);
+
+				/* RenderItem.renderItemOverlayIntoGUI's durability bar: at */
+				/*  (x+2, y+13) in 16px icon space, a 13x2 black backing, a */
+				/*  12x1 dark track, then (13 - dmg*13/max) x1 of the red-> */
+				/*  green gradient colour (255-v)<<16 | v<<8, v=255-dmg*255/max. */
+				maxDmg = IndevTest_ToolMaxDamage(SurvivalTest_SlotId(k));
+				dmg    = SurvivalTest_SlotDamage(k);
+				if (maxDmg > 0 && dmg > 0) {
+					float u  = size / 16.0f;
+					int   bx = itex.x + (int)(2 * u), by = itex.y + (int)(13 * u);
+					int   v  = 255 - dmg * 255 / maxDmg;
+					int   w  = 13 - dmg * 13 / maxDmg;
+					int   h  = (int)u; if (h < 1) h = 1;
+
+					Gfx_Draw2DFlat(bx, by, (int)(13 * u), h * 2, PackedCol_Make(0, 0, 0, 255));
+					Gfx_Draw2DFlat(bx, by, (int)(12 * u), h,
+						PackedCol_Make((cc_uint8)((255 - v) / 4), 63, 0, 255));
+					Gfx_Draw2DFlat(bx, by, (int)(w * u), h,
+						PackedCol_Make((cc_uint8)(255 - v), (cc_uint8)v, 0, 255));
+				}
+			}
+			/* Texture_Render/Gfx_Draw2DFlat switch vertex format + VB - the */
+			/*  rest of the HUD (hearts/counts/bubbles) draws from s->vb in */
+			/*  TEXTURED format, so restore BOTH or those meshes corrupt. */
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+			Gfx_BindDynamicVb(s->vb);
+		}
+
+		/* "Minecraft Indev" top-left, only while the F3/FPS line is hidden */
+		if (IndevTest_Enabled && !Gui.ShowFPS && s->indevTitle.tex.ID) {
+			Texture_Render(&s->indevTitle.tex);
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+			Gfx_BindDynamicVb(s->vb);
+		}
+
+		/* Draw survival health hearts above the hotbar */
+		if (SurvivalTest_Enabled && s->heartCount > 0 && Gui.IconsTex) {
+			Gfx_BindTexture(Gui.IconsTex);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->heartCount, HUD_OFS_HEARTS, DRAW_HINT_SPRITE);
+		}
+
+		/* Draw survival hotbar stack counts (digit atlas) */
+		if (SurvivalTest_Enabled && s->countVertices > 0 && s->countAtlas.tex.ID) {
+			Gfx_BindTexture(s->countAtlas.tex.ID);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->countVertices, HUD_OFS_COUNTS, DRAW_HINT_RECT);
+		}
+
+		/* Draw survival air bubbles (icons.png) above the hearts when underwater */
+		if (SurvivalTest_Enabled && s->bubbleCount > 0 && Gui.IconsTex) {
+			Gfx_BindTexture(Gui.IconsTex);
+			Gfx_BindDynamicVb(s->vb);
+			Gfx_DrawVb_IndexedTris_Range(s->bubbleCount, HUD_OFS_BUBBLES, DRAW_HINT_SPRITE);
+		}
+
+		/* Draw survival Score / Arrows labels (each binds its own text texture) */
+		/* c0.30 only - genuine Indev's GuiIngame has neither */
+		if (SurvivalTest_Enabled && !IndevTest_Enabled && s->score.tex.ID) {
+			Gfx_BindDynamicVb(s->vb);
+			Widget_Render2(&s->score, HUD_OFS_SCORE);
+		}
+		if (SurvivalTest_Enabled && !IndevTest_Enabled && s->arrows.tex.ID) {
+			Gfx_BindDynamicVb(s->vb);
+			Widget_Render2(&s->arrows, HUD_OFS_ARROWS);
 		}
 	}
 
@@ -918,6 +1473,13 @@ static void ChatScreen_UpdateChatYOffsets(struct ChatScreen* s) {
 	HUDScreen_LayoutHotbar();
 		
 	y = min(s->input.base.y, Gui_HUD->hotbar.y);
+	/* Survival: the hearts (+ armor) row sits 10 GUI px above the hotbar
+	    (9px icons + 1px gap) - lift the chat stack above it so chat
+	    history doesn't cover the hearts while chatting */
+	if (SurvivalTest_Enabled) {
+		int rowH = (int)(10.0f * Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+		y = min(y, Gui_HUD->hotbar.y - rowH);
+	}
 	y -= s->input.base.yOffset; /* add some padding */
 	s->altText.yOffset = Window_UI.Height - y;
 	Widget_Layout(&s->altText);
@@ -1261,8 +1823,21 @@ static int ChatScreen_KeyDown(void* screen, int key, struct InputDevice* device)
 		ChatScreen_OpenInput(&String_Empty);
 	} else if (key == CCKEY_SLASH) {
 		ChatScreen_OpenInput(&slash);
-	} else if (InputBind_Claims(BIND_INVENTORY, key, device)) {
-		InventoryScreen_Show();
+	} else if (SurvivalTest_Enabled ?
+			InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) :
+			InputBind_Claims(BIND_INVENTORY, key, device)) {
+		/* Survival/Indev opens its inventory on the dedicated Survival
+		    inventory bind (default I); Classic/creative keeps the engine's
+		    block-list bind (default B). SurvivalInvScreen_Show routes to the
+		    creative grid outside survival and no-ops in plain c0.30-s. */
+		if (!SurvivalTest_Enabled) { InventoryScreen_Show(); return true; }
+		SurvivalInvScreen_Show();
+	} else if (SurvivalTest_PlainInvActive() &&
+			InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device)) {
+		/* Plain servers: the survival bind (default I) ALSO works, opening
+		    the local block stash; B above keeps the classic picker (needed
+		    for servers with big custom-block sets). */
+		SurvivalInvScreen_Show();
 	} else {
 		return false;
 	}
@@ -1869,7 +2444,14 @@ static int InventoryScreen_KeyDown(void* screen, int key, struct InputDevice* de
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (InputDevice_IsEnter(key, device) && table->selectedIndex != -1) {
-		Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		/* Indev creative: the picker acts as the creative palette browser -
+		    a pick deposits a stack into the Indev inventory (which drives the
+		    hotbar via SyncHotbar) instead of poking the classic hotbar. */
+		if (SurvivalTest_CreativeActive()) {
+			SurvivalTest_CreativeGive(table->blocks[table->selectedIndex]);
+		} else {
+			Inventory_SetSelectedBlock(table->blocks[table->selectedIndex]);
+		}
 		Gui_Remove((struct Screen*)s);
 		CPE_SendNotifyAction(NOTIFY_ACTION_BLOCK_LIST_TOGGLED, 0);
 	} else if (Elem_HandlesKeyDown(table, key, device)) {
@@ -1959,6 +2541,1533 @@ void InventoryScreen_Hide(void) {
 
 
 /*########################################################################################################################*
+*---------------------------------------------------SurvivalInvScreen----------------------------------------------------*
+*#########################################################################################################################*/
+/* Indev-style inventory screen for Classic 0.30 Survival Test. NOT faithful to */
+/* c0.30-s (which never had this screen at all) - this is a visual-only redesign */
+/* requested on top of the existing survival inventory, replacing the previous   */
+/* flat-grid look with a classic light-grey panel, recessed slot bevels, and a   */
+/* 3D player-skin paperdoll that turns to face the mouse cursor.                 */
+/*                                                                                */
+/* Only the 27 storage slots (9-35) are shown/clickable here; the hotbar (0-8)   */
+/* is intentionally left to the normal in-world HUD hotbar, which already        */
+/* renders underneath this screen (matching the reference screenshot, where the  */
+/* hotbar sits outside/below the grey panel in the regular HUD style).           */
+
+/* Base slot size (pixels) before display scaling. */
+#define SURVINV_SLOT_BASE     36
+/* Number of storage rows/columns shown in the panel. */
+#define SURVINV_STORAGE_ROWS  3
+#define SURVINV_STORAGE_COLS  SURVIVAL_HOTBAR_SLOTS
+#define SURVINV_STORAGE_SLOTS (SURVIVAL_INV_SLOTS - SURVIVAL_HOTBAR_SLOTS)
+/* Paperdoll preview box size, in slot units (square). */
+#define SURVINV_DOLL_UNITS    3
+/* Pixel gap (base, before scaling) between the doll box and the storage grid. */
+#define SURVINV_GAP_BASE      10
+/* Pixel padding (base, before scaling) around the panel's inner content. */
+#define SURVINV_PAD_BASE      8
+
+/* Displayed block-picture slots: storage + hotbar row + craft grid + open */
+/*  container (up to 54 for a large chest) + result + cursor. */
+#define SURVINV_ISO_SLOTS      (SURVINV_STORAGE_SLOTS + SURVIVAL_HOTBAR_SLOTS + SURVIVAL_CRAFT_SLOTS + SURVIVAL_CONTAINER_MAX + SURVIVAL_ARMOR_SLOTS + 2)
+#define SURVINV_MAX_ISO_VERTS  (SURVINV_ISO_SLOTS * ISOMETRICDRAWER_MAXVERTICES)
+/* Two digits at most per slot, four vertices per digit. */
+#define SURVINV_MAX_COUNT_VERTS (SURVINV_ISO_SLOTS * 2 * 4)
+#define SURVINV_TOTAL_VERTS     (SURVINV_MAX_ISO_VERTS + SURVINV_MAX_COUNT_VERTS)
+/* Click sentinel: the crafting result "slot" (taking from it crafts). */
+#define SURVINV_RESULT_HIT     1000
+
+/* Field of view and camera distance used for the paperdoll preview's own */
+/*  perspective projection (a tighter, portrait-style FOV than the gameplay */
+/*  camera, since it's a close-up of just the player model). */
+#define SURVINV_DOLL_FOV  30.0f
+#define SURVINV_DOLL_DIST  4.7f /* farther back so the full body fits the box with margin */
+/* Widens the doll's horizontal FOV relative to vertical, so the body sits */
+/*  with comfortable side margin instead of its shoulders touching the box */
+/*  edges (matching the reference Indev/Beta paperdoll's proportions). */
+#define SURVINV_DOLL_ASPECT 1.2f
+
+static struct SurvivalInvScreen {
+	Screen_Body
+	int  isoState[SURVINV_MAX_ISO_VERTS / 4];
+	int  isoVertCount;
+	int  isoSlotVerts;    /* iso verts belonging to SLOTS - the batch tail past
+	                          this is the cursor-held block, drawn later so the
+	                          hover highlight sits between them (genuine order) */
+	int  countSlotVerts;  /* likewise for the count digits mesh */
+	int  heldSlot;        /* index of the "picked-up" slot, or -1 */
+	int  lastInvVersion;
+	int  gridX, gridY;     /* pixel origin of the top-left storage slot */
+	int  hotY;             /* pixel y of the in-screen hotbar row (GuiInventory style) */
+	float texF;            /* Indev: pixels per texture unit of the 176x166 gui panel */
+	int  dollBoxH;         /* doll viewport height (== dollBoxSize except Indev's tall window) */
+	float dollCamPitch;    /* GUI paperdoll: whole-scene vertical camera tilt */
+	int  craftX, craftY;   /* pixel origin of the top-left 2x2 crafting cell */
+	int  resultX, resultY; /* pixel origin of the crafting result slot */
+	int  slotSize;         /* current pixel size per slot */
+	int  panelX, panelY, panelW, panelH;
+	int  dollBoxX, dollBoxY, dollBoxSize;
+	int  mouseX, mouseY;   /* last known pointer position, or -1 if none yet */
+	int  countVertCount;
+	struct FontDesc  font;
+	struct TextAtlas countAtlas;
+	struct Texture   titleTex;
+	/* Genuine GuiContainer foreground labels (0x404040 dark gray text): */
+	/*  "Chest"/"Furnace"/"Crafting" panel titles + "Inventory" section label */
+	struct Texture   lblChest, lblFurnace, lblCrafting, lblInventory, lblLargeChest;
+	float fontTexF;  /* panel scale the label/count textures were built for */
+	struct Entity    doll;
+	/* Set when opened by a right-click on a workbench/chest/furnace block: the
+	    very right-click that opened the screen is re-delivered here as a CCMOUSE_R
+	    key event, so swallow that first one (else it right-click-splits whatever
+	    slot sits under the crosshair). */
+	cc_bool skipOpenRClick;
+} SurvivalInvScreen_Instance CC_BIG_VAR;
+
+/* STYLING predicate: draw the genuine textured Indev GuiInventory panel */
+/*  (inventory.png, 176x166 grid, paperdoll window). True in Indev mode AND */
+/*  for the plain-server local stash - the GUI textures are texture-pack */
+/*  entries, so they exist on any server. BEHAVIOR gates (crafting, items, */
+/*  armor, containers, durability) stay on IndevTest_Enabled: the texture's */
+/*  craft/armor boxes render on plain servers but hold nothing and do nothing. */
+static cc_bool SurvivalInv_UseIndevUI(void) {
+	return IndevTest_Enabled || SurvivalTest_PlainInvActive();
+}
+
+/* Returns the pixel origin (top-left corner) of an inventory slot: hotbar */
+/*  slots (0-8) sit on their own row below the storage grid, GuiInventory */
+/*  style, so stacks can be moved between hotbar and storage/crafting. */
+static void SurvivalInv_SlotXY(struct SurvivalInvScreen* s, int slot, int* ox, int* oy) {
+	int st, col, row;
+	if (slot < SURVIVAL_HOTBAR_SLOTS) {
+		*ox = s->gridX + slot * s->slotSize;
+		*oy = s->hotY;
+		return;
+	}
+	st  = slot - SURVIVAL_HOTBAR_SLOTS;
+	col = st % SURVINV_STORAGE_COLS;
+	row = st / SURVINV_STORAGE_COLS;
+	*ox = s->gridX + col * s->slotSize;
+	*oy = s->gridY + row * s->slotSize;
+}
+
+/* Pixel origin of crafting grid cell i (0..3), laid out 2 wide x 2 tall. */
+static void SurvivalInv_CraftXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	int dim = SurvivalTest_CraftDim();
+	*ox = s->craftX + (i % dim) * s->slotSize;
+	*oy = s->craftY + (i / dim) * s->slotSize;
+}
+
+static cc_bool SurvivalInv_InSlot(int mx, int my, int x, int y, int size) {
+	/* Slot.isAtCursorPos: [xPos-1, xPos+17) - one GUI px around the 16px
+	    item area, i.e. shifted 1 left/up of the 18px cell */
+	int one = size / 18;
+	return mx >= x - one && mx < x + size - one &&
+	       my >= y - one && my < y + size - one;
+}
+
+/* Active craft cells: dim*dim (pocket 4, workbench 9); none outside Indev, */
+/*  and none while a container is open (chest/furnace GUIs have no grid). */
+static int SurvivalInv_CraftCells(void) {
+	int dim;
+	if (!IndevTest_Enabled) return 0;
+	if (IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return 0;
+	dim = SurvivalTest_CraftDim();
+	return dim * dim;
+}
+
+/* Slots of the open container: single chest 27, large (double) chest 54, */
+/*  furnace 3 (input/fuel/output). */
+static int SurvivalInv_ContainerCells(void) {
+	switch (IndevTest_OpenKind()) {
+	case INDEV_CONTAINER_CHEST:     return IndevTest_ContainerSlotCount();
+	case INDEV_CONTAINER_PLAYERINV: return IndevTest_ContainerSlotCount(); /* 40 */
+	case INDEV_CONTAINER_FURNACE:   return 3;
+	default: return 0;
+	}
+}
+
+/* Rows of chest slots in the open chest GUI: 3 (single) or 6 (large). */
+static int SurvivalInv_ChestRows(void) {
+	int n = IndevTest_ContainerSlotCount();
+	return n > 0 ? n / 9 : 3;
+}
+
+/* Pixel origin of open-container cell i. Genuine layouts: GuiChest grid at */
+/*  (8,18) 9 wide; GuiFurnace input (56,17), fuel (56,53), output (116,35). */
+static void SurvivalInv_ContainerSlotXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	float f = s->texF;
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_FURNACE) {
+		switch (i) {
+		case 0:  *ox = s->panelX + (int)( 56 * f); *oy = s->panelY + (int)(17 * f); return;
+		case 1:  *ox = s->panelX + (int)( 56 * f); *oy = s->panelY + (int)(53 * f); return;
+		default: *ox = s->panelX + (int)(116 * f); *oy = s->panelY + (int)(35 * f); return;
+		}
+	}
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV) {
+		/* the 40 target cells map onto the genuine inventory.png pocket layout:
+		    0..26 storage grid at (8,84), 27..35 hotbar at (8,142), 36..39 the
+		    armor column at (8, 8/26/44/62) with the helmet (cell 39) on top. */
+		if (i < 27) {
+			*ox = s->panelX + (int)((8 + (i % 9) * 18) * f);
+			*oy = s->panelY + (int)((84 + (i / 9) * 18) * f);
+		} else if (i < 36) {
+			*ox = s->panelX + (int)((8 + (i - 27) * 18) * f);
+			*oy = s->panelY + (int)(142 * f);
+		} else {
+			*ox = s->panelX + (int)(8 * f);
+			*oy = s->panelY + (int)((8 + (3 - (i - 36)) * 18) * f);
+		}
+		return;
+	}
+	*ox = s->panelX + (int)((8  + (i % 9) * 18) * f);
+	*oy = s->panelY + (int)((18 + (i / 9) * 18) * f);
+}
+
+/* Armor slots exist on the pocket inventory only (genuine GuiInventory) - */
+/*  the workbench/chest/furnace screens have none. */
+static int SurvivalInv_ArmorCells(void) {
+	if (!IndevTest_Enabled)                           return 0;
+	if (IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return 0;
+	if (SurvivalTest_CraftDim() != 2)                 return 0;
+	return SURVIVAL_ARMOR_SLOTS;
+}
+
+/* Genuine GuiInventory: x=8, y=8+row*18 with the HELMET on top. The armor */
+/*  array is [0] boots .. [3] helmet, so screen row = 3 - array index. */
+static void SurvivalInv_ArmorSlotXY(struct SurvivalInvScreen* s, int i, int* ox, int* oy) {
+	float f = s->texF;
+	*ox = s->panelX + (int)(8 * f);
+	*oy = s->panelY + (int)((8 + (3 - i) * 18) * f);
+}
+
+/* Slot under (mx,my): storage 9..35, craft 36.., container 45.., the result */
+/*  sentinel, or -1. */
+static int SurvivalInv_HitSlot(struct SurvivalInvScreen* s, int mx, int my) {
+	int i, x, y, craft = SurvivalInv_CraftCells();
+	/* solo spectate view: only the target's container cells exist (no viewer's-own
+	    slots), and it's read-only anyway - just resolve hovers over the target. */
+	if (IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo()) {
+		for (i = 0; i < SurvivalInv_ContainerCells(); i++) {
+			SurvivalInv_ContainerSlotXY(s, i, &x, &y);
+			if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CONTAINER_BASE + i;
+		}
+		return -1;
+	}
+	for (i = 0; i < SURVIVAL_INV_SLOTS; i++) {
+		SurvivalInv_SlotXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return i;
+	}
+	if (!IndevTest_Enabled) return -1; /* no crafting slots in plain c0.30-s */
+	for (i = 0; i < craft; i++) {
+		SurvivalInv_CraftXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CRAFT_BASE + i;
+	}
+	for (i = 0; i < SurvivalInv_ContainerCells(); i++) {
+		SurvivalInv_ContainerSlotXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_CONTAINER_BASE + i;
+	}
+	for (i = 0; i < SurvivalInv_ArmorCells(); i++) {
+		SurvivalInv_ArmorSlotXY(s, i, &x, &y);
+		if (SurvivalInv_InSlot(mx, my, x, y, s->slotSize)) return SURVIVAL_ARMOR_BASE + i;
+	}
+	if (craft > 0 &&
+		SurvivalInv_InSlot(mx, my, s->resultX, s->resultY, s->slotSize)) return SURVINV_RESULT_HIT;
+	return -1;
+}
+
+/* Raw id + count for any displayed slot index (storage/craft/container/result). */
+static void SurvivalInv_SlotContent(int slot, int* id, int* count) {
+	if (slot == SURVINV_RESULT_HIT) {
+		*id = SurvivalTest_CraftResult(count);
+	} else if (slot >= SURVIVAL_ARMOR_BASE) {
+		*id    = SurvivalTest_ArmorId(slot - SURVIVAL_ARMOR_BASE);
+		*count = SurvivalTest_ArmorCount(slot - SURVIVAL_ARMOR_BASE);
+	} else if (slot >= SURVIVAL_CONTAINER_BASE) {
+		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
+		*id    = p->id;
+		*count = p->count;
+	} else if (slot >= SURVIVAL_CRAFT_BASE) {
+		*id    = SurvivalTest_CraftSlotId(slot - SURVIVAL_CRAFT_BASE);
+		*count = SurvivalTest_CraftSlotCount(slot - SURVIVAL_CRAFT_BASE);
+	} else {
+		*id    = SurvivalTest_SlotId(slot);
+		*count = SurvivalTest_SlotCount(slot);
+	}
+}
+
+/* Pixel origin of any displayed slot index (storage/craft/container/result). */
+static void SurvivalInv_AnySlotXY(struct SurvivalInvScreen* s, int slot, int* x, int* y) {
+	if (slot == SURVINV_RESULT_HIT)            { *x = s->resultX; *y = s->resultY; }
+	else if (slot >= SURVIVAL_ARMOR_BASE)      SurvivalInv_ArmorSlotXY(s, slot - SURVIVAL_ARMOR_BASE, x, y);
+	else if (slot >= SURVIVAL_CONTAINER_BASE)  SurvivalInv_ContainerSlotXY(s, slot - SURVIVAL_CONTAINER_BASE, x, y);
+	else if (slot >= SURVIVAL_CRAFT_BASE)      SurvivalInv_CraftXY(s, slot - SURVIVAL_CRAFT_BASE, x, y);
+	else                                       SurvivalInv_SlotXY(s, slot, x, y);
+}
+
+/* Total displayed picture slots and a mapping from 0..N-1 to slot indices */
+/*  (storage, then the 4 craft cells, then the result sentinel). */
+#define SURVINV_DISPLAY_SLOTS (SURVINV_STORAGE_SLOTS + SURVIVAL_CRAFT_SLOTS + 1)
+/* Crafting slots only exist in Indev mode; plain c0.30-s shows storage only */
+/*  (it never had crafting), so its screen is byte-for-byte the old layout. */
+/* The solo spectate view (single panel) shows ONLY the target's container cells - */
+/*  no viewer's-own storage/hotbar/craft/armor. */
+static cc_bool SurvivalInv_Solo(void) {
+	return IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo();
+}
+static int SurvivalInv_DisplayCount(void) {
+	/* hotbar row + storage, plus (Indev) either the open container's slots */
+	/*  or the active craft cells + result slot */
+	int n = SURVIVAL_HOTBAR_SLOTS + SURVINV_STORAGE_SLOTS;
+	if (!IndevTest_Enabled) return n;
+	if (SurvivalInv_Solo()) return SurvivalInv_ContainerCells(); /* target only */
+	if (SurvivalInv_ContainerCells()) return n + SurvivalInv_ContainerCells();
+	return n + SurvivalInv_CraftCells() + 1 + SurvivalInv_ArmorCells();
+}
+static int SurvivalInv_DisplaySlot(int n) {
+	int cells = SurvivalInv_CraftCells(), cont = SurvivalInv_ContainerCells();
+	if (SurvivalInv_Solo()) return SURVIVAL_CONTAINER_BASE + n; /* target cells only */
+	if (n < SURVIVAL_HOTBAR_SLOTS) return n; /* hotbar row first */
+	n -= SURVIVAL_HOTBAR_SLOTS;
+	if (n < SURVINV_STORAGE_SLOTS)         return SURVIVAL_HOTBAR_SLOTS + n;
+	n -= SURVINV_STORAGE_SLOTS;
+	if (cont)                              return SURVIVAL_CONTAINER_BASE + n;
+	if (n < cells)                         return SURVIVAL_CRAFT_BASE + n;
+	n -= cells;
+	if (n == 0)                            return SURVINV_RESULT_HIT;
+	return SURVIVAL_ARMOR_BASE + (n - 1);
+}
+
+/* Rendered pixel width of a stack count - summed from the atlas' per-glyph */
+/*  widths (atlas->offset is the PREFIX width, not a digit advance). */
+static int SurvivalInv_CountWidth(struct TextAtlas* atlas, int value) {
+	int w = 0;
+	if (value <= 0) return 0;
+	for (; value > 0; value /= 10) w += atlas->widths[value % 10];
+	return w;
+}
+
+/* Tool damage of any displayed slot (0 when not a damageable/damaged item). */
+static void SurvivalInv_SlotDamage(int slot, int* dmg, int* maxDmg) {
+	int id = 0, count = 0;
+	*dmg = 0; *maxDmg = 0;
+	if (slot == SURVINV_RESULT_HIT) return;
+
+	if (slot >= SURVIVAL_ARMOR_BASE) {
+		id     = SurvivalTest_ArmorId(slot - SURVIVAL_ARMOR_BASE);
+		count  = SurvivalTest_ArmorCount(slot - SURVIVAL_ARMOR_BASE);
+		*dmg   = SurvivalTest_ArmorDamage(slot - SURVIVAL_ARMOR_BASE);
+	} else if (slot >= SURVIVAL_CONTAINER_BASE) {
+		struct SurvivalSlot* p = IndevTest_ContainerSlot(slot - SURVIVAL_CONTAINER_BASE);
+		id = p->id; count = p->count; *dmg = p->damage;
+	} else if (slot >= SURVIVAL_CRAFT_BASE) {
+		/* GuiContainer renders overlays for EVERY slot - grid cells too */
+		id     = SurvivalTest_CraftSlotId(slot - SURVIVAL_CRAFT_BASE);
+		count  = SurvivalTest_CraftSlotCount(slot - SURVIVAL_CRAFT_BASE);
+		*dmg   = SurvivalTest_CraftSlotDamage(slot - SURVIVAL_CRAFT_BASE);
+	} else {
+		id = SurvivalTest_SlotId(slot); count = SurvivalTest_SlotCount(slot);
+		*dmg = SurvivalTest_SlotDamage(slot);
+	}
+	if (count <= 0) { *dmg = 0; return; }
+	*maxDmg = IndevTest_ToolMaxDamage(id);
+	if (!*maxDmg) *maxDmg = IndevTest_ArmorMaxDamage(id);
+}
+
+/* The paperdoll is a static, unlit preview - just needs a constant base color. */
+static PackedCol SurvivalInvDoll_GetCol(struct Entity* e) { return PACKEDCOL_WHITE; }
+static const struct EntityVTABLE survivalDoll_VTABLE = {
+	NULL, NULL, NULL, SurvivalInvDoll_GetCol, NULL, NULL
+};
+
+static void SurvivalInv_InitDoll(struct SurvivalInvScreen* s) {
+	static const cc_string human = String_FromConst("humanoid");
+	Entity_Init(&s->doll);
+	s->doll.VTABLE = &survivalDoll_VTABLE;
+	/* Guarantee the model + Size are set (Entity_Init calls SetModel, but be */
+	/*  explicit so Position.y framing below never reads a zero Size). */
+	Entity_SetModel(&s->doll, &human);
+}
+
+/* D3D9/D3D11 run a REVERSED depth buffer (ZFUNC GREATEREQUAL vs GL's
+    LEQUAL) with the same ortho z row, so with culling off the depth test
+    picks the model's FAR side there. Negating the view's Z axis makes the
+    reversed test select exactly the fragments GL's test selects (screen
+    x/y untouched). The scene camera-tilt rotation is applied AFTER that
+    flip, so its visual sense inverts with it - DOLL_Z doubles as the
+    tilt's sign (user-verified per backend: D3D leaned backwards with the
+    unsigned tilt). */
+#if CC_GFX_BACKEND == CC_GFX_BACKEND_D3D9 || CC_GFX_BACKEND == CC_GFX_BACKEND_D3D11
+	#define DOLL_Z -1.0f
+#else
+	#define DOLL_Z  1.0f
+#endif
+
+/* Renders the 3D player-skin paperdoll, confined to the doll preview box. */
+/*  The body always faces forward; only the head turns to track the cursor. */
+/* Indev mode: verified against GuiInventory.drawGuiContainerBackgroundLayer */
+/*  (in-20100223) - anchor (guiLeft+51, guiTop+75) z=50, glScalef(-30,30,30) */
+/*  + rotZ 180, dx/dy from (51, 25) with the atan(d/40)*20/40 tracking, */
+/*  camera tilt glRotatef(-atan(dy/40)*20, 1,0,0). The classic-mode doll box */
+/*  is our own invention (c0.30-s has no doll) and keeps its approximation. */
+/* Renders entity `p`'s paperdoll into the (boxX,boxY,boxSize,boxH) window. The
+    /Inventory view calls this twice (the local player on the right, the target on
+    the left); the normal inventory uses the SurvivalInv_RenderDoll wrapper below. */
+static void SurvivalInv_RenderDollAt(struct SurvivalInvScreen* s, struct Entity* p,
+                                     int boxX, int boxY, int boxSize, int boxH) {
+	struct Matrix proj, savedView;
+	float aspect;
+	if (boxH <= 0) boxH = boxSize;
+	if (boxSize <= 0 || !p) return;
+
+	/* Use the player's skin when it has one; otherwise fall back to the */
+	/*  default char.png. In singleplayer with no ClassiCube skin, the local */
+	/*  player's TextureId can be 0 - forcing NonHumanSkin=false + TextureId=0 */
+	/*  makes Model_ApplyTexture use the model's defaultTex (default Steve), */
+	/*  never an unbound/black texture. */
+	if (p->TextureId) {
+		s->doll.SkinType     = p->SkinType;
+		s->doll.TextureId    = p->TextureId;
+		s->doll.NonHumanSkin = p->NonHumanSkin;
+		s->doll.uScale       = p->uScale;
+		s->doll.vScale       = p->vScale;
+	} else {
+		s->doll.SkinType     = SKIN_64x32;
+		s->doll.TextureId    = 0;      /* -> model defaultTex (char.png) */
+		s->doll.NonHumanSkin = false;
+		s->doll.uScale       = 1.0f;
+		s->doll.vScale       = 1.0f;
+	}
+
+	/* The genuine GuiInventory tracking maths (in-20100223, transcribed):
+	    dx/dy are measured in the genuine GUI's pixel units from the doll
+	    anchor (window centre horizontally, eye level = 50px above the base
+	    in a 70px-tall window), with a 40px arctan falloff. The BODY yaw
+	    lightly tracks (atan(dx/40)*20), the HEAD tracks at double strength
+	    (atan(dx/40)*40), and the whole body leans with the vertical offset
+	    (atan(dy/40)*20) while the head pitches by the same amount on top.
+	    Genuine multiplies raw radians by 20/40 and feeds glRotatef degrees -
+	    quirky, but transcribed as-is. */
+	{
+		float gscale = 70.0f / (float)boxH; /* our box pixels -> genuine GUI px */
+		float dx, dy, t, lean;
+		if (s->mouseX < 0) {
+			/* no PointerMove yet - look straight ahead */
+			dx = 0.0f; dy = 0.0f;
+		} else if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
+			/* genuine anchors: dx from (guiLeft+51), dy from (guiTop+25)
+			    (= 75 - 50), both in genuine GUI px (mouse / texF) */
+			dx = ((float)boxX + 25.0f * s->texF - (float)s->mouseX) / s->texF;
+			dy = ((float)s->panelY + 25.0f * s->texF - (float)s->mouseY) / s->texF;
+		} else {
+			float eyeY = (float)boxY + (float)boxH * (20.0f / 70.0f);
+			dx = ((float)(boxX + boxSize / 2) - (float)s->mouseX) * gscale;
+			dy = (eyeY - (float)s->mouseY) * gscale;
+		}
+		t    = Math_Atan2f(40.0f, dx); /* engine Atan2f(x,y) = atan(y/x) */
+		lean = Math_Atan2f(40.0f, dy);
+
+		/* The view's x+y mirror below is a 180-degree spin about the Z
+		    axis - which does NOT turn the model's face toward the camera -
+		    so the face-the-camera base yaw is 180 (models face -z at yaw
+		    0). WHICH depth direction is "toward the camera" differs per
+		    backend (see DOLL_Z below), but the base yaw is the same for
+		    all of them once the view z is normalised. */
+		/* The view's x-mirror inverts the visual sense of model yaw on
+		    EVERY backend (user-verified on both OGL and D3D), so the
+		    genuine +t offsets are negated around the 180 base. */
+		s->doll.RotY  = 180.0f - t * 20.0f;   /* body: light HORIZONTAL track */
+		s->doll.Yaw   = 180.0f - t * 40.0f;   /* head: double strength */
+		/* Rig-derived signs (the x+y view mirror inverts the MODEL-local
+		    pitch sense but not the post-mirror scene rotation): head pitch
+		    -lean, scene tilt +lean - both toward the cursor, head at
+		    double visual strength like genuine (head rides on the scene
+		    tilt). The old both-negative pair made the scene fight the
+		    head - level head, body tilting AWAY (user-reported). */
+		s->doll.Pitch = -lean * 20.0f;        /* head pitch (vertical) */
+		s->doll.RotX  = 0.0f;                 /* body never pitches (genuine) */
+		s->doll.RotZ  = 0.0f;
+		s->dollCamPitch = DOLL_Z * lean * 20.0f; /* the vertical tilt is a CAMERA
+		    rotation applied to the whole scene, not a body lean - genuine's
+		    glRotatef(-atan(dy/40)*20, 1,0,0) before rendering the entity.
+		    Our mirrored frame flips the pitch sense, so the sign here is
+		    +lean (cursor below the eye anchor -> doll looks down at it -
+		    user-reported inverted with the old -lean). */
+	}
+	s->doll.Position.x = 0.0f;
+	s->doll.Position.y = 0.0f;
+	s->doll.Position.z = 0.0f;
+
+	/* Genuine renders the doll in the GUI's plain orthographic projection
+	    (glTranslatef + glScalef 30, no perspective at all) - the previous
+	    perspective camera here was what splayed the legs near the frame
+	    edge. The -30/+30/+30 scale + 180-degree Z spin in genuine is an
+	    x+y flip: it maps the y-up model into y-down GUI space while
+	    preserving triangle winding (and mirrors the doll horizontally,
+	    which is also genuine). Reproduced via the view matrix below. */
+	if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
+		aspect = 30.0f * s->texF; /* genuine glScalef 30 in panel px */
+	} else {
+		aspect = 30.0f * (float)(boxH - 2) / 70.0f; /* our classic box approximation */
+	}
+	Gfx_CalcOrthoMatrix(&proj, (float)(boxSize - 2), (float)(boxH - 2), -1000.0f, 1000.0f);
+
+	savedView = Gfx.View;
+	{
+		struct Matrix flip, place, camPitch, tmp;
+		float px, py;
+		/* x+y mirror (winding-preserving), then anchor at genuine's
+		    (guiLeft+51, guiTop+75) - expressed relative to the viewport's
+		    (boxX+1, boxY+1) origin in Indev mode - with z pushed into the
+		    ortho range. The whole-scene pitch tilt (genuine's pre-render
+		    glRotatef about X) rides on top, so vertical mouse movement
+		    tips the CAMERA over the doll rather than bending the body. */
+		if (SurvivalInv_UseIndevUI() && s->texF > 0.0f) {
+			px = ((float)boxX + 25.0f * s->texF) - (float)(boxX + 1);
+			py = ((float)s->panelY + 75.0f * s->texF) - (float)(boxY + 1);
+		} else {
+			px = (float)(boxSize - 2) * 0.5f;
+			py = (float)(boxH - 2) * (67.0f / 70.0f);
+		}
+		Matrix_Scale(&flip, -aspect, -aspect, DOLL_Z * aspect);
+		Matrix_RotateX(&camPitch, s->dollCamPitch * MATH_DEG2RAD);
+		Matrix_Translate(&place, px, py, 50.0f);
+		Matrix_Mul(&tmp, &flip, &camPitch);
+		Matrix_Mul(&Gfx.View, &tmp, &place);
+	}
+	Gfx_LoadMatrix(MATRIX_VIEW, &Gfx.View);
+	Gfx_LoadMatrix(MATRIX_PROJ, &proj);
+
+	/* Matches the 1px-inset black square drawn in SurvivalInvScreen_Render, */
+	/*  so the 3D render area never overflows into the box's border pixels. */
+	/* Viewport and scissor both take top-left-origin window coordinates */
+	/*  (they must describe the SAME region - see Graphics.h). */
+	Gfx_SetViewport(boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
+	Gfx_SetScissor (boxX + 1, boxY + 1, boxSize - 2, boxH - 2);
+	Gfx_ClearBuffers(GFX_BUFFER_DEPTH);
+
+	/* Screens render in the 2D pass (depth off, alpha BLENDING on, culling */
+	/*  off). A model needs the 3D baseline the world's entity pass provides: */
+	/*  depth test+write and alpha TEST (not blend). Face culling stays OFF - */
+	/*  the world draws models with culling off (Model.c only enables it for */
+	/*  sprites), so model boxes have no winding guarantee: mirrored parts */
+	/*  (corner-swapped bounds, e.g. armor limbs) wind backwards and culling */
+	/*  eats their faces (= armor pieces invisible on the doll only). */
+	Gfx_SetDepthTest(true);
+	Gfx_SetDepthWrite(true);
+	Gfx_SetAlphaTest(true);
+	Gfx_SetAlphaBlending(false);
+
+	Model_Render(s->doll.Model, &s->doll);
+	/* the paperdoll wears the player's armor, like genuine GuiInventory */
+	IndevArmor_Render(&s->doll);
+
+	Gfx_SetAlphaBlending(true);
+	Gfx_SetAlphaTest(false);
+	Gfx_SetDepthWrite(false);
+	Gfx_SetDepthTest(false);
+
+	Gfx_SetViewport(0, 0, Game.Width, Game.Height);
+	Gfx_SetScissor (0, 0, Game.Width, Game.Height);
+
+	Gfx.View = savedView;
+	/* Restore the 2D pass's matrices, NOT the world's (Gfx.Projection holds */
+	/*  the 3D perspective matrix - loading that mid-GUI-pass makes every 2D */
+	/*  quad drawn after the doll project through a perspective transform, */
+	/*  garbling the rest of the frame's GUI). Rebuild the exact ortho + */
+	/*  identity view that Gfx_Begin2D set up. */
+	{
+		struct Matrix ortho;
+		Gfx_CalcOrthoMatrix(&ortho, (float)Game.Width, (float)Game.Height, -100.0f, 1000.0f);
+		Gfx_LoadMatrix(MATRIX_PROJ, &ortho);
+		Gfx_LoadMatrix(MATRIX_VIEW, &Matrix_Identity);
+	}
+}
+
+/* The normal inventory / right-panel doll: the local player in the screen's box. */
+static void SurvivalInv_RenderDoll(struct SurvivalInvScreen* s) {
+	SurvivalInv_RenderDollAt(s, &Entities.CurPlayer->Base,
+		s->dollBoxX, s->dollBoxY, s->dollBoxSize, s->dollBoxH);
+}
+
+static void SurvivalInvScreen_BuildMesh(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	struct VertexTextured* data;
+	struct VertexTextured* countDst;
+	struct VertexTextured* cur;
+	int i, slotX, slotY, count;
+	BlockID block;
+	float halfSize;
+
+	data     = Screen_LockVb(s);
+	halfSize = s->slotSize * 0.5f;
+	/* Indev slots are the genuine texture's 18px cells with slotX at the item */
+	/*  origin. Blocks fill the cell (same prominent size as the classic/HUD */
+	/*  iso pictures - genuine renderBlockOnInventory blocks are big too), */
+	/*  centred on the cell centre (item origin + 8 texture units). */
+	{
+	float itemHalf = SurvivalInv_UseIndevUI() ? s->texF * 7.0f : halfSize;
+	int   ictr     = SurvivalInv_UseIndevUI() ? (int)(s->texF * 8.0f) : s->slotSize / 2;
+
+	/* ISO block pictures for every occupied displayed slot that holds a BLOCK */
+	/*  (item ids draw as flat sprites in the render pass instead). */
+	IsometricDrawer_BeginBatch(data, s->isoState);
+	for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+		int slot = SurvivalInv_DisplaySlot(i), id;
+		SurvivalInv_SlotContent(slot, &id, &count);
+		if (id == BLOCK_AIR || count <= 0 || id >= 256) continue; /* items draw as sprites */
+		SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+		IsometricDrawer_AddBatch((BlockID)id, itemHalf,
+			slotX + ictr, slotY + ictr);
+	}
+	/* EndBatch just measures - the batch continues below with the cursor block */
+	s->isoSlotVerts = IsometricDrawer_EndBatch();
+	/* Cursor-held BLOCK follows the mouse inside the same iso batch (held */
+	/*  ITEMS draw as sprites in the render pass instead). */
+	if (SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() < 256 && s->mouseX >= 0) {
+		IsometricDrawer_AddBatch((BlockID)SurvivalTest_CursorId(), itemHalf,
+			s->mouseX, s->mouseY);
+	}
+	s->isoVertCount = IsometricDrawer_EndBatch();
+	}
+
+	/* Stack-count digit overlay for slots with count > 1 */
+	countDst = data + SURVINV_MAX_ISO_VERTS;
+	cur = countDst;
+	s->countSlotVerts = 0;
+	if (s->countAtlas.tex.ID) {
+		int savedY = s->countAtlas.tex.y;
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i), id;
+			SurvivalInv_SlotContent(slot, &id, &count);
+			if (count <= 1) continue;
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			/* Indev: count sits at the 16px item's bottom (slotY+16*f), not */
+			/*  the 18px cell bottom; classic keeps its slotSize-relative spot. */
+			if (SurvivalInv_UseIndevUI()) {
+				/* renderItemOverlayIntoGUI right-aligns the count with its right */
+				/*  edge at x+17 (drawString at x + 19 - 2 - stringWidth). NOTE: */
+				/*  width must come from the atlas' per-glyph widths - offset is */
+				/*  the PREFIX width (0 for the digits atlas), which used to make */
+				/*  textW 0 and hang counts off the slot's right edge. */
+				int textW = SurvivalInv_CountWidth(&s->countAtlas, count);
+				s->countAtlas.tex.y = slotY + (int)(s->texF * 17.0f) - s->countAtlas.tex.height;
+				s->countAtlas.curX  = slotX + (int)(s->texF * 17.0f) - textW;
+			} else {
+				s->countAtlas.tex.y = slotY + s->slotSize - s->countAtlas.tex.height - 2;
+				s->countAtlas.curX  = slotX + 2;
+			}
+			TextAtlas_AddInt(&s->countAtlas, count, &cur);
+		}
+		s->countSlotVerts = (int)(cur - countDst);
+		/* Cursor-held stack count follows the mouse (blocks and items alike). */
+		if (SurvivalTest_CursorCount() > 1 && s->mouseX >= 0) {
+			int cc    = SurvivalTest_CursorCount();
+			/* renderItemIntoGUI draws at cursor-8, the count right-aligned to
+			    +17 of that - so the count's right/bottom edge is cursor+9 */
+			int half  = (int)(s->texF * 9.0f);
+			s->countAtlas.tex.y = s->mouseY + half - s->countAtlas.tex.height;
+			s->countAtlas.curX  = s->mouseX + half - SurvivalInv_CountWidth(&s->countAtlas, cc);
+			TextAtlas_AddInt(&s->countAtlas, cc, &cur);
+		}
+		s->countAtlas.tex.y = savedY;
+	}
+	s->countVertCount = (int)(cur - countDst);
+	s->lastInvVersion = SurvivalTest_InvVersion();
+	(void)block;
+
+	Gfx_UnlockDynamicVb(s->vb);
+}
+
+static void SurvivalInvScreen_Render(void* screen, float delta) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	int i, slotX, slotY, b;
+	int contKind      = IndevTest_OpenKind();
+	cc_bool workbench = IndevTest_Enabled && SurvivalTest_CraftDim() == 3;
+	GfxResourceID guiTex;
+	if (contKind == INDEV_CONTAINER_CHEST)          guiTex = IndevTest_ContGuiTex();
+	else if (contKind == INDEV_CONTAINER_FURNACE)   guiTex = IndevTest_FurnGuiTex();
+	else if (contKind == INDEV_CONTAINER_PLAYERINV) guiTex = IndevTest_InvGuiTex();
+	else guiTex = workbench ? IndevTest_CraftGuiTex() : IndevTest_InvGuiTex();
+
+	/* GuiContainer.drawScreen begins with drawDefaultBackground(): a
+	    full-screen gradient (0x60050500 -> 0xA0303060) dimming the world
+	    behind every container screen. */
+	Gfx_Draw2DGradient(0, 0, Game.Width, Game.Height,
+		PackedCol_Make(0x05, 0x05, 0x00, 0x60),
+		PackedCol_Make(0x30, 0x30, 0x60, 0xA0));
+
+	/* Sampled from a reference classic-style inventory screenshot. */
+	PackedCol panelBorder = PackedCol_Make( 55,  55,  55, 255);
+	PackedCol panelBg     = PackedCol_Make(198, 198, 198, 255);
+	PackedCol slotFill    = PackedCol_Make(139, 139, 139, 255);
+	PackedCol heldFill    = PackedCol_Make(255, 255, 150, 220);
+	PackedCol highlight   = PackedCol_Make(255, 255, 255, 255);
+	PackedCol dollBg      = PackedCol_Make(  0,   0,   0, 255);
+
+	{
+	if (SurvivalInv_UseIndevUI() && guiTex) {
+		/* Genuine look: the whole panel IS the 176-wide GUI texture (slot */
+		/*  bevels, craft arrow, and - for the pocket inventory - the armor */
+		/*  boxes and doll window). crafting.png for the workbench, */
+		/*  container.png for a chest, furnace.png for a furnace, else */
+		/*  inventory.png. */
+		struct Texture panel;
+		panel.ID     = guiTex;
+		panel.x      = (short)s->panelX;
+		panel.y      = (short)s->panelY;
+		if (contKind == INDEV_CONTAINER_CHEST) {
+			/* GuiChest composes the panel from two strips of container.png: */
+			/*  the slots strip (0,0)-(176, rows*18+17) - single 71, large 125 - */
+			/*  then the player-inventory strip (0,126)-(176,222) below it. The */
+			/*  single chest samples the top 3 rows of the same 6-row texture. */
+			int rowsH = SurvivalInv_ChestRows() * 18 + 17;
+			int topH  = (int)(rowsH * s->texF);
+			panel.width  = (cc_uint16)s->panelW;
+			panel.height = (cc_uint16)topH;
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = rowsH / 256.0f;
+			Texture_Render(&panel);
+			panel.y      = (short)(s->panelY + topH);
+			/* the strip is 96 texels drawn 96 units tall (GuiChest paints
+			    rowsH + 96 of the 114+rows*18 ySize; the last unit is bare) */
+			panel.height = (cc_uint16)(int)(96 * s->texF);
+			panel.uv.v1  = 126.0f / 256.0f; panel.uv.v2 = 222.0f / 256.0f;
+			Texture_Render(&panel);
+		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
+			/* /Inventory: two inventory.png panels side by side - the TARGET's 40
+			    slots (left) and the VIEWER's own inventory (right). The solo
+			    spectate view draws only the target panel. */
+			panel.width  = (cc_uint16)(int)(176 * s->texF);
+			panel.height = (cc_uint16)(int)(166 * s->texF);
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
+			Texture_Render(&panel);                             /* target */
+			if (!IndevTest_NetContIsSolo()) {
+				panel.x = (short)(s->panelX + (int)((176 + 16) * s->texF));
+				Texture_Render(&panel);                         /* viewer's own */
+				panel.x = (short)s->panelX;
+			}
+		} else {
+			panel.width  = (cc_uint16)s->panelW;
+			panel.height = (cc_uint16)s->panelH;
+			panel.uv.u1  = 0.0f;            panel.uv.v1 = 0.0f;
+			panel.uv.u2  = 176.0f / 256.0f; panel.uv.v2 = 166.0f / 256.0f;
+			Texture_Render(&panel);
+		}
+
+		if (contKind == INDEV_CONTAINER_FURNACE) {
+			/* GuiFurnace overlays. Flame while burning: dest (56, 36+12-h), */
+			/*  src (176, 12-h) 14 x (h+2), h = burnTime*12/currentBurn. */
+			/*  Progress arrow: dest (79,34), src (176,14) (w+1) x 16, */
+			/*  w = cookTime*24/200. */
+			struct Texture ovl;
+			int h = IndevTest_FurnaceBurnScaled();
+			int w = IndevTest_FurnaceCookScaled();
+			ovl.ID = guiTex;
+			/* GuiFurnace draws the flame whenever isBurning() - the h+2 rect
+			    leaves a 2px ember stub visible right up until burnout */
+			if (IndevTest_FurnaceIsBurning()) {
+				ovl.x      = (short)(s->panelX + (int)(56 * s->texF));
+				ovl.y      = (short)(s->panelY + (int)((36 + 12 - h) * s->texF));
+				ovl.width  = (cc_uint16)(int)(14 * s->texF);
+				ovl.height = (cc_uint16)(int)((h + 2) * s->texF);
+				ovl.uv.u1  = 176.0f / 256.0f;      ovl.uv.v1 = (12.0f - h) / 256.0f;
+				ovl.uv.u2  = 190.0f / 256.0f;      ovl.uv.v2 = 14.0f / 256.0f;
+				Texture_Render(&ovl);
+			}
+			ovl.x      = (short)(s->panelX + (int)(79 * s->texF));
+			ovl.y      = (short)(s->panelY + (int)(34 * s->texF));
+			ovl.width  = (cc_uint16)(int)((w + 1) * s->texF);
+			ovl.height = (cc_uint16)(int)(16 * s->texF);
+			ovl.uv.u1  = 176.0f / 256.0f;              ovl.uv.v1 = 14.0f / 256.0f;
+			ovl.uv.u2  = (176.0f + w + 1) / 256.0f;    ovl.uv.v2 = 30.0f / 256.0f;
+			Texture_Render(&ovl);
+		}
+
+		/* Foreground labels + the hover highlight moved to the tail of this
+		    function - genuine GuiContainer.drawScreen draws the highlight
+		    per-slot AFTER that slot's item, and the labels LAST of all
+		    (drawGuiContainerForegroundLayer, above even the held stack). */
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	} else {
+	if (contKind == INDEV_CONTAINER_PLAYERINV) {
+		/* No inventory texture: flat panels. /Inventory draws TWO (target left,
+		    viewer right); the solo spectate view draws ONE (just the target). */
+		cc_bool solo = IndevTest_NetContIsSolo();
+		int pw = (int)(176 * s->texF);
+		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
+		Gfx_Draw2DFlat(s->panelX,     s->panelY,     pw,     s->panelH,     panelBg);
+		if (!solo) {
+			int rx = s->panelX + (int)((176 + 16) * s->texF);
+			Gfx_Draw2DFlat(rx - 2, s->panelY - 2, pw + 4, s->panelH + 4, panelBorder);
+			Gfx_Draw2DFlat(rx,     s->panelY,     pw,     s->panelH,     panelBg);
+		}
+		/* recessed doll window(s): dollBoxX is the target's (solo) or the viewer's
+		    (two-panel); the two-panel also frames the target's box on the left. */
+		b = s->dollBoxSize;
+		Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
+		Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		if (!solo) {
+			int ldx = s->panelX + (int)(26 * s->texF);
+			Gfx_Draw2DFlat(ldx,     s->dollBoxY,     b,     b,     panelBorder);
+			Gfx_Draw2DFlat(ldx + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		}
+	} else {
+		/* Panel: outer dark border then light-grey fill */
+		Gfx_Draw2DFlat(s->panelX - 2, s->panelY - 2, s->panelW + 4, s->panelH + 4, panelBorder);
+		Gfx_Draw2DFlat(s->panelX,     s->panelY,     s->panelW,     s->panelH,     panelBg);
+
+		/* Paperdoll preview box: recessed dark square (not in container GUIs) */
+		if (contKind == INDEV_CONTAINER_NONE) {
+			b = s->dollBoxSize;
+			Gfx_Draw2DFlat(s->dollBoxX,     s->dollBoxY,     b,     b,     panelBorder);
+			Gfx_Draw2DFlat(s->dollBoxX + 1, s->dollBoxY + 1, b - 2, b - 2, dollBg);
+		}
+	}
+
+	/* Slot backgrounds (storage + craft grid + result): recessed bevel */
+	for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+		int slot = SurvivalInv_DisplaySlot(i);
+		SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+		Gfx_Draw2DFlat(slotX,     slotY,     s->slotSize,     s->slotSize,
+		               slot == s->heldSlot ? heldFill : panelBorder);
+		if (slot == s->heldSlot) continue;
+
+		Gfx_Draw2DFlat(slotX + 1, slotY + 1, s->slotSize - 2, s->slotSize - 2, slotFill);
+		Gfx_Draw2DFlat(slotX + 1, slotY + s->slotSize - 2, s->slotSize - 2, 1, highlight);
+		Gfx_Draw2DFlat(slotX + s->slotSize - 2, slotY + 1, 1, s->slotSize - 2, highlight);
+	}
+	}
+	}
+
+	/* "Inventory" title above the panel (Indev's textured panel is self- */
+	/*  contained, so no floating title there). */
+	if (s->titleTex.ID && !(SurvivalInv_UseIndevUI() && (IndevTest_InvGuiTex() || IndevTest_CraftGuiTex()))) {
+		s->titleTex.x = s->panelX + (s->panelW - s->titleTex.width) / 2;
+		s->titleTex.y = s->panelY - s->titleTex.height - 4;
+		Texture_Render(&s->titleTex);
+	}
+
+	/* Rebuild mesh whenever inventory has changed */
+	if (SurvivalTest_InvVersion() != s->lastInvVersion) s->dirty = true;
+	if (s->dirty) { SurvivalInvScreen_BuildMesh(screen); s->dirty = false; }
+
+	/* ISO block pictures - SLOT entries only; the batch tail (the cursor-
+	    held block) draws later, above the hover highlight like genuine's
+	    z+32 held stack. */
+	if (s->isoSlotVerts > 0) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindDynamicVb(s->vb);
+		IsometricDrawer_Render(s->isoSlotVerts, 0, s->isoState);
+	}
+
+	/* Item-id sprites (Indev items - tools, food, materials) drawn as flat */
+	/*  icons from items.png; blocks already drew via the ISO pass above. */
+	if (IndevTest_Enabled && IndevTest_ItemsTex()) {
+		struct Texture itex;
+		int isize = IndevTest_Enabled ? (int)(s->texF * 14.0f) : (int)(s->slotSize * 0.75f);
+		int inset = IndevTest_Enabled ? (int)(s->texF * 1.0f) : (s->slotSize - isize) / 2;
+		itex.ID = IndevTest_ItemsTex();
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i), id, count;
+			SurvivalInv_SlotContent(slot, &id, &count);
+			if (count <= 0 || id < 256) continue;
+			if (!IndevTest_ItemSpriteUV(id, &itex.uv.u1, &itex.uv.v1, &itex.uv.u2, &itex.uv.v2)) continue;
+
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			itex.x = (short)(slotX + inset);
+			itex.y = (short)(slotY + inset);
+			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
+			Texture_Render(&itex);
+		}
+
+		/* Slot.getBackgroundIconIndex: empty armor slots show their piece
+		    silhouette from items.png (icon 15 + (piece << 4)) */
+		for (i = 0; i < SurvivalInv_ArmorCells(); i++) {
+			int icon;
+			if (SurvivalTest_ArmorCount(i) > 0) continue;
+			icon = 15 + ((3 - i) << 4);
+			itex.uv.u1 = (icon % 16)     / 16.0f; itex.uv.v1 = (icon / 16)     / 16.0f;
+			itex.uv.u2 = (icon % 16 + 1) / 16.0f; itex.uv.v2 = (icon / 16 + 1) / 16.0f;
+
+			SurvivalInv_ArmorSlotXY(s, i, &slotX, &slotY);
+			itex.x = (short)(slotX + inset);
+			itex.y = (short)(slotY + inset);
+			itex.width = (cc_uint16)isize; itex.height = (cc_uint16)isize;
+			Texture_Render(&itex);
+		}
+	}
+
+	/* Durability bars - renderItemOverlayIntoGUI draws them in EVERY slot */
+	/*  (chest/storage/hotbar alike), not just the HUD hotbar: 13x2 black */
+	/*  backing at (x+2, y+13), then the red->green remaining-durability bar. */
+	if (IndevTest_Enabled) {
+		float u = s->texF;
+		int   dmg, maxDmg, bx, by, v, w, h;
+		for (i = 0; i < SurvivalInv_DisplayCount(); i++) {
+			int slot = SurvivalInv_DisplaySlot(i);
+			SurvivalInv_SlotDamage(slot, &dmg, &maxDmg);
+			if (maxDmg <= 0 || dmg <= 0) continue;
+
+			SurvivalInv_AnySlotXY(s, slot, &slotX, &slotY);
+			bx = slotX + (int)(2 * u); by = slotY + (int)(13 * u);
+			v  = 255 - dmg * 255 / maxDmg;
+			w  = 13  - dmg * 13  / maxDmg;
+			h  = (int)u; if (h < 1) h = 1;
+
+			Gfx_Draw2DFlat(bx, by, (int)(13 * u), h * 2, PackedCol_Make(0, 0, 0, 255));
+			Gfx_Draw2DFlat(bx, by, (int)(12 * u), h,
+				PackedCol_Make((cc_uint8)((255 - v) / 4), 63, 0, 255));
+			Gfx_Draw2DFlat(bx, by, (int)(w * u), h,
+				PackedCol_Make((cc_uint8)(255 - v), (cc_uint8)v, 0, 255));
+		}
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	}
+
+	/* Slot stack-count digits (the cursor-held stack's count draws later,
+	    with the held stack itself) */
+	if (s->countSlotVerts > 0 && s->countAtlas.tex.ID) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(s->countAtlas.tex.ID);
+		Gfx_BindDynamicVb(s->vb);
+		Gfx_DrawVb_IndexedTris_Range(s->countSlotVerts,
+		                             SURVINV_MAX_ISO_VERTS, DRAW_HINT_RECT);
+	}
+
+	/* GuiContainer's mouse-over highlight: translucent white over the 16px
+	    slot area under the cursor - AFTER the slot item + count (the
+	    highlight tints them), BEFORE the held stack. */
+	if (SurvivalInv_UseIndevUI() && guiTex) {
+		int hover = SurvivalInv_HitSlot(s, s->mouseX, s->mouseY);
+		int inner = (int)(16 * s->texF);
+		if (hover >= 0 && hover != SURVINV_RESULT_HIT) {
+			SurvivalInv_AnySlotXY(s, hover, &slotX, &slotY);
+			Gfx_Draw2DFlat(slotX, slotY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+		} else if (hover == SURVINV_RESULT_HIT) {
+			Gfx_Draw2DFlat(s->resultX, s->resultY, inner, inner, PackedCol_Make(255, 255, 255, 128));
+		}
+	}
+
+	/* Cursor-held BLOCK - the iso batch's tail (genuine held stack, z+32) */
+	if (s->isoVertCount > s->isoSlotVerts) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindDynamicVb(s->vb);
+		IsometricDrawer_Render(s->isoVertCount - s->isoSlotVerts, s->isoSlotVerts,
+		                       s->isoState + s->isoSlotVerts / 4);
+	}
+
+	/* Cursor-held stack follows the mouse, drawn over everything (blocks are */
+	/*  in the iso mesh below - see BuildMesh's cursor entry - items here). */
+	if (IndevTest_Enabled && SurvivalTest_CursorCount() > 0 && SurvivalTest_CursorId() >= 256
+		&& IndevTest_ItemsTex()) {
+		struct Texture ctex;
+		int isize = (int)(s->texF * 14.0f);
+		if (IndevTest_ItemSpriteUV(SurvivalTest_CursorId(),
+				&ctex.uv.u1, &ctex.uv.v1, &ctex.uv.u2, &ctex.uv.v2)) {
+			ctex.ID     = IndevTest_ItemsTex();
+			ctex.x      = (short)(s->mouseX - isize / 2);
+			ctex.y      = (short)(s->mouseY - isize / 2);
+			ctex.width  = (cc_uint16)isize;
+			ctex.height = (cc_uint16)isize;
+			Texture_Render(&ctex);
+			Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		}
+	}
+
+	/* Cursor-held stack count, over the held icon */
+	if (s->countVertCount > s->countSlotVerts && s->countAtlas.tex.ID) {
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+		Gfx_BindTexture(s->countAtlas.tex.ID);
+		Gfx_BindDynamicVb(s->vb);
+		Gfx_DrawVb_IndexedTris_Range(s->countVertCount - s->countSlotVerts,
+		                             SURVINV_MAX_ISO_VERTS + s->countSlotVerts, DRAW_HINT_RECT);
+	}
+
+	/* GuiContainer foreground labels LAST - drawGuiContainerForegroundLayer
+	    runs after the held stack, so labels are the topmost layer. Genuine
+	    coordinates: chest "Chest"(8,6) + "Inventory"(8,74); furnace
+	    "Furnace"(60,6) + "Inventory"(8,72); workbench "Crafting"(28,6) +
+	    "Inventory"(8,72); pocket inventory "Crafting"(86,16). */
+	if (SurvivalInv_UseIndevUI() && guiTex) {
+		struct Texture* name = NULL;
+		int nx = 8, ny = 6, invY = 72;
+		if (contKind == INDEV_CONTAINER_CHEST) {
+			/* InventoryLargeChest.getInvName is "Large chest"; the "Inventory"
+			    section label follows the panel down at ySize-96+2 = rows*18+20
+			    (single 74, large 128). */
+			int rows = SurvivalInv_ChestRows();
+			name = rows > 3 ? &s->lblLargeChest : &s->lblChest;
+			invY = rows * 18 + 20;
+		} else if (contKind == INDEV_CONTAINER_FURNACE) {
+			name = &s->lblFurnace; nx = 60;
+		} else if (contKind == INDEV_CONTAINER_PLAYERINV) {
+			/* Two side-by-side inventory panels; no captions (the target's name
+			    isn't known client-side, and both panels are self-evidently invs). */
+			invY = -1;
+		} else if (workbench) {
+			name = &s->lblCrafting; nx = 28;
+		} else if (s->lblCrafting.ID) {
+			name = &s->lblCrafting; nx = 86; ny = 16; invY = -1;
+		}
+		if (name && name->ID) {
+			name->x = (short)(s->panelX + (int)(nx * s->texF));
+			name->y = (short)(s->panelY + (int)(ny * s->texF));
+			Texture_Render(name);
+		}
+		if (invY >= 0 && s->lblInventory.ID) {
+			s->lblInventory.x = (short)(s->panelX + (int)(8 * s->texF));
+			s->lblInventory.y = (short)(s->panelY + (int)(invY * s->texF));
+			Texture_Render(&s->lblInventory);
+		}
+		Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
+	}
+
+	/* 3D paperdolls. The pocket inventory and the RIGHT panel of the two-panel
+	    /Inventory view show the LOCAL player (RenderDoll) - but the solo spectate
+	    view has no viewer panel, so skip it there. PLAYERINV also shows the
+	    TARGET's model (if the viewer can see that entity). Workbench/chest/furnace
+	    have no doll. */
+	if (SurvivalTest_CraftDim() != 3) {
+		int kind = IndevTest_OpenKind();
+		cc_bool solo = kind == INDEV_CONTAINER_PLAYERINV && IndevTest_NetContIsSolo();
+		if (kind == INDEV_CONTAINER_NONE || (kind == INDEV_CONTAINER_PLAYERINV && !solo))
+			SurvivalInv_RenderDoll(s);
+		if (kind == INDEV_CONTAINER_PLAYERINV) {
+			int tid = IndevTest_NetContTargetId();
+			struct Entity* tgt = (tid >= 0 && tid < ENTITIES_SELF_ID) ? Entities.List[tid] : NULL;
+			if (tgt) {
+				float f = s->texF;
+				SurvivalInv_RenderDollAt(s, tgt, s->panelX + (int)(26 * f),
+					s->panelY + (int)(8 * f), (int)(48 * f), (int)(68 * f));
+			}
+		}
+	}
+}
+
+static void SurvivalInvScreen_Init(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->widgets     = NULL;
+	s->numWidgets  = 0;
+	s->maxWidgets  = 0;
+	s->heldSlot    = -1;
+	s->mouseX      = -1;
+	s->mouseY      = -1;
+	s->maxVertices = SURVINV_TOTAL_VERTS;
+	SurvivalInv_InitDoll(s);
+	/* Force an initial mesh build */
+	s->lastInvVersion = SurvivalTest_InvVersion() - 1;
+}
+
+static void SurvivalInvScreen_Free(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->heldSlot = -1;
+	/* Safety net: any close path that bypassed the handlers still refunds. */
+	SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+	IndevTest_CloseContainer();
+}
+
+static void SurvivalInvScreen_ContextLost(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	Font_Free(&s->font);
+	TextAtlas_Free(&s->countAtlas);
+	Gfx_DeleteTexture(&s->titleTex.ID);
+	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblLargeChest.ID);
+	Gfx_DeleteTexture(&s->lblFurnace.ID);
+	Gfx_DeleteTexture(&s->lblCrafting.ID);
+	Gfx_DeleteTexture(&s->lblInventory.ID);
+	Screen_ContextLost(screen);
+}
+
+/* The genuine 8px GUI font lives in 176-unit panel space, so on-screen
+    text height must be 8 * texF - rasterise the label/count textures for
+    the CURRENT panel scale (and again whenever it changes, e.g. resizing
+    the window or toggling Indev GUI scale). */
+static void SurvivalInv_MakeLabelTextures(struct SurvivalInvScreen* s) {
+	static const cc_string digits = String_FromConst("0123456789");
+	static const cc_string empty  = String_FromConst("");
+	static const cc_string title  = String_FromConst("Inventory");
+	/* GuiContainer foreground labels - colour 4210752 (0x404040) = &8, */
+	/*  drawn without shadow like drawString(..., 4210752) */
+	static const cc_string lblChe = String_FromConst("&8Chest");
+	static const cc_string lblLrg = String_FromConst("&8Large chest");
+	static const cc_string lblFur = String_FromConst("&8Furnace");
+	static const cc_string lblCra = String_FromConst("&8Crafting");
+	static const cc_string lblInv = String_FromConst("&8Inventory");
+	struct DrawTextArgs args;
+	struct FontDesc countFont;
+	float texF;
+	int size;
+
+	/* same slot-size derivation Layout uses, so this is order-independent */
+	texF = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale())) / 18.0f;
+	if (texF < 16.0f / 18.0f) texF = 16.0f / 18.0f; /* Layout's 16px floor */
+	s->fontTexF = texF;
+	size = (int)(8.0f * texF);
+	if (size < 8) size = 8;
+
+	/* free any previous-scale textures (no-ops right after context loss) */
+	Font_Free(&s->font);
+	TextAtlas_Free(&s->countAtlas);
+	Gfx_DeleteTexture(&s->titleTex.ID);
+	Gfx_DeleteTexture(&s->lblChest.ID);
+	Gfx_DeleteTexture(&s->lblLargeChest.ID);
+	Gfx_DeleteTexture(&s->lblFurnace.ID);
+	Gfx_DeleteTexture(&s->lblCrafting.ID);
+	Gfx_DeleteTexture(&s->lblInventory.ID);
+
+	Font_Make(&s->font, size, FONT_FLAGS_PADDING);
+	Font_SetPadding(&s->font, 1);
+	/* Unpadded digit atlas at the same 8-GUI-px size - the baked
+	    drawStringWithShadow drop shadow scales with the font size, and
+	    exact glyph metrics keep right-alignment tight. */
+	Font_Make(&countFont, size, FONT_FLAGS_NONE);
+	TextAtlas_Make(&s->countAtlas, &digits, &countFont, &empty);
+	Font_Free(&countFont);
+
+	DrawTextArgs_Make(&args, &title, &s->font, true);
+	Drawer2D_MakeTextTexture(&s->titleTex, &args);
+
+	DrawTextArgs_Make(&args, &lblChe, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblChest, &args);
+	DrawTextArgs_Make(&args, &lblLrg, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblLargeChest, &args);
+	DrawTextArgs_Make(&args, &lblFur, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblFurnace, &args);
+	DrawTextArgs_Make(&args, &lblCra, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblCrafting, &args);
+	DrawTextArgs_Make(&args, &lblInv, &s->font, false);
+	Drawer2D_MakeTextTexture(&s->lblInventory, &args);
+	s->dirty = true;
+}
+
+static void SurvivalInvScreen_ContextRecreated(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	Screen_UpdateVb(s);
+	SurvivalInv_MakeLabelTextures(s);
+}
+
+static void SurvivalInvScreen_Layout(void* screen) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	int storageW, storageH, gap, pad, topAreaH;
+
+	s->slotSize = Display_ScaleX((int)(SURVINV_SLOT_BASE * Gui_GetInventoryScale()));
+	if (s->slotSize < 16) s->slotSize = 16; /* minimum usable size */
+
+	/* label/count text is rasterised per panel scale - rebuild on change */
+	if (Math_AbsF(s->slotSize / 18.0f - s->fontTexF) > 0.01f && s->font.handle) {
+		SurvivalInv_MakeLabelTextures(s);
+	}
+
+	gap = (int)(SURVINV_GAP_BASE * Gui_GetInventoryScale());
+	pad = (int)(SURVINV_PAD_BASE * Gui_GetInventoryScale());
+
+	if (SurvivalInv_UseIndevUI()) {
+		/* Genuine GuiInventory: a 176x166 texture panel, slots on its fixed */
+		/*  18px grid - craft 2x2 at (88,26), result (144,36), storage (8,84), */
+		/*  hotbar (8,142), doll window (26,8)-(74,78). texF scales it all. */
+		/* GuiChest is 176 x (114 + rows*18) - 168 for a single chest (3 rows), */
+		/*  222 for a large chest (6 rows). GuiChest offsets the player rows by */
+		/*  var3 = (rows-4)*18, so main storage sits at 103+var3 and the hotbar */
+		/*  at 161+var3 (single: 85/143; double: 139/197). GuiFurnace uses the */
+		/*  standard 176x166 layout. */
+		cc_bool chest = IndevTest_OpenKind() == INDEV_CONTAINER_CHEST;
+		cc_bool playerInv = IndevTest_OpenKind() == INDEV_CONTAINER_PLAYERINV;
+		/* solo = the single-panel spectate view (just the target); otherwise the
+		    two-panel /Inventory drag view (target left, viewer's own right). */
+		cc_bool solo = playerInv && IndevTest_NetContIsSolo();
+		int rows  = chest ? SurvivalInv_ChestRows() : 3;
+		int var3  = (rows - 4) * 18;
+		float f = s->slotSize / 18.0f;
+		s->texF   = f;
+		/* PLAYERINV /Inventory is two inventory.png panels side by side; the solo
+		    spectate view and everything else are one 176-wide panel. */
+		s->panelW = (int)(((playerInv && !solo) ? (176 + 16 + 176) : 176) * f);
+		s->panelH = (int)((chest ? (114 + rows * 18) : 166) * f);
+		s->panelX = (Window_Main.Width  - s->panelW) / 2;
+		s->panelY = (Window_Main.Height - s->panelH) / 2;
+
+		if (playerInv) {
+			/* the viewer's OWN storage/hotbar live in the RIGHT panel (the target's
+			    40 cells go in the left panel via SurvivalInv_ContainerSlotXY). */
+			int rightX = s->panelX + (int)((176 + 16) * f);
+			s->gridX = rightX + (int)(8   * f);
+			s->gridY = s->panelY + (int)(84  * f);
+			s->hotY  = s->panelY + (int)(142 * f);
+		} else {
+			s->gridX = s->panelX + (int)(8   * f);
+			s->gridY = s->panelY + (int)((chest ? (103 + var3) : 84)  * f);
+			s->hotY  = s->panelY + (int)((chest ? (161 + var3) : 142) * f);
+		}
+		if (SurvivalTest_CraftDim() == 3) {
+			/* GuiCrafting (crafting.png): 3x3 grid at (30,17), result (124,35), */
+			/*  no paperdoll window. */
+			s->craftX  = s->panelX + (int)(30  * f);
+			s->craftY  = s->panelY + (int)(17  * f);
+			s->resultX = s->panelX + (int)(124 * f);
+			s->resultY = s->panelY + (int)(35  * f);
+		} else {
+			s->craftX  = s->panelX + (int)(88  * f);
+			s->craftY  = s->panelY + (int)(26  * f);
+			s->resultX = s->panelX + (int)(144 * f);
+			s->resultY = s->panelY + (int)(36  * f);
+		}
+		/* Genuine window: x 26..74 (48 wide), feet at y=76 - a TALL region, */
+		/*  not square, so legs aren't clipped. dollBoxSize stays the WIDTH */
+		/*  (mouse-follow + horizontal centring key off it); dollBoxH is the */
+		/*  viewport height. */
+		/* Doll window x: the two-panel /Inventory puts the LOCAL player's doll in
+		    the RIGHT panel; the solo spectate view puts the TARGET's doll in its
+		    single panel (26); everything else uses the single panel too. */
+		s->dollBoxX    = s->panelX + (int)(((playerInv && !solo) ? (176 + 16 + 26) : 26) * f);
+		s->dollBoxY    = s->panelY + (int)(8  * f);
+		s->dollBoxSize = (int)(48 * f);
+		s->dollBoxH    = (int)(68 * f);
+		s->dirty = true;
+		return;
+	}
+
+	storageW = SURVINV_STORAGE_COLS * s->slotSize;
+	storageH = SURVINV_STORAGE_ROWS * s->slotSize;
+	s->dollBoxSize = SURVINV_DOLL_UNITS * s->slotSize;
+	topAreaH = s->dollBoxSize;
+
+	/* Top row holds the paperdoll, then the 2x2 craft grid, an arrow gap, and */
+	/*  the result slot. Panel widens to whichever of that row / the storage */
+	/*  grid is wider, and the storage grid recentres under it. */
+	{
+		int craftW = 2 * s->slotSize + gap + s->slotSize; /* grid + arrow gap + result */
+		int topW   = s->dollBoxSize + gap + craftW;
+		/* Only reserve room for the crafting row in Indev mode. */
+		int contentW = !IndevTest_Enabled ? storageW : (storageW > topW ? storageW : topW);
+
+		s->panelW = contentW + pad * 2;
+		/* top area + storage grid + (double gap + hotbar row) + padding */
+		s->panelH = pad + topAreaH + gap + storageH + gap * 2 + s->slotSize + pad;
+		s->panelX = (Window_Main.Width  - s->panelW) / 2;
+		s->panelY = (Window_Main.Height - s->panelH) / 2;
+
+		s->dollBoxX = s->panelX + pad;
+		s->dollBoxY = s->panelY + pad;
+
+		s->craftX = s->dollBoxX + s->dollBoxSize + gap;
+		s->craftY = s->dollBoxY + (topAreaH - 2 * s->slotSize) / 2;
+		s->resultX = s->craftX + 2 * s->slotSize + gap;
+		s->resultY = s->dollBoxY + (topAreaH - s->slotSize) / 2;
+
+		s->gridX = s->panelX + (s->panelW - storageW) / 2;
+		s->gridY = s->panelY + pad + topAreaH + gap;
+		/* Hotbar row sits below storage with a wider separating gap, exactly */
+		/*  how GuiInventory separates the two regions. */
+		s->hotY   = s->gridY + SURVINV_STORAGE_ROWS * s->slotSize + gap * 2;
+	}
+	s->dollBoxH = s->dollBoxSize; /* square doll box outside Indev */
+
+	s->dirty = true;
+}
+
+static void SurvivalInv_Click(struct SurvivalInvScreen* s, int mx, int my, cc_bool rightClick) {
+	int hit = SurvivalInv_HitSlot(s, mx, my);
+
+	if (hit < 0) {
+		/* Not on a slot. Genuine Minecraft only closes when the click lands */
+		/*  OUTSIDE the GUI window; clicking the panel background does nothing */
+		/*  (so it never eats slots). This also stops the very right-click that */
+		/*  opened a workbench - delivered as a CCMOUSE_R key event to the just- */
+		/*  opened screen at the crosshair/centre, i.e. on the panel - from */
+		/*  instantly closing it again. */
+		cc_bool insidePanel = mx >= s->panelX && mx < s->panelX + s->panelW &&
+		                      my >= s->panelY && my < s->panelY + s->panelH;
+		if (insidePanel) return;
+		/* Clicked fully outside the window - refund cursor + grid and close.
+		    MP: the SERVER owns cursor + grid; CONT_CLOSE makes it do the
+		    refund and echo the result (networking-plan 27.2). */
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendContClose();
+		else SurvivalTest_CursorReturn();
+		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
+		Gui_Remove((struct Screen*)s);
+		return;
+	}
+	/* MP creative (a referee observing): an open server container view -
+	    chest, furnace, or an /Inventory player mirror - is a read-only
+	    stream. The server ignores creative observers' clicks and echoes
+	    nothing back, so a local click would only appear to destroy items.
+	    Look, don't touch; palette juggling (no container open) stays local. */
+	if (SurvivalNet_ServerDriven() && SurvivalTest_CreativeActive() &&
+		IndevTest_OpenKind() != INDEV_CONTAINER_NONE) return;
+
+	/* MP: clicks are intents - the server runs the click on its authoritative
+	    slots/cursor and echoes INV_SLOT + CURSOR back (echo-only v1, no local
+	    prediction). SP keeps mutating local state directly. */
+	if (hit == SURVINV_RESULT_HIT) {
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendResultClick();
+		else SurvivalTest_ResultClick(); /* crafts once onto the cursor */
+	} else {
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendSlotClick(hit, rightClick);
+		else SurvivalTest_SlotClick(hit, rightClick);
+	}
+	s->dirty = true;
+}
+
+static int SurvivalInvScreen_KeyDown(void* screen, int key, struct InputDevice* device) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	/* The Survival inventory bind (or Escape) closes the screen it opened. */
+	if (InputBind_Claims(BIND_SURVIVAL_INVENTORY, key, device) || key == CCKEY_ESCAPE) {
+		s->heldSlot = -1;
+		/* MP: the server refunds cursor + grid on CONT_CLOSE and echoes it */
+		if (SurvivalTest_ServerOwnsInventory()) SurvivalNet_SendContClose();
+		else SurvivalTest_CursorReturn();
+		SurvivalTest_SetCraftDim(2); /* return grid + reset to pocket 2x2 for next open */
+		IndevTest_CloseContainer();  /* container contents stay in the tile entity */
+		Gui_Remove((struct Screen*)s);
+	}
+	/* Right mouse arrives as a key event, not a pointer event - route it */
+	/*  through the same click logic using the tracked mouse position. But the */
+	/*  right-click that OPENED a workbench/container is re-delivered here first; */
+	/*  swallow it so it doesn't split the slot under the crosshair. */
+	if (key == CCMOUSE_R) {
+		if (s->skipOpenRClick) {
+			s->skipOpenRClick = false;
+		} else if (s->mouseX >= 0) {
+			SurvivalInv_Click(s, s->mouseX, s->mouseY, true);
+		}
+	}
+	return true;
+}
+
+static int SurvivalInvScreen_PointerDown(void* screen, int id, int x, int y) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	SurvivalInv_Click(s, x, y, false);
+	return TOUCH_TYPE_GUI;
+}
+
+/* Tracks the cursor so the paperdoll can turn to face it. */
+static int SurvivalInvScreen_PointerMove(void* screen, int id, int x, int y) {
+	struct SurvivalInvScreen* s = (struct SurvivalInvScreen*)screen;
+	s->mouseX = x;
+	s->mouseY = y;
+	if (SurvivalTest_CursorCount() > 0) s->dirty = true; /* held stack tracks the mouse */
+	return false;
+}
+
+static const struct ScreenVTABLE SurvivalInvScreen_VTABLE = {
+	SurvivalInvScreen_Init,        Screen_NullUpdate,           SurvivalInvScreen_Free,
+	SurvivalInvScreen_Render,      SurvivalInvScreen_BuildMesh,
+	SurvivalInvScreen_KeyDown,     Screen_InputUp,              Screen_FKeyPress, Screen_FText,
+	SurvivalInvScreen_PointerDown, Screen_PointerUp,            SurvivalInvScreen_PointerMove, Screen_FMouseScroll,
+	SurvivalInvScreen_Layout,      SurvivalInvScreen_ContextLost, SurvivalInvScreen_ContextRecreated,
+	NULL
+};
+
+void SurvivalInvScreen_ForceClose(void) {
+	/* Server-initiated close (SURV_CONT_OPEN kind 0): the container was
+	    destroyed under the open screen. No CONT_CLOSE goes back - the server
+	    already refunded/discarded authoritatively. */
+	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
+	SurvivalTest_SetCraftDim(2);
+	IndevTest_CloseContainer();
+	s->heldSlot = -1;
+	Gui_Remove((struct Screen*)s); /* no-ops cleanly when not on the stack */
+}
+
+void SurvivalInvScreen_Show(void) {
+	struct SurvivalInvScreen* s = &SurvivalInvScreen_Instance;
+	/* Only plain creative ClassiCube (survival off) uses the stock floating */
+	/*  block-grid picker. Indev creative opens THIS screen - the genuine Indev */
+	/*  GuiInventory panel - just like survival (PlayerControllerCreative opened */
+	/*  the same GuiInventory; blocks come from the palette hotbar, not a picker). */
+	if (!SurvivalTest_Enabled) {
+		/* Plain servers: the survival screen can still open as a LOCAL block
+		    stash (c0.30-storage layout, no crafting/items) - the classic
+		    table (default B) stays the picker for the server's block set. */
+		if (!SurvivalTest_PlainInvActive()) { InventoryScreen_Show(); return; }
+		SurvivalTest_PlainInvOpen();
+	}
+	/* On a server-driven survival map the inventory is SERVER state, streamed
+	    via INV_FULL/INV_SLOT/CURSOR (phase 4) - the same survival screen
+	    renders it, with clicks leaving as intents (see the click handler). */
+	/* Faithful Classic 0.30-s had no inventory screen whatsoever - just the */
+	/*  fixed hotbar - so opening the inventory does nothing at all. The storage/ */
+	/*  crafting screen is an Enhanced extra AND the Indev gamemode's crafting */
+	/*  inventory (Indev's whole point is the 2x2 grid), so both open it; plain */
+	/*  c0.30-s keeps the authentic no-op. */
+	if (SurvivalTest_Enabled && !SurvivalTest_Enhanced && !IndevTest_Enabled) return;
+	/* Workbench (3x3) and chest/furnace open via a right-click on the block, so
+	    that right-click leaks in as the first CCMOUSE_R - swallow it (see KeyDown).
+	    The pocket inventory opens via the inventory key, so it has no leaked click. */
+	s->skipOpenRClick = IndevTest_OpenKind() != INDEV_CONTAINER_NONE ||
+	                    SurvivalTest_CraftDim() == 3;
+	s->grabsInput = true;
+	s->closable   = true;
+	s->VTABLE     = &SurvivalInvScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_INVENTORY);
+}
+
+
+/*########################################################################################################################*
+*------------------------------------------------------GameOverScreen-----------------------------------------------------*
+*#########################################################################################################################*/
+/* Shown when the player dies in Survival Test. Both ground truths
+    (GameOverScreen.java c0.30, GuiGameOver.java Indev) offer exactly two
+    buttons - "Generate new level..." at (w/2-100, h/4+72) and "Load
+    level.." at (w/2-100, h/4+96) - there is NO respawn: death means
+    starting or loading another level. Title "Game over!" 2x-scaled at
+    virtual y=60, "Score: &eN" at y=100, both top-anchored. (An earlier
+    note here claimed a genuine Respawn button - the decompile has none.) */
+static struct GameOverScreen {
+	Screen_Body
+	struct FontDesc titleFont, messageFont, btnFont;
+	struct TextWidget title, message;
+	struct ButtonWidget gen, load;
+	struct Widget* __widgets[4];
+	int guiScale; /* survival GUI scale the fonts/buttons were built at */
+} GameOverScreen CC_BIG_VAR;
+
+static int GameOverScreen_Scale(void) {
+	int scale = (int)(Gui_GetHotbarScale() * DisplayInfo.ScaleY);
+	return scale < 1 ? 1 : scale;
+}
+
+static void GameOverScreen_ContextRecreated(void* screen);
+
+static void GameOverScreen_Layout(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	/* genuine coordinates are in ScaledResolution units - top-anchored. */
+	/*  (hotbar scale = raw scale x window scale, the survival HUD's GUI px) */
+	int scale = GameOverScreen_Scale();
+	/* fonts + button sizes are baked at a specific scale - rebuild them
+	    when the window scale changes (e.g. resize with Indev GUI scale on),
+	    or the offsets scale while the widgets stay small (user report) */
+	if (scale != s->guiScale && s->titleFont.handle) GameOverScreen_ContextRecreated(s);
+
+	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_MIN, 0,  60 * scale);
+	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_MIN, 0, 100 * scale);
+	Widget_SetLocation(&s->gen,     ANCHOR_CENTRE, ANCHOR_MIN, 0, Game.Height / 4 + 72 * scale);
+	Widget_SetLocation(&s->load,    ANCHOR_CENTRE, ANCHOR_MIN, 0, Game.Height / 4 + 96 * scale);
+}
+
+static void GameOverScreen_ContextLost(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	Font_Free(&s->titleFont);
+	Font_Free(&s->messageFont);
+	Font_Free(&s->btnFont);
+	Screen_ContextLost(screen);
+}
+
+static void GameOverScreen_ContextRecreated(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	cc_string msg; char msgBuffer[STRING_SIZE];
+	int score = SurvivalTest_Score();
+	int scale = GameOverScreen_Scale();
+	Screen_UpdateVb(screen);
+	s->guiScale = scale;
+
+	/* Everything in genuine GUI px x the survival GUI scale, like the HUD:
+	    the 8px GUI font (our 8pt) at 2x for the title (GameOverScreen.render's
+	    glScalef(2,2,2)), 1x for the score and buttons; buttons are the
+	    genuine 200x20 GUI px. Fixed sizes here previously left the widgets
+	    tiny while the offsets scaled (user report + reference screenshot). */
+	Font_Free(&s->titleFont);
+	Font_Free(&s->messageFont);
+	Font_Free(&s->btnFont);
+	Font_Make(&s->titleFont,  16 * scale, FONT_FLAGS_BOLD);
+	Font_Make(&s->messageFont, 8 * scale, FONT_FLAGS_NONE);
+	Font_Make(&s->btnFont,     8 * scale, FONT_FLAGS_BOLD);
+	TextWidget_SetConst(&s->title, "Game over!", &s->titleFont);
+
+	String_InitArray(msg, msgBuffer);
+	String_Format1(&msg, "Score: &e%i", &score);
+	TextWidget_Set(&s->message, &msg, &s->messageFont);
+
+	s->gen.minWidth   = 200 * scale; s->gen.minHeight  = 20 * scale;
+	s->load.minWidth  = 200 * scale; s->load.minHeight = 20 * scale;
+	if (SurvivalNet_ServerDriven()) {
+		/* MP: the server owns death/respawn - local world actions make no
+		    sense while connected, so the one button is a respawn intent. */
+		ButtonWidget_SetConst(&s->gen, "Respawn", &s->btnFont);
+	} else {
+		ButtonWidget_SetConst(&s->gen,  "Generate new level...", &s->btnFont);
+		ButtonWidget_SetConst(&s->load, "Load level..",          &s->btnFont);
+	}
+}
+
+static void GameOverScreen_OnGen(void* screen, void* w) {
+	/* MP: ask the server to respawn us (SURV_RESPAWN); the screen stays up
+	    until the authoritative SURV_HEALTH revive removes it. */
+	if (SurvivalNet_ServerDriven()) { SurvivalNet_SendRespawn(); return; }
+	Gui_Remove((struct Screen*)&GameOverScreen);
+	GenLevelScreen_Show();
+}
+
+static void GameOverScreen_OnLoad(void* screen, void* w) {
+	Gui_Remove((struct Screen*)&GameOverScreen);
+	LoadLevelScreen_Show();
+}
+
+static void GameOverScreen_Init(void* screen) {
+	struct GameOverScreen* s = (struct GameOverScreen*)screen;
+	s->widgets     = s->__widgets;
+	s->numWidgets  = 0;
+	s->maxWidgets  = Array_Elems(s->__widgets);
+
+	TextWidget_Add(s, &s->title);
+	TextWidget_Add(s, &s->message);
+	ButtonWidget_Add(s, &s->gen,  400, GameOverScreen_OnGen);
+	/* MP: single "Respawn" button (see ContextRecreated) - generating or
+	    loading a local level mid-connection makes no sense. */
+	if (!SurvivalNet_ServerDriven())
+		ButtonWidget_Add(s, &s->load, 400, GameOverScreen_OnLoad);
+	/* This screen does its own genuine ScaledResolution layout - fonts,
+	    button sizes AND offsets are all already x scale. The shared Indev
+	    menu flag (auto-set by ButtonWidget_Init) would rescale the layout
+	    offsets a second time and push both buttons below the screen. */
+	s->gen.flags  &= ~WIDGET_FLAG_INDEV_SCALE;
+	s->load.flags &= ~WIDGET_FLAG_INDEV_SCALE;
+
+	s->maxVertices = Screen_CalcDefaultMaxVertices(s);
+}
+
+static void GameOverScreen_Render(void* screen, float delta) {
+	/* drawFadingBox(0, 0, width, height, 1615855616, -1602211792) - the two */
+	/*  ARGB literals decode to a dark red top edge fading into a more opaque, */
+	/*  lighter maroon bottom edge (not a neutral gray, like the original */
+	/*  ClassiCube colors here used to be). */
+	PackedCol top    = PackedCol_Make(80,  0,  0,  96);
+	PackedCol bottom = PackedCol_Make(128, 48, 48, 160);
+	Gfx_Draw2DGradient(0, 0, Window_UI.Width, Window_UI.Height, top, bottom);
+
+	Screen_Render2Widgets(screen, delta);
+}
+
+static const struct ScreenVTABLE GameOverScreen_VTABLE = {
+	GameOverScreen_Init,   Screen_NullUpdate, Screen_NullFunc,
+	GameOverScreen_Render, Screen_BuildMesh,
+	Menu_InputDown,        Screen_InputUp,    Screen_TKeyPress, Screen_TText,
+	Menu_PointerDown,      Screen_PointerUp,  Menu_PointerMove, Screen_TMouseScroll,
+	GameOverScreen_Layout, GameOverScreen_ContextLost, GameOverScreen_ContextRecreated
+};
+
+void GameOverScreen_Show(void) {
+	struct GameOverScreen* s = &GameOverScreen;
+	s->grabsInput  = true;
+	/* The world MUST keep rendering behind the translucent red gradient - */
+	/*  the death camera (sideways keel + slow FOV zoom, see SurvivalTest's */
+	/*  ApplyHurtTilt/DeathFovZoom) plays out behind the Game Over screen. */
+	s->blocksWorld = false;
+	s->VTABLE      = &GameOverScreen_VTABLE;
+	Gui_Add((struct Screen*)s, GUI_PRIORITY_DISCONNECT);
+}
+
+/* MP: the server owns the death/respawn cycle - when a SURV_HEALTH revive
+    arrives the death screen must come down without any local respawn logic. */
+void GameOverScreen_Hide(void) {
+	Gui_Remove((struct Screen*)&GameOverScreen);
+}
+
+
+/*########################################################################################################################*
 *------------------------------------------------------LoadingScreen------------------------------------------------------*
 *#########################################################################################################################*/
 static struct LoadingScreen {
@@ -1995,14 +4104,30 @@ static void LoadingScreen_CalcMaxVertices(struct LoadingScreen* s) {
 static void LoadingScreen_Layout(void* screen) {
 	struct LoadingScreen* s = (struct LoadingScreen*)screen;
 	int oldRows, y;
-	Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -31);
-	Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  17);
-	y = Display_ScaleY(34);
+	int is = Gui_GetIndevMenuScale();
 
-	s->progWidth  = Display_ScaleX(200);
-	s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth,  Window_UI.Width);
-	s->progHeight = Display_ScaleY(4);
-	s->progY      = Gui_CalcPos(ANCHOR_CENTRE, y, s->progHeight, Window_UI.Height);
+	if (is) {
+		/* genuine LoadingScreenRenderer.setLoadingProgress: text tops at
+		    h/2-20 and h/2+4 (so 8px-glyph centres at -16/+8 GUI px), and
+		    the progress bar is 100x2 GUI px at (w/2-50, h/2+16). Offsets
+		    are authored at 2x GUI px like the menus (flag path = *s/2). */
+		Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -32);
+		Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  16);
+
+		s->progWidth  = 100 * is;
+		s->progHeight =   2 * is;
+		s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth, Window_UI.Width);
+		s->progY      = Window_UI.Height / 2 + 16 * is;
+	} else {
+		Widget_SetLocation(&s->title,   ANCHOR_CENTRE, ANCHOR_CENTRE, 0, -31);
+		Widget_SetLocation(&s->message, ANCHOR_CENTRE, ANCHOR_CENTRE, 0,  17);
+		y = Display_ScaleY(34);
+
+		s->progWidth  = Display_ScaleX(200);
+		s->progX      = Gui_CalcPos(ANCHOR_CENTRE, 0, s->progWidth,  Window_UI.Width);
+		s->progHeight = Display_ScaleY(4);
+		s->progY      = Gui_CalcPos(ANCHOR_CENTRE, y, s->progHeight, Window_UI.Height);
+	}
 
 	oldRows = s->rows;
 	LoadingScreen_CalcMaxVertices(s);
@@ -2066,6 +4191,8 @@ static void LoadingScreen_Init(void* screen) {
 
 	TextWidget_Add(s, &s->title);
 	TextWidget_Add(s, &s->message);
+	Widget_SetIndevScaled(&s->title);
+	Widget_SetIndevScaled(&s->message);
 
 	LoadingScreen_CalcMaxVertices(s);
 	Gfx_SetFog(false);
@@ -2157,7 +4284,11 @@ static void GeneratingScreen_EndGeneration(void) {
 	if (!Gen_Blocks) { Chat_AddRaw("&cFailed to generate the map."); return; }
 
 	Gen_Blocks = NULL;
-	LocalPlayer_CalcDefaultSpawn(Entities.CurPlayer, &update);
+	/* An Indev generation supplies its own spawn (the spawn house), theme
+	    environment and initial mob population; otherwise default spawn. */
+	if (!IndevGen_ApplyPostLoad(&update)) {
+		LocalPlayer_CalcDefaultSpawn(Entities.CurPlayer, &update);
+	}
 	LocalPlayers_MoveToSpawn(&update);
 }
 
@@ -2282,7 +4413,9 @@ static void DisconnectScreen_Init(void* screen) {
 
 	ButtonWidget_Add(s, &s->reconnect, 300, DisconnectScreen_OnReconnect);
 	ButtonWidget_Add(s, &s->quit,      300, DisconnectScreen_OnQuit);
-	if (!s->canReconnect) s->reconnect.flags = WIDGET_FLAG_DISABLED;
+	/* preserve other flags (WIDGET_FLAG_INDEV_SCALE) - raw assignment
+	    de-scaled this button's layout offsets in Indev GUI scale mode */
+	if (!s->canReconnect) Widget_SetDisabled(&s->reconnect, true);
 
 	Game_SetMinFrameTime(1000 / 5.0f);
 

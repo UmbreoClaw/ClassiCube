@@ -1640,12 +1640,26 @@ static cc_bool IsProblematicWorkingDirectory(void) {
 	#endif
 }
 
+#ifdef CC_BUILD_MACOS
+/* chdir into ~/Library/Application Support/ClassiCube, creating it if needed.
+    Returns 0 on success, -1 when $HOME is unset or the chdir failed. */
+static int MacOS_ChdirUserData(void) {
+	char dir[NATIVE_STR_LEN];
+	const char* home = getenv("HOME");
+	if (!home || !home[0]) return -1;
+
+	snprintf(dir, sizeof(dir), "%s/Library/Application Support/ClassiCube", home);
+	mkdir(dir, 0755); /* Library + Application Support always exist on macOS */
+	return chdir(dir) == -1 ? -1 : 0;
+}
+#endif
+
 cc_result Platform_SetDefaultCurrentDirectory(int argc, char **argv) {
 	char path[NATIVE_STR_LEN];
 	int i, len = 0;
 	cc_result res;
 	if (!IsProblematicWorkingDirectory()) return 0;
-	
+
 	res = Process_RawGetExePath(path, &len);
 	if (res) return res;
 
@@ -1658,10 +1672,15 @@ cc_result Platform_SetDefaultCurrentDirectory(int argc, char **argv) {
 	static const cc_string bundle = String_FromConst(".app/Contents/MacOS/");
 	cc_string raw = String_Init(path, len, 0);
 
-	/* If running from within a bundle, set data folder to folder containing bundle */
 	if (String_CaselessEnds(&raw, &bundle)) {
-		len -= bundle.length;
+		/* A bundled app keeps its data in the per-user folder, macOS-style:
+		    dropping fontscache/options/texpacks beside the bundle clutters
+		    /Applications, and a quarantined bundle runs App-Translocated from
+		    a read-only mount where those writes fail outright. */
+		if (MacOS_ChdirUserData() == 0) return 0;
 
+		/* no $HOME (rare) - fall back to the folder containing the bundle */
+		len -= bundle.length;
 		for (i = len - 1; i >= 0; i--, len--) {
 			if (path[i] == '/') break;
 		}
@@ -1669,7 +1688,22 @@ cc_result Platform_SetDefaultCurrentDirectory(int argc, char **argv) {
 	#endif
 
 	path[len] = '\0';
-	return chdir(path) == -1 ? errno : 0;
+	if (chdir(path) == -1) return errno;
+
+	#ifdef CC_BUILD_MACOS
+	/* Bare-binary/portable runs stay beside the executable - unless that spot
+	    is read-only (a DMG, a system dir), where the user folder is the only
+	    place writes can land. */
+	{
+		int fd = open(".cc_write_test", O_WRONLY | O_CREAT | O_EXCL, 0644);
+		if (fd >= 0) { close(fd); unlink(".cc_write_test"); return 0; }
+		if (errno != EROFS && errno != EACCES && errno != EPERM) return 0;
+
+		Platform_LogConst("Data folder is read-only - using ~/Library/Application Support/ClassiCube");
+		MacOS_ChdirUserData(); /* stay put on failure; writes will surface errors */
+	}
+	#endif
+	return 0;
 }
 #endif
 #endif
