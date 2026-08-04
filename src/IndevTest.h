@@ -211,9 +211,15 @@ float IndevTest_BrightnessOfLight(int light);
     per game tick via the genuine LCG. Replaces the engine's much sparser
     3-per-chunk loop while Indev mode is on (see Physics_Tick). */
 void IndevTest_TickRandomBlocks(void);
-/* Scheduled fluid updates (genuine World scheduledUpdates, tickRate 5/25). */
+/* World.scheduleBlockUpdate onto the ONE shared tick list (fire + fluids):
+    delay = tickRate of the scheduled id (fire 20, lava 25, water/other 5),
+    no dedup, stale entries no-op at run time. No-ops under server drive. */
+void IndevTest_ScheduleTick(int index, BlockID block);
+/* The shared tick list's drain (genuine World.tick scheduled pass): at most
+    200 pops per tick shared between count-downs and runs. */
 void IndevTest_TickFluids(void);
-/* setTickOnLoad for fluids: schedules every moving-fluid cell of a new map. */
+/* Map load: resets the shared tick list (genuine has NO load-time scan -
+    the random tickOnLoad pass revives dormant fire/suspended fluid). */
 void IndevTest_FluidsOnMapLoaded(void);
 /* World.randomDisplayUpdates: 1000 random cells in the 33^3 cube around
     the player each tick, running the visual-only randomDisplayTick of

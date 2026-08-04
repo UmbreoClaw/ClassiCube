@@ -13,10 +13,11 @@
 #include "Audio.h"
 
 /* BlockFire (in-20100223), transcribed line for line. Fire lives at the
-   genuine id 51, ages 0-15 in a per-map nibble store, and is driven by a
-   port of World.java's scheduled-update list (tickRate 20, at most 200
-   entries processed per game tick) plus the random updateTick coverage
-   every block gets from World.tick.
+   genuine id 51, ages 0-15 in a per-map nibble store, and is driven by the
+   SHARED scheduled-update list in IndevTest.c (genuine World.tickList: fire
+   and fluids together, tickRate 20 for fire, at most 200 pops per game
+   tick) plus the random updateTick coverage every block gets from
+   World.tick.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
@@ -63,7 +64,7 @@ cc_bool IndevFire_CanCatch(BlockID b) {
 }
 
 /*########################################################################################################################*
-*---------------------------------------------------Age store + tick queue-----------------------------------------------*
+*---------------------------------------------------Age store + scheduling-----------------------------------------------*
 *#########################################################################################################################*/
 static cc_uint8* fire_age; /* one byte per block, allocated per map */
 static int fire_ageVolume;
@@ -86,42 +87,27 @@ void IndevFire_SetAge(int index, int age) {
 	fire_age[index] = (cc_uint8)(age & 15);
 }
 
-/* World.java's NextTickListEntry queue: entries wait tickRate (20) game
-    ticks, then run updateTick if the block still matches. The genuine list
-    is unbounded; ours drops new entries when full (a forest fire that big
-    is already re-scheduling constantly, so the loss self-heals). */
-#define FIRE_QUEUE_LEN 8192
-struct FireTickEntry { int index; cc_uint8 time; };
-static struct FireTickEntry fire_queue[FIRE_QUEUE_LEN];
-static int fire_qHead, fire_qCount;
-
+/* Fire entries ride the SHARED tick list in IndevTest.c - the genuine
+    World.tickList holds fire and fluid entries together, under one 200
+    pops-per-tick budget, with the scheduled id recorded per entry so stale
+    entries no-op. IndevTest_TickFluids dispatches due fire entries back
+    here via IndevFire_RunUpdate. */
 static void Fire_Schedule(int index) {
-	int tail;
-	if (fire_qCount >= FIRE_QUEUE_LEN) return;
-	tail = (fire_qHead + fire_qCount) % FIRE_QUEUE_LEN;
-	fire_queue[tail].index = index;
-	fire_queue[tail].time  = 20; /* BlockFire.tickRate() */
-	fire_qCount++;
+	IndevTest_ScheduleTick(index, INDEV_BLOCK_FIRE);
 }
 
 void IndevFire_Reset(void) {
 	Mem_Free(fire_age);
 	fire_age = NULL; fire_ageVolume = 0;
-	fire_qHead = 0;  fire_qCount = 0;
 }
 
 void IndevFire_OnMapLoaded(void) {
-	int i;
 	if (!IndevTest_Enabled || !World.Blocks) return;
 	Fire_InitTables();
 	Fire_EnsureAges();
-	fire_qHead = 0; fire_qCount = 0;
-
-	/* setTickOnLoad(true): every fire block present in a loaded/generated
-	    map gets a scheduled update straight away */
-	for (i = 0; i < World.Volume; i++) {
-		if (World.Blocks[i] == INDEV_BLOCK_FIRE) Fire_Schedule(i);
-	}
+	/* NO setTickOnLoad scan: genuine has no load-time scheduling pass -
+	    tickOnLoad only gates the RANDOM pass, whose updateTick re-enters a
+	    dormant fire into the scheduled chain (~10s mean per cell) */
 }
 
 /*########################################################################################################################*
@@ -241,34 +227,12 @@ static void Fire_UpdateTick(int x, int y, int z) {
 	}
 }
 
-void IndevFire_Tick(void) {
-	int i, n;
-	struct FireTickEntry e;
-	if (!IndevTest_Enabled || !World.Blocks || !fire_qCount) return;
-
-	/* World.tick: at most 200 entries per game tick; waiting entries are
-	    decremented and requeued at the back, due ones run updateTick if
-	    the block is still fire */
-	n = min(fire_qCount, 200);
-	for (i = 0; i < n; i++) {
-		e = fire_queue[fire_qHead];
-		fire_qHead = (fire_qHead + 1) % FIRE_QUEUE_LEN;
-		fire_qCount--;
-
-		if (e.time > 0) {
-			e.time--;
-			if (fire_qCount < FIRE_QUEUE_LEN) {
-				int tail = (fire_qHead + fire_qCount) % FIRE_QUEUE_LEN;
-				fire_queue[tail] = e;
-				fire_qCount++;
-			}
-		} else if (e.index >= 0 && e.index < World.Volume &&
-				   World.Blocks[e.index] == INDEV_BLOCK_FIRE) {
-			int x, y, z;
-			World_Unpack(e.index, x, y, z);
-			Fire_UpdateTick(x, y, z);
-		}
-	}
+/* The shared tick list's dispatch for a due fire entry (the caller already
+    verified bounds and that the cell still holds fire). */
+void IndevFire_RunUpdate(int index) {
+	int x, y, z;
+	World_Unpack(index, x, y, z);
+	Fire_UpdateTick(x, y, z);
 }
 
 void IndevFire_RandomTick(int index) {

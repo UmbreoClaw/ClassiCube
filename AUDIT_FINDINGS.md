@@ -507,7 +507,8 @@ horizontal spread per update, 1/3+1/3 stagnation with evaporate/petrify, water
 extinguish/petrify contacts, lava fireSpread via IndevFire_LavaFlowInto,
 settle-to-still), BlockStationary wake/petrify on activation, a scheduled-
 update queue at the genuine tickRates (water 5 / lava 25) run from
-Physics_Tick, setTickOnLoad scheduling of moving cells at map load, and
+Physics_Tick (since the tick-list rewrite: ONE shared fire+fluid list, no
+load-time scan - the random pass revives dormant cells), and
 canFlow = non-solid non-liquid target + the 5x5x5 sponge veto. BONUS
 discovered in the port: fluidFlowCheck is where the SOURCE blocks 52/53 hook
 in - a body touching one returns -9999 (infinite supply, no donor) - so
@@ -748,28 +749,34 @@ Severity/side legend as reported by the finder: side = which port diverges
   - genuine: BlockSource.java:16-33 'public final void onBlockAdded(World var1, ...) { super.onBlockAdded(...); if (var1.getBlockId(var2 - 1, var3, var4) == 0) { var1.setBlockWithNotify(var2 - 1, var3, var4, this.fluid); } ... }' — placing a spring floods the 4 horizontal air neighbours immed
   - ours: Server Notify (SurvivalPhysics.cs:148-152) handles only FIRE/Water/Lava for newV; WATER_SRC/LAVA_SRC placement schedules nothing, so the source sits dry until the volume/200 random pass hits it (SurvivalGrowth.cs:378 → RandomTickSource). Th
   - at: BlockSource.java:16-33 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:148-152 (missing) vs client /home/user/ClassiCube/src/IndevTest.c:2442-2443 (present)
-- **[P]** (low, both) Both: flammable-neighbour wake of still fluids restricted to lava (genuine applies it to still WATER too, and tests the changed block id, not a neighbour scan)
-  - genuine: BlockStationary.java:49-51 'if (Block.fire.getChanceOfNeighborsEncouragingFire(var5)) { var6 = true; }' — unconditional on material: a still WATER with no flow targets also wakes when a flammable block (planks, logs, leaves, wool, TNT, bookshelf) changes beside it, and its moving
-  - ours: Both ports gate the flammable check on lava only: server SurvivalPhysics.cs:712 'if (!wake && !water)' and client IndevTest.c:2254 'if (!wake && !water)'. Still water never wakes for a flammable placement, so e.g. an enclosed still-water po
-  - at: BlockStationary.java:49-51 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:712-718; client /home/user/ClassiCube/src/IndevTest.c:2254-2260
-- **[P]** (low, both) Both: fluid update period is one tick shorter for cascade-scheduled cells (5/25 vs genuine 6/26), and the genuine shared 200-entries-per-tick cap is absent for fluids
-  - genuine: World.java:553-556 'int var6 = this.tickList.size(); if (var6 > 200) { var6 = 200; }' snapshots the list size before processing, so entries scheduled during a tick get their first decrement the NEXT tick — with World.java:562-564 '--var8.scheduledTime; this.tickList.add(var8);' a
-  - ours: Both drivers iterate a growing list ('for (int i = 0; i < lp.Fluid.Count; )' SurvivalPhysics.cs:404; 'for (i = 0; i < indev_fluidSchedCount; )' IndevTest.c:2207), so entries appended mid-pass (the dominant flow-cascade case, since spread sc
-  - at: World.java:553-577 + 719-727 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:403-421; client /home/user/ClassiCube/src/IndevTest.c:2202-2216
-- **[P]** (low, both) Both: schedule dedup by cell index only, dropping genuine's per-blockID stale-entry semantics
-  - genuine: World.java:719-726 adds duplicate NextTickListEntry freely and World.java:571-573 'byte var9 = this.blocks[...]; if (var9 == var8.blockID && var9 > 0) { Block.blocksList[var9].updateTick(...); }' skips entries whose recorded block id no longer matches — a stale water entry never
-  - ours: Server dedups via FluidPending HashSet on index (SurvivalPhysics.cs:380) and client via a linear index scan (IndevTest.c:2054-2055), then both run whatever fluid currently sits there (SurvivalPhysics.cs:417-418; IndevTest.c:2213-2214). Cons
-  - at: World.java:571-573 + 719-727 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:379-385,415-419; client /home/user/ClassiCube/src/IndevTest.c:2051-2062,2213-2214
-- **[P]** (low, both) Both: map load schedules every moving-fluid cell in one burst (genuine has no load-time scan; setTickOnLoad only enables random ticks)
-  - genuine: World.java:589-592 'byte var15 = this.blocks[...]; if (Block.tickOnLoad[var15]) { Block.blocksList[var15].updateTick(this, var14, var13, var10, this.random); }' — tickOnLoad is consulted only by the random-update pass; there is no whole-map scheduling scan at load (pending update
-  - ours: Server EnsureLoaded (SurvivalPhysics.cs:193-206) and client IndevTest_FluidsOnMapLoaded (IndevTest.c:2274-2282) scan the whole volume and schedule every Water/Lava cell, so a freshly loaded map with many suspended moving cells (e.g. an in-p
-  - at: World.java:39,579-593 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:193-206; client /home/user/ClassiCube/src/IndevTest.c:2274-2282
-- **[P]** (low, both) Both: source blocks classified by their own fluid; genuine gives BOTH sources Material.water, changing several corner-case gates
-  - genuine: BlockSource.java:10-11 'protected BlockSource(int var1, int var2) { super(var1, Block.blocksList[var2].blockIndexInTexture, Material.water);' — the LAVA source is Material.water too. Hence (a) BlockFlowing.update's equalize gate 'var1.getBlockMaterial(var2, var3 - 1, var4) == thi
-  - ours: Both ports put each source in its own fluid class: server IsWaterMat/IsLavaMat (SurvivalPhysics.cs:52-53) and client Fluid_IsWaterMat/Fluid_IsLavaMat (IndevTest.c:1884-1889), used in the equalize gate (SurvivalPhysics.cs:618; IndevTest.c:21
-  - at: BlockSource.java:10-11 + BlockFlowing.java:43 vs server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:52-53,618; client /home/user/ClassiCube/src/IndevTest.c:1884-1889,2126-2127
-
-### fire (9 findings, 29 verified-exact)
+- **[V]** (low, both) Both: flammable-neighbour wake of still fluids restricted to lava: FIXED -
+  the tick-list rewrite made BlockStationary.onNeighborBlockChange verbatim on
+  both ports: the flammable wake keys on the CHANGED block id (fire chance > 0)
+  and applies to still WATER and still LAVA alike, after the canFlow scan and
+  the petrify early-return. Verified live: planks placed above a sealed still
+  pocket wake it (+~20ms) and it re-stills ~5-6 ticks later.
+- **[V]** (low, both) Both: fluid update period 5/25 vs genuine 6/26 + missing shared 200 cap: FIXED -
+  both ports now run the genuine World.tick drain: ONE shared FIFO for fire AND
+  fluids, snapshot min(size,200) BEFORE draining (count-downs and runs share the
+  budget), counting-down entries decrement and requeue at the tail, entries
+  scheduled mid-pass land beyond the snapshot - effective periods 6/26 (fluids)
+  and 21 (fire).
+- **[V]** (low, both) Both: schedule dedup by cell index only: FIXED -
+  dedup is gone on both ports; every entry records the block id it was scheduled
+  FOR and is silently skipped at run time when the cell no longer matches
+  (genuine stale-entry semantics). Spread cells genuinely enter the list twice
+  (onBlockAdded + liquidSpread's explicit schedule).
+- **[V]** (low, both) Both: map load schedules every moving-fluid cell in one burst: FIXED -
+  the load scans are deleted on both ports (server EnsureLoaded removed; client
+  map-activate just resets the shared list). Genuine setTickOnLoad only gates
+  the RANDOM pass, which revives dormant fire / suspended moving fluid at ~10s
+  mean per cell - both random passes already dispatch fire/moving/springs.
+- **[V]** (low, both) Both: source blocks classified by their own fluid: FIXED -
+  both material tables now match genuine BlockSource (BOTH springs are
+  Material.water - the LAVA spring too): the petrify gate (a placed lava spring
+  petrifies still LAVA, not still water), the equalize path's below-material
+  test, and sponge absorption (World.isWater is material-based, so sponges
+  absorb lava springs) all follow. Verified live: petrify-from-above +23ms.
 
 - **[V] FIXED** (medium, server) Server: TNT consumed by fire never leaves a fire block behind (genuine does 50% of the time)
   - genuine: BlockFire.tryToCatchBlockOnFire: "boolean var8 = var1.getBlockId(var2, var3, var4) == Block.tnt.blockID; if (var6.nextInt(2) == 0) { var1.setBlockWithNotify(var2, var3, var4, this.blockID); } else { var1.setBlockWithNotify(var2, var3, var4, 0); } if (var8) { Block.tnt.onBlockDest
@@ -811,15 +818,15 @@ Severity/side legend as reported by the finder: side = which port diverges
   the survival sidecar now writes one "fire x y z age" line per mid-burn fire cell
   (SurvivalPhysics.SaveFireAges) and restores it on load (RestoreFireAge via
   SurvivalPersistence), matching genuine's data-nibble-in-saved-level behavior;
-  EnsureLoaded already re-schedules pre-existing fire on the first tick, so only
-  the age was memory-only. Client persisted it all along (IndevTest.c nibbles).
-- **[P]** (low, both) Both: scheduled-update queue is bounded at 8192 entries (genuine list is unbounded)
-  - genuine: World.scheduleBlockUpdate: "NextTickListEntry var5 = new NextTickListEntry(...); ... this.tickList.add(var5);" (World.java:719-727) - an unconditional add to an unbounded List; only PROCESSING is capped at 200/tick (World.java:553-556).
-  - ours: Both ports drop new schedules when 8192 entries are queued: client Fire_Schedule "if (fire_qCount >= FIRE_QUEUE_LEN) return;" (IndevFire.c:98-100) and the requeue guard at IndevFire.c:260; server ScheduleFire "if (lp.FireQueue.Count >= FIRE
-  - at: World.java:719-727,553-556 vs client /home/user/ClassiCube/src/IndevFire.c:93-105,258-264; server /home/user/mcgalaxy/MCGalaxy/Network/SurvivalPhysics.cs:82,235-238,245-247
-
-### growth (21 findings, 32 verified-exact)
-
+  fire is tickOnLoad in genuine, so the random pass revives a restored fire and
+  its updateTick re-enters the scheduled chain - only the age was memory-only.
+  Client persisted it all along (IndevTest.c nibbles).
+- **[V]** (low, both) Both: scheduled-update queue is bounded at 8192 entries: FIXED -
+  the shared tick lists are now sized as runaway backstops only (server 2^18,
+  client 32768 - vs the old 8192 fire + 4096 fluid working caps) and, matching
+  genuine, only the 200-pop drain bounds WORK per tick. Overflow still drops
+  newest (genuine is truly unbounded) but the caps sit far above any real flood
+  and the random tickOnLoad pass self-heals any drop.
 - **[V] FIXED** (critical, both) Grass spread gated on binary sky-exposure instead of light >= 9 source / >= 4 target: spreads at night, never by torchlight
   - genuine: BlockGrass.java:25-33: "if (var1.getBlockLightValue(var2, var3 + 1, var4) >= 9) { var2 = var2 + var5.nextInt(3) - 1; ... if (var1.getBlockId(var2, var3, var4) == Block.dirt.blockID && var1.getBlockLightValue(var2, var3 + 1, var4) >= 4 && !var1.getBlockMaterial(var2, var3 + 1, var
   - ours: Server SurvivalGrowth.cs TickGrass: 'if (!IsLit(lvl, x, y, z)) return;' for the source and 'if (!IsLit(lvl, tx, ty, tz)) return;' for the target - pure time-independent sky exposure, no LightLevel/CurrentSkyLight call at all. Client IndevTe

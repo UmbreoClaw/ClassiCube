@@ -1819,14 +1819,18 @@ static void Indev_TickCrops(int index, BlockID block) {
 /* BlockSource.updateTick: an infinite spring - fill each of the 4 horizontal air
     neighbours with the flowing fluid (which then flows via the engine's own
     liquid physics). The source block itself just sits and refills. */
+static cc_bool IndevFluid_ShellCell(int x, int y, int z); /* defined in the fluid section */
+
 static void Indev_TickSource(int index, BlockID block) {
 	int x, y, z;
 	BlockID fluid = block == INDEV_BLOCK_LAVA_SOURCE ? BLOCK_LAVA : BLOCK_WATER;
 	World_Unpack(index, x, y, z);
-	if (World_Contains(x - 1, y, z) && World_GetBlock(x - 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x - 1, y, z, fluid);
-	if (World_Contains(x + 1, y, z) && World_GetBlock(x + 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x + 1, y, z, fluid);
-	if (World_Contains(x, y, z - 1) && World_GetBlock(x, y, z - 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z - 1, fluid);
-	if (World_Contains(x, y, z + 1) && World_GetBlock(x, y, z + 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z + 1, fluid);
+	/* genuine setBlockWithNotify refuses the border shell - a spring at x==1
+	    must not fill the x==0 shell cell (the server's Set refuses likewise) */
+	if (!IndevFluid_ShellCell(x - 1, y, z) && World_GetBlock(x - 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x - 1, y, z, fluid);
+	if (!IndevFluid_ShellCell(x + 1, y, z) && World_GetBlock(x + 1, y, z) == BLOCK_AIR) Game_UpdateBlock(x + 1, y, z, fluid);
+	if (!IndevFluid_ShellCell(x, y, z - 1) && World_GetBlock(x, y, z - 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z - 1, fluid);
+	if (!IndevFluid_ShellCell(x, y, z + 1) && World_GetBlock(x, y, z + 1) == BLOCK_AIR) Game_UpdateBlock(x, y, z + 1, fluid);
 }
 
 /* ==== genuine finite fluids - BlockFlowing / BlockStationary port ====
@@ -1848,9 +1852,15 @@ static void Indev_TickSource(int index, BlockID block) {
    - updates ride the scheduled-update list: tickRate 5 (water) / 25 (lava).
    Registered per Indev map only - classic/c0.30 keep the engine flood. */
 
-#define FLUID_SCHED_MAX 4096
-static struct { int index; cc_uint16 delay; cc_uint8 water; } indev_fluidSched[FLUID_SCHED_MAX];
-static int      indev_fluidSchedCount;
+/* World.tickList: ONE shared FIFO for fire AND fluids. Every entry records
+    the block id it was scheduled FOR - a stale entry (the cell changed since)
+    is a silent no-op at run time - and there is no dedup: a spread cell
+    genuinely enters the list twice (onBlockAdded + liquidSpread's explicit
+    schedule). Genuine's list is unbounded; the cap is a runaway backstop. */
+#define TICK_SCHED_MAX 32768
+struct TickListEntry { int index; cc_uint8 id; cc_uint8 time; };
+static struct TickListEntry indev_tickList[TICK_SCHED_MAX];
+static int      indev_tickHead, indev_tickCount;
 static RNGState indev_fluidRng;
 static int      indev_liquidOrder[4] = { 0, 1, 2, 3 }; /* BlockFlowing.liquidIntArray */
 
@@ -1885,11 +1895,16 @@ static void Fluid_BumpCounter(void) {
 	}
 }
 
+/* Genuine material table: BlockSource's ctor registers Material.water for
+    BOTH springs - the LAVA spring (53) is water-material (BlockSource.java:11,
+    a genuine quirk) - so every material gate (petrify, the equalize path's
+    "below is my material", sponge absorb) treats it as water. */
 static cc_bool Fluid_IsWaterMat(BlockID b) {
-	return b == BLOCK_WATER || b == BLOCK_STILL_WATER || b == INDEV_BLOCK_WATER_SOURCE;
+	return b == BLOCK_WATER || b == BLOCK_STILL_WATER ||
+		b == INDEV_BLOCK_WATER_SOURCE || b == INDEV_BLOCK_LAVA_SOURCE;
 }
 static cc_bool Fluid_IsLavaMat(BlockID b) {
-	return b == BLOCK_LAVA || b == BLOCK_STILL_LAVA || b == INDEV_BLOCK_LAVA_SOURCE;
+	return b == BLOCK_LAVA || b == BLOCK_STILL_LAVA;
 }
 
 /* BlockFluid.canFlow: target material must be neither liquid nor solid (air,
@@ -2061,17 +2076,25 @@ static int Fluid_FlowCheck(int x, int y, int z, BlockID moving, BlockID still) {
 	return sourced ? -9999 : donor;
 }
 
+/* World.scheduleBlockUpdate: delay = tickRate of the SCHEDULED id (fire 20,
+    moving lava 25, water and every other id 5); appended at the tail, never
+    deduped. The entry then costs one pop per tick while counting down, so
+    the effective period is tickRate+1 (water 6, lava 26, fire 21). MP: the
+    server owns the simulation and this list never drains - don't fill it. */
+void IndevTest_ScheduleTick(int index, BlockID block) {
+	int slot;
+	if (SurvivalNet_ServerDriven()) return;
+	if (indev_tickCount >= TICK_SCHED_MAX) return; /* runaway backstop only */
+	slot = (indev_tickHead + indev_tickCount) % TICK_SCHED_MAX;
+	indev_tickList[slot].index = index;
+	indev_tickList[slot].id    = (cc_uint8)block;
+	indev_tickList[slot].time  = block == INDEV_BLOCK_FIRE ? 20 :
+	                             (block == BLOCK_LAVA      ? 25 : 5);
+	indev_tickCount++;
+}
+
 static void Indev_FluidSchedule(int index, cc_bool water) {
-	int i;
-	cc_uint16 delay = water ? 5 : 25; /* BlockFlowing.tickRate */
-	for (i = 0; i < indev_fluidSchedCount; i++) {
-		if (indev_fluidSched[i].index == index) return; /* already queued */
-	}
-	if (indev_fluidSchedCount >= FLUID_SCHED_MAX) return; /* overflow: drop (self-heals) */
-	indev_fluidSched[indev_fluidSchedCount].index = index;
-	indev_fluidSched[indev_fluidSchedCount].delay = delay;
-	indev_fluidSched[indev_fluidSchedCount].water = water;
-	indev_fluidSchedCount++;
+	IndevTest_ScheduleTick(index, water ? BLOCK_WATER : BLOCK_LAVA);
 }
 
 /* BlockFlowing.liquidSpread: the plain (stagnation-retry) spread */
@@ -2205,67 +2228,83 @@ static void Indev_FluidUpdate(int index, BlockID block) {
 	}
 
 	if (!spread) {
-		/* settled: become still (genuine setTileNoUpdate - our update raises
-		    neighbour notifies too; the still-wake handler ignores them unless
-		    flow is actually possible, so the body converges) */
+		/* settled: become still (genuine setTileNoUpdate - the state-flip
+		    early return in IndevTest_BlockUpdated keeps this write silent:
+		    no neighbour reactions, no onBlockAdded, no schedule) */
 		Game_UpdateBlock(x, y, z, still);
 	} else {
 		Indev_FluidSchedule(index, water);
 	}
 }
 
-/* processes the scheduled fluid updates (World.tick's scheduledUpdates) */
+/* genuine World.tick scheduled pass: snapshot min(size, 200) BEFORE the
+    drain, pop the head that many times; counting-down entries decrement and
+    requeue at the tail, due entries run their block's updateTick only if the
+    recorded id still matches the world (stale entries drop silently).
+    Entries scheduled DURING the pass land beyond the snapshot and are first
+    touched next tick - that is what makes the effective fluid period 6/26,
+    not 5/25, and the fire period 21. */
 void IndevTest_TickFluids(void) {
-	int i, index;
+	int i, n, index;
 	BlockID b;
+	struct TickListEntry e;
 	if (!IndevTest_Enabled || !World.Blocks) return;
 
-	for (i = 0; i < indev_fluidSchedCount; ) {
-		if (indev_fluidSched[i].delay > 0) { indev_fluidSched[i].delay--; i++; continue; }
-		index = indev_fluidSched[i].index;
-		/* swap-remove BEFORE running (the update may reschedule this cell) */
-		indev_fluidSched[i] = indev_fluidSched[--indev_fluidSchedCount];
+	n = indev_tickCount; if (n > 200) n = 200;
+	for (i = 0; i < n; i++) {
+		e = indev_tickList[indev_tickHead];
+		indev_tickHead = (indev_tickHead + 1) % TICK_SCHED_MAX;
+		indev_tickCount--;
 
+		if (e.time > 0) {
+			e.time--;
+			indev_tickList[(indev_tickHead + indev_tickCount) % TICK_SCHED_MAX] = e;
+			indev_tickCount++; /* capacity: the pop above just freed a slot */
+			continue;
+		}
+		index = e.index;
+		if (index < 0 || index >= World.Volume) continue;
 		b = World.Blocks[index];
-		if (b == BLOCK_WATER || b == BLOCK_LAVA) Indev_FluidUpdate(index, b);
+		if (b != e.id) continue; /* genuine stale-id skip */
+
+		if (b == INDEV_BLOCK_FIRE) IndevFire_RunUpdate(index);
+		else if (b == BLOCK_WATER || b == BLOCK_LAVA) Indev_FluidUpdate(index, b);
+		else if (b == INDEV_BLOCK_WATER_SOURCE || b == INDEV_BLOCK_LAVA_SOURCE)
+			Indev_TickSource(index, b);
 	}
 }
 
-/* onBlockAdded: a placed/spawned moving fluid schedules its first update */
-static void IndevFluid_PlaceMoving(int index, BlockID block) {
-	Indev_FluidSchedule(index, block == BLOCK_WATER);
-}
 /* genuine BlockFlowing.onNeighborBlockChange is EMPTY - moving fluid ignores
-    neighbour changes entirely (only scheduled + random ticks drive it) */
+    neighbour changes entirely (only scheduled + random ticks drive it). Also
+    stands in where BlockUpdated already covers a hook (OnPlace of moving
+    fluid: the onBlockAdded schedule rides IndevTest_BlockUpdated, which runs
+    for EVERY Game_UpdateBlock write - an OnPlace schedule on top would give
+    player placements two entries where genuine setBlockWithNotify gives one). */
 static void IndevFluid_Noop(int index, BlockID block) { }
 
-/* BlockStationary.onNeighborBlockChange: wake to moving when flow is possible
-    (or fire encourages, for lava), petrify on contact with the opposite fluid.
-    Engine activations don't carry the changed neighbour's id, so the petrify
-    check scans the 6 neighbours instead - same trigger in practice. */
-static void IndevFluid_ActivateStill(int index, BlockID block) {
+/* BlockStationary.onNeighborBlockChange, verbatim: the canFlow scan first
+    (down, -x, +x, -z, +z), then petrify when the CHANGED block is the
+    opposite MATERIAL (early return - petrify happens INSTEAD of the wake),
+    then the flammable-changed wake (BOTH liquids, keyed on the changed id),
+    then the wake itself: a setTileNoUpdate flip to the moving id (the
+    state-flip early return in IndevTest_BlockUpdated keeps it silent) plus
+    an explicit schedule at the fluid's tickRate. */
+static void IndevFluid_StillNeighborChanged(int index, BlockID still, BlockID changedV) {
 	int x, y, z;
-	cc_bool water = block == BLOCK_STILL_WATER;
+	cc_bool water = still == BLOCK_STILL_WATER;
 	cc_bool wake;
-	static const int NX[6] = { -1, 1, 0, 0, 0, 0 };
-	static const int NY[6] = { 0, 0, -1, 1, 0, 0 };
-	static const int NZ[6] = { 0, 0, 0, 0, -1, 1 };
-	int n;
 	World_Unpack(index, x, y, z);
 
-	/* petrify rides the CHANGED-block id in IndevTest_BlockUpdated now; a
-	    woken fluid meeting pre-existing lava resolves through its own flow
-	    update (Fluid_WaterContact stones THE LAVA), like genuine */
 	wake = Fluid_CanFlowInto(water, x, y - 1, z) ||
 	       Fluid_CanFlowInto(water, x - 1, y, z) || Fluid_CanFlowInto(water, x + 1, y, z) ||
 	       Fluid_CanFlowInto(water, x, y, z - 1) || Fluid_CanFlowInto(water, x, y, z + 1);
-	if (!wake && !water) {
-		for (n = 0; n < 6; n++) {
-			int nx = x + NX[n], ny = y + NY[n], nz = z + NZ[n];
-			if (!World_Contains(nx, ny, nz)) continue;
-			if (IndevFire_CanCatch(World_GetBlock(nx, ny, nz))) { wake = true; break; }
-		}
+
+	if (changedV != BLOCK_AIR &&
+		(water ? Fluid_IsLavaMat(changedV) : Fluid_IsWaterMat(changedV))) {
+		if (!IndevFluid_ShellCell(x, y, z)) Game_UpdateBlock(x, y, z, BLOCK_STONE);
+		return;
 	}
+	if (IndevFire_CanCatch(changedV)) wake = true;
 	if (!wake) return;
 
 	Game_UpdateBlock(x, y, z, water ? BLOCK_WATER : BLOCK_LAVA);
@@ -2295,10 +2334,13 @@ static void IndevSponge_Place(int index, BlockID block) {
 	for (yy = y - 2; yy <= y + 2; yy++)
 	for (zz = z - 2; zz <= z + 2; zz++)
 	for (xx = x - 2; xx <= x + 2; xx++) {
-		if (!World_Contains(xx, yy, zz)) continue;
+		/* genuine absorb is setBlock class = interior-only: the border shell
+		    is unwritable (that is what keeps the map-edge ocean infinite) */
+		if (IndevFluid_ShellCell(xx, yy, zz)) continue;
 		block = World_GetBlock(xx, yy, zz);
-		if (block == BLOCK_WATER || block == BLOCK_STILL_WATER ||
-			block == INDEV_BLOCK_WATER_SOURCE) {
+		/* World.isWater is material-based, so the LAVA spring (Material.water,
+		    the genuine BlockSource quirk) is absorbed too */
+		if (Fluid_IsWaterMat(block)) {
 			Game_UpdateBlock(xx, yy, zz, BLOCK_AIR);
 		}
 	}
@@ -2322,25 +2364,25 @@ static void IndevSponge_Delete(int index, BlockID block) {
 	for (yy = y - 2; yy <= y + 2; yy++)
 	for (zz = z - 2; zz <= z + 2; zz++)
 	for (xx = x - 2; xx <= x + 2; xx++) {
+		/* genuine notifies with each cube cell's CURRENT id (getBlockId in
+		    onBlockRemoval) - a lava cell in the cube petrifies adjacent still
+		    water, a flammable cell force-wakes it; absorbed cells announce air */
+		BlockID cellV = World_Contains(xx, yy, zz) ? World_GetBlock(xx, yy, zz) : BLOCK_AIR;
 		for (n = 0; n < 6; n++) {
 			int nx = xx + SNX[n], ny = yy + SNY[n], nz = zz + SNZ[n];
 			if (!World_Contains(nx, ny, nz)) continue;
 			block = World_GetBlock(nx, ny, nz);
 			if (block == BLOCK_STILL_WATER || block == BLOCK_STILL_LAVA)
-				IndevFluid_ActivateStill(World_Pack(nx, ny, nz), block);
+				IndevFluid_StillNeighborChanged(World_Pack(nx, ny, nz), block, cellV);
 		}
 	}
 }
 
-/* setTickOnLoad: schedule every moving-fluid cell when a map arrives */
+/* Map load resets the shared tick list ONLY - genuine has no load-time
+    scheduling scan (setTickOnLoad gates the RANDOM pass, whose updateTick
+    revives dormant fire and suspended moving fluid, ~10s mean per cell). */
 void IndevTest_FluidsOnMapLoaded(void) {
-	int i;
-	indev_fluidSchedCount = 0;
-	if (!World.Blocks) return;
-	for (i = 0; i < World.Volume; i++) {
-		if (World.Blocks[i] == BLOCK_WATER) Indev_FluidSchedule(i, true);
-		else if (World.Blocks[i] == BLOCK_LAVA) Indev_FluidSchedule(i, false);
-	}
+	indev_tickHead = 0; indev_tickCount = 0;
 }
 
 /* --- genuine plant ticks (BlockFlower/BlockMushroom/BlockSapling) --- */
@@ -2509,14 +2551,17 @@ static void Indev_RegisterFarmTicks(void) {
 	Physics.OnPlace[INDEV_BLOCK_WATER_SOURCE]      = Indev_TickSource;
 	Physics.OnPlace[INDEV_BLOCK_LAVA_SOURCE]       = Indev_TickSource;
 	/* genuine finite fluids replace the classic infinite flood on Indev
-	    maps: moving fluid = scheduled/random updates only, still fluid wakes
-	    on activation, and the classic Place/Activate flood hooks are dead */
-	Physics.OnPlace[BLOCK_WATER]          = IndevFluid_PlaceMoving;
-	Physics.OnPlace[BLOCK_LAVA]           = IndevFluid_PlaceMoving;
+	    maps - every classic Place/Activate flood hook is dead. The genuine
+	    reactions all ride IndevTest_BlockUpdated instead (it runs for EVERY
+	    Game_UpdateBlock write and carries the changed-block id, which the
+	    engine's activate path lacks): onBlockAdded's schedule for placed
+	    moving fluid, and BlockStationary's petrify/wake for still fluid. */
+	Physics.OnPlace[BLOCK_WATER]          = IndevFluid_Noop;
+	Physics.OnPlace[BLOCK_LAVA]           = IndevFluid_Noop;
 	Physics.OnActivate[BLOCK_WATER]       = IndevFluid_Noop;
 	Physics.OnActivate[BLOCK_LAVA]        = IndevFluid_Noop;
-	Physics.OnActivate[BLOCK_STILL_WATER] = IndevFluid_ActivateStill;
-	Physics.OnActivate[BLOCK_STILL_LAVA]  = IndevFluid_ActivateStill;
+	Physics.OnActivate[BLOCK_STILL_WATER] = IndevFluid_Noop;
+	Physics.OnActivate[BLOCK_STILL_LAVA]  = IndevFluid_Noop;
 	Physics.OnRandomTick[BLOCK_WATER]       = IndevFluid_RandomMoving;
 	Physics.OnRandomTick[BLOCK_LAVA]        = IndevFluid_RandomMoving;
 	Physics.OnRandomTick[BLOCK_STILL_WATER] = IndevFluid_Noop;
@@ -3251,14 +3296,21 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 	Indev_TorchCheckPop(x, y, z - 1);
 	Indev_TorchCheckPop(x, y, z + 1);
 
-	/* setBlockWithNotify: EVERY write wakes adjacent still fluids
-	    (BlockStationary.onNeighborBlockChange) - a flowing donor emptying
-	    itself, fire burning a dam away, an explosion carving next to a pond.
-	    Previously only direct player edits woke them (the classic
-	    Physics_ActivateNeighbours path), so a blast-cut channel in SP stayed
-	    dry while the same channel in MP flooded - the server has had this
-	    wake all along. Player edits waking twice is a no-op (a woken fluid
-	    is already the moving id). MP: the server owns fluids. */
+	/* BlockFlowing/BlockFluid.onBlockAdded: every setBlock write of a moving
+	    fluid schedules its first update. Spread writes then carry a second,
+	    explicit schedule (Fluid_Spread/Spread2) - the genuine duplicate; the
+	    still->moving WAKE flip never reaches here (the state-flip early
+	    return above - genuine setTileNoUpdate runs no onBlockAdded) and
+	    schedules explicitly at its own site. IndevTest_ScheduleTick no-ops
+	    when the server owns the simulation. */
+	if (block == BLOCK_WATER || block == BLOCK_LAVA)
+		IndevTest_ScheduleTick(World_Pack(x, y, z), block);
+
+	/* setBlockWithNotify: EVERY write notifies the adjacent still fluids
+	    (BlockStationary.onNeighborBlockChange, run inline with the changed
+	    id) - a flowing donor emptying itself, fire burning a dam away, an
+	    explosion carving next to a pond. Petrify-vs-wake and the flammable
+	    wake all live inside the handler. MP: the server owns fluids. */
 	if (!SurvivalNet_ServerDriven()) {
 		static const int WNX[6] = { -1, 1, 0, 0, 0, 0 };
 		static const int WNY[6] = { 0, 0, -1, 1, 0, 0 };
@@ -3270,14 +3322,7 @@ void IndevTest_BlockUpdated(int x, int y, int z, BlockID oldBlock, BlockID block
 			if (!World_Contains(wx, wy, wz)) continue;
 			wb = World_GetBlock(wx, wy, wz);
 			if (wb != BLOCK_STILL_WATER && wb != BLOCK_STILL_LAVA) continue;
-			/* BlockStationary petrifies ONLY when the CHANGED block is the
-			    opposite liquid; anything else wakes it instead (and a woken
-			    water meeting old lava stones THE LAVA via its flow update) */
-			if (wb == BLOCK_STILL_WATER ? Fluid_IsLavaMat(block) : Fluid_IsWaterMat(block)) {
-				if (!IndevFluid_ShellCell(wx, wy, wz)) Game_UpdateBlock(wx, wy, wz, BLOCK_STONE);
-			} else {
-				IndevFluid_ActivateStill(World_Pack(wx, wy, wz), wb);
-			}
+			IndevFluid_StillNeighborChanged(World_Pack(wx, wy, wz), wb, block);
 		}
 	}
 	depth--;
@@ -3291,6 +3336,16 @@ static void IndevTest_BlockChanged(void* obj, IVec3 coords, BlockID oldBlock, Bl
 	struct Entity* p;
 	int q, meta;
 	if (!IndevTest_Enabled) return;
+
+	/* A PLAYER replacing a still fluid with its moving form is genuine
+	    setBlockWithNotify (BlockFlowing.onBlockAdded schedules it), but the
+	    id pair is indistinguishable from the internal wake flip, which the
+	    BlockUpdated hook rightly treats as setTileNoUpdate and skips. Patch
+	    the schedule back in for the player path here (the remaining
+	    neighbour notifies of this rare edit are left to the random pass). */
+	if ((oldBlock == BLOCK_STILL_WATER && block == BLOCK_WATER) ||
+		(oldBlock == BLOCK_STILL_LAVA  && block == BLOCK_LAVA))
+		IndevTest_ScheduleTick(World_Pack(coords.x, coords.y, coords.z), block);
 
 	/* Player placed a canonical chest/furnace: rotate it so the front faces */
 	/*  the player (BlockFurnace.setDefaultDirection / Beta onBlockPlacedBy: */
@@ -3387,8 +3442,8 @@ void IndevTest_ApplySurroundings(void) {
 static void IndevTest_MapActivate(void) {
 	IndevBlocks_Define();
 	Indev_RegisterFarmTicks(); /* in case physics re-registered its handlers */
-	IndevFire_OnMapLoaded();   /* setTickOnLoad: schedule existing fire */
-	IndevTest_FluidsOnMapLoaded(); /* setTickOnLoad: schedule moving fluid */
+	IndevFire_OnMapLoaded();   /* (re)allocate the fire age store */
+	IndevTest_FluidsOnMapLoaded(); /* reset the shared tick list (no load scan) */
 
 	/* Genuine getBlockId clamps y<0 to y=0, so floating maps (air at y=0) are
 	    bottomless - you fall through into the void instead of landing on the

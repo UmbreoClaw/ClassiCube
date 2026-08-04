@@ -752,7 +752,8 @@ void Physics_Tick(void) {
 		    lava embers) are a separate path (IndevTest_RandomDisplayTicks) and
 		    keep running. */
 		if (SurvivalNet_ServerDriven()) return;
-		IndevFire_Tick(); /* the scheduled-update list runs before random ticks */
+		/* the ONE shared scheduled-update list (fire + fluids, genuine
+		    World.tickList) runs before random ticks */
 		IndevTest_TickFluids();
 		IndevTest_TickRandomBlocks();
 	} else if (SurvivalTest_Enabled) {

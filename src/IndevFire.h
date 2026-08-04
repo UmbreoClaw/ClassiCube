@@ -25,14 +25,15 @@ cc_bool IndevFire_CanCatch(BlockID b);
 /* Block definition (fire's engine block properties) - called from the */
 /*  Indev block-additions init in IndevTest.c. */
 void IndevFire_DefineBlock(void);
-/* setTickOnLoad: scans a freshly loaded/generated map and schedules an */
-/*  update for every existing fire block; also (re)allocates the age store. */
+/* (Re)allocates the per-map age store on map load. There is no scheduling */
+/*  scan: genuine setTickOnLoad only gates the RANDOM pass, which re-enters */
+/*  dormant fire into the shared scheduled chain. */
 void IndevFire_OnMapLoaded(void);
 /* Frees the per-map fire age store. */
 void IndevFire_Reset(void);
-/* One 20Hz tick of the scheduled-update queue (World.tick's tickList: */
-/*  at most 200 entries processed, tickRate 20 delay per entry). */
-void IndevFire_Tick(void);
+/* Runs updateTick for a due fire entry from the SHARED tick list */
+/*  (IndevTest.c owns the list; see IndevTest_ScheduleTick). */
+void IndevFire_RunUpdate(int index);
 /* World.tick's random updateTick for a fire block (ages + spreads it). */
 void IndevFire_RandomTick(int index);
 /* Block-change reactions: onBlockAdded validation/scheduling for newly */

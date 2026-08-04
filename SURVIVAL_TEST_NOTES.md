@@ -365,11 +365,12 @@ src/IndevFire.c/.h (picked up automatically - Makefile globs src/*.c).
 - **Burn tables** (BlockFire ctor setBurnRate): planks 5/20, log 5/5,
   leaves 30/60, bookshelf 30/20, tnt 15/100, all 16 cloths 30/60
   (chance = encourages neighbours, ability = catches when consumed).
-- **Scheduled-update queue** (World.java tickList port): entries wait
-  tickRate=20 game ticks then run updateTick; <=200 processed per game
-  tick. IndevFire_Tick() runs each 20Hz tick before the random-block
-  pass. Ring buffer 8192 (drops new entries when full - a fire that big
-  self-heals by constant rescheduling).
+- **Scheduled-update queue** (World.java tickList port): fire entries ride
+  the ONE shared tick list in IndevTest.c (fire + fluids together, genuine
+  World.tickList): entries record (index, id, tickRate delay), no dedup,
+  stale entries no-op, <=200 pops per game tick shared between count-downs
+  and runs. IndevTest_TickFluids drains it before the random-block pass and
+  dispatches due fire entries via IndevFire_RunUpdate.
 - **updateTick** verbatim: ages 0->15 in a per-map nibble store
   (freed on OnNewMap), retires when no flammable neighbour (or floor gone
   + age>3), else consumes neighbours (down 100 / up 200 / sides 300) and
@@ -396,8 +397,9 @@ src/IndevFire.c/.h (picked up automatically - Makefile globs src/*.c).
   quirk). The armorSet loop now runs all 5 materials incl. chain (46).
 - **.mclevel**: fire saves as genuine id 51 + age in the Data nibble
   (new position-aware IndevTest_BlockDataMetaAt/ApplyDataMetaAt so age
-  comes from the side store, not the block id). setTickOnLoad reschedules
-  every fire block on load.
+  comes from the side store, not the block id). There is no load-time
+  scheduling scan (genuine setTickOnLoad only gates the random pass, which
+  revives dormant fire at ~10s mean per cell).
 
 ### Rig verification
 - **Mechanics CONFIRMED**: a save patched with a wood box wrapped in fire
