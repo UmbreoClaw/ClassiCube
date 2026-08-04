@@ -329,6 +329,7 @@ into survival. Survival-mode clients ignore it (their inventory is the
 | 6 | 6 | pos: 3 × i16 coord×32 |
 | 12 | 6 | vel: 3 × i16 blocks/sec×512 |
 | 18 | 1 | rot0 (initial spin phase, so drops don't spin in lockstep) |
+| 19 | 6 | rest: 3 × i16 coord×32 — the server's authoritative resting spot. The client plays its own arc from pos+vel, then eases onto rest once landed, so every viewer converges on the same point (rejoin re-streams used to visibly snap drops). All-zero (old servers zero-fill the fixed 64-byte frame) disables the easing. |
 
 The client runs the pop-arc + spin locally from pos+vel; the server keeps
 the authoritative resting spot and the pickup logic.

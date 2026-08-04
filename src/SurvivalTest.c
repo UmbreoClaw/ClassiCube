@@ -332,6 +332,8 @@ struct DropItem {
 	cc_bool net;          /* streamed in by the server (SurvivalNet_NetDropSpawn) */
 	int     netId;        /* server drop id (wire key) - 0 for local SP drops */
 	Vec3    pickupTarget; /* body the pickup fly-in eases toward (captured on PICKUP) */
+	Vec3    netRest;      /* server-authoritative resting spot (DROP_SPAWN bytes 19-24) */
+	cc_bool hasRest;      /* zero rest = old server, no easing */
 };
 static struct DropItem st_drops[DROP_MAX];
 /* TakeEntityAnim.tick(): removes itself once time >= 3, at 20 ticks/sec. */
@@ -647,7 +649,7 @@ static struct DropItem* SurvivalTest_FindNetDrop(int netId) {
 	return NULL;
 }
 
-void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0) {
+void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0, Vec3 rest) {
 	struct DropItem* d = SurvivalTest_FindNetDrop(netId);
 	if (!d) {
 		/* new drop - claim a pool slot (recycles the oldest LOCAL drop; never
@@ -668,6 +670,8 @@ void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count,
 	d->active     = true;
 	d->net        = true;
 	d->netId      = netId;
+	d->netRest    = rest;
+	d->hasRest    = rest.x != 0.0f || rest.y != 0.0f || rest.z != 0.0f;
 	/* pickupDelay stays 0: the SERVER gates collection, so the client never
 	    runs SurvivalTest_DropTryPickup on a net drop at all. */
 }
@@ -1139,6 +1143,20 @@ static void SurvivalTest_TickNetDrops(float delta) {
 		d->age += delta; /* drives spin/bob/glow - server owns the 5-min despawn */
 
 		SurvivalTest_DropPhysics(d, delta);
+
+		/* Once the local arc has landed, ease onto the server's authoritative
+		    resting spot (DROP_SPAWN's trailing rest coords). The two flight
+		    sims agree within a fraction of a block, so this is a slide too
+		    small to notice - but it means every viewer converges on the SAME
+		    point and a rejoin re-stream no longer visibly snaps drops. */
+		if (d->hasRest && d->onGround &&
+			Math_AbsF(d->velocity.x) + Math_AbsF(d->velocity.y) + Math_AbsF(d->velocity.z) < 0.6f) {
+			float ease = delta * 6.0f;
+			if (ease > 1.0f) ease = 1.0f;
+			d->position.x += (d->netRest.x - d->position.x) * ease;
+			d->position.y += (d->netRest.y - d->position.y) * ease;
+			d->position.z += (d->netRest.z - d->position.z) * ease;
+		}
 		if (IndevTest_Enabled) {
 			int cx = Math_Floor(d->position.x);
 			int cy = Math_Floor(d->position.y + DROP_ITEM_HALF);

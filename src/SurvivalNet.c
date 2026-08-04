@@ -309,15 +309,19 @@ static Vec3 SurvivalNet_ReadVel(cc_uint8* data) {
 }
 
 static void SurvivalNet_HandleDropSpawn(cc_uint8* data) {
-	/* [id][dropId:u16][itemId:u16][count][pos:3xi16][vel:3xi16][rot0] */
+	/* [id][dropId:u16][itemId:u16][count][pos:3xi16][vel:3xi16][rot0]
+	    [rest:3xi16] - rest is the server's authoritative resting spot; old
+	    servers zero-fill it (the frame is fixed 64 bytes), which disables
+	    the client's settle easing */
 	int  dropId = ((int)data[1] << 8) | data[2];
 	int  itemId = ((int)data[3] << 8) | data[4];
 	int  count  = data[5];
 	Vec3 pos    = SurvivalNet_ReadPos(data + 6);
 	Vec3 vel    = SurvivalNet_ReadVel(data + 12);
+	Vec3 rest   = SurvivalNet_ReadPos(data + 19);
 	if (SurvivalNet_ActiveMode() == 0) return;
 
-	SurvivalTest_NetDropSpawn(dropId, pos, vel, itemId, count, data[18]);
+	SurvivalTest_NetDropSpawn(dropId, pos, vel, itemId, count, data[18], rest);
 }
 
 static void SurvivalNet_HandleDropPickup(cc_uint8* data) {

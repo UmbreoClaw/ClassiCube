@@ -62,7 +62,7 @@ void SurvivalTest_NetItemGive(int id, int count);
     The server owns each drop's id, pickup-delay countdown and collection; the
     client feeds these into the same st_drops pool used in singleplayer, but a
     net drop ticks its visual physics only (never local pickup or despawn). */
-void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0);
+void SurvivalTest_NetDropSpawn(int netId, Vec3 pos, Vec3 vel, int id, int count, int rot0, Vec3 rest);
 void SurvivalTest_NetDropPickup(int netId, int pickerEntityId);
 void SurvivalTest_NetDropRemove(int netId);
 
