@@ -5,3 +5,5 @@ test/test_load
 test/*.o
 test/edge.obj
 __pycache__/
+test/skinned.glb
+test/skinned.gltf

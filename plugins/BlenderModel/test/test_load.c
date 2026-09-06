@@ -4,6 +4,8 @@
  * Runs against a headless ("make terminal") build of the game, no GPU needed.
  */
 #define BM_TEST
+#include "../bm_json.c"
+#include "../bm_gltf.c"
 #include "../BlenderModel.c"
 
 #include <stdio.h>
@@ -197,16 +199,155 @@ static void TestEdgeCases(void) {
 	CHECK(bm_armPart < 0);
 }
 
+static void TestJson(void) {
+	struct BMJ_Doc doc;
+	char text[] = "{\"a\": [1, 2.5, -3e2, true, null, \"x\\ny\\u0041\"], \"b\": {\"c\": \"d\"}, \"e\": false}";
+	char bad[]  = "{\"a\": [1, 2}";
+	int a, b;
+
+	CHECK(BMJ_Parse(&doc, text, (int)strlen(text)));
+	a = BMJ_Get(&doc, 0, "a");
+	CHECK(a >= 0 && BMJ_Count(&doc, a) == 6);
+	CHECK(BMJ_Int(&doc, BMJ_At(&doc, a, 0), -1) == 1);
+	CHECK(NEAR((float)BMJ_Num(&doc, BMJ_At(&doc, a, 1), 0), 2.5f));
+	CHECK(NEAR((float)BMJ_Num(&doc, BMJ_At(&doc, a, 2), 0), -300.0f));
+	CHECK(BMJ_Num(&doc, BMJ_At(&doc, a, 3), 0) == 1);
+	CHECK(doc.nodes[BMJ_At(&doc, a, 4)].type == BMJ_NULL);
+	CHECK(BMJ_StrEquals(&doc, BMJ_At(&doc, a, 5), "x\nyA"));
+	b = BMJ_Get(&doc, 0, "b");
+	CHECK(BMJ_StrEquals(&doc, BMJ_Get(&doc, b, "c"), "d"));
+	CHECK(BMJ_Get(&doc, 0, "C") < 0);      /* case sensitive */
+	CHECK(BMJ_Get(&doc, 0, "ab") < 0);     /* no prefix match */
+	CHECK(BMJ_GetInt(&doc, 0, "missing", 7) == 7);
+	CHECK(BMJ_Num(&doc, BMJ_Get(&doc, 0, "e"), 5) == 0);
+	BMJ_Free(&doc);
+	CHECK(!BMJ_Parse(&doc, bad, (int)strlen(bad)));
+}
+
+static void TestMatrix(void) {
+	float a[16], b[16], c[16];
+	Vec3 p, r;
+	float q[4] = { 0.7071068f, 0, 0, 0.7071068f }; /* +90 degrees about X */
+
+	M4_FromTRS(a, BM_Vec3(1, 2, 3), q, BM_Vec3(1, 1, 1));
+	r = Gltf_M4_TransformPoint(a, BM_Vec3(0, 1, 0));
+	CHECK(NEAR(r.x, 1) && NEAR(r.y, 2) && NEAR(r.z, 4)); /* +Y rotates to +Z, then translated */
+
+	/* Translate then rotate: (T * R) * p rotates first */
+	Gltf_M4_Identity(b); b[12] = 5;
+	Gltf_M4_Mul(c, b, a);
+	r = Gltf_M4_TransformPoint(c, BM_Vec3(0, 1, 0));
+	CHECK(NEAR(r.x, 6) && NEAR(r.y, 2) && NEAR(r.z, 4));
+
+	p = Gltf_M4_TransformDir(a, BM_Vec3(0, 1, 0));
+	CHECK(NEAR(p.x, 0) && NEAR(p.y, 0) && NEAR(p.z, 1));
+}
+
+static const struct GltfCorner* FindGltfCorner(float x, float y, float z) {
+	int i;
+	for (i = 0; i < bm_gltf.numCorners; i++) {
+		const struct GltfCorner* c = &bm_gltf.corners[i];
+		if (NEAR(c->pos.x, x) && NEAR(c->pos.y, y) && NEAR(c->pos.z, z)) return c;
+	}
+	return NULL;
+}
+
+static void TestSkinnedModel(const char* path, cc_bool checkTexture) {
+	cc_string file = String_FromReadonly(path);
+	const struct GltfCorner* c;
+	struct Entity e;
+	Vec3 pos, nrm;
+	int i;
+
+	BM_FreeTexture();
+	CHECK(BM_LoadGltf(&file));
+	CHECK(bm_loaded && bm_isGltf);
+	CHECK(bm_gltf.numNodes == 5);
+	CHECK(bm_gltf.numClips == 3);
+	CHECK(bm_gltf.numCorners == 3 * 12 * 3);
+	CHECK(bm_gltf.numPalette == 3);
+	CHECK(bm_gltf.numChannels == 3);
+
+	/* Metadata from extras, scaled by the plugin scale (1) */
+	CHECK(bm_hasEye && NEAR(bm_eyeY, 1.7f));
+	CHECK(bm_hasSize && NEAR(bm_size.x, 0.6f) && NEAR(bm_size.y, 2.0f));
+
+	/* Rest pose bounds, after the 180 degree turn: the arm at glTF +0.3 ends up at -X */
+	CHECK(NEAR(bm_min.y, 0.0f) && NEAR(bm_max.y, 2.0f));
+	CHECK(NEAR(bm_min.x, -0.4f) && NEAR(bm_max.x, 0.25f));
+
+	/* Bone classification */
+	CHECK(bm_headNode == 1);
+	CHECK(bm_armPart == 2);
+	CHECK(bm_gltfArmCount == 36);
+	CHECK(NEAR(bm_gltfArmPivot.x, -0.3f) && NEAR(bm_gltfArmPivot.y, 1.4f) && NEAR(bm_gltfArmPivot.z, 0.0f));
+	/* Arm corners were skinned in the rest pose: all of them sit on the -X side */
+	for (i = 0; i < bm_gltfArmCount; i++) CHECK(bm_gltfArm[i].pos.x <= -0.2f + 0.001f);
+
+	/* Clip selection by name and by entity state */
+	CHECK(bm_clipIdle == 0 && bm_clipWalk == 1 && bm_clipJump == 2 && bm_clipFly < 0);
+	Mem_Set(&e, 0, sizeof(e));
+	e.OnGround = true;  e.Anim.Swing = 0.0f; CHECK(BM_ChooseClip(&e) == 0);
+	e.OnGround = true;  e.Anim.Swing = 0.5f; CHECK(BM_ChooseClip(&e) == 1);
+	e.OnGround = false;                       CHECK(BM_ChooseClip(&e) == 2);
+	bm_forcedClip = 1;                        CHECK(BM_ChooseClip(&e) == 1);
+	bm_forcedClip = -1;
+	CHECK(NEAR(bm_gltf.clips[1].duration, 1.0f));
+
+	/* Walk at t=0.5 rotates the arm 90 degrees about X around the shoulder (0.3, 1.4, 0) */
+	c = FindGltfCorner(0.2f, 0.6f, 0.1f);
+	CHECK(c != NULL);
+	if (c) {
+		Gltf_EvalPose(&bm_gltf, &bm_pose, 1, 0.5f, -1, 0, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(NEAR(pos.x, -0.2f) && NEAR(pos.y, 1.3f) && NEAR(pos.z, 0.8f));
+		/* Halfway between keys at t=0.25: 45 degrees */
+		Gltf_EvalPose(&bm_gltf, &bm_pose, 1, 0.25f, -1, 0, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(pos.y > 0.6f && pos.y < 1.3f && pos.z > 0.1f && pos.z < 0.8f);
+		/* Rest pose leaves it where it was (flipped) */
+		Gltf_EvalPose(&bm_gltf, &bm_pose, -1, 0.0f, -1, 0, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(NEAR(pos.x, -0.2f) && NEAR(pos.y, 0.6f) && NEAR(pos.z, -0.1f));
+	}
+
+	/* Jump uses STEP interpolation: root is 1 unit up between t=0.5 and t=1 */
+	c = FindGltfCorner(0.25f, 2.0f, 0.25f); /* top of the head box */
+	CHECK(c != NULL);
+	if (c) {
+		Gltf_EvalPose(&bm_gltf, &bm_pose, 2, 0.6f, -1, 0, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(NEAR(pos.y, 3.0f));
+		Gltf_EvalPose(&bm_gltf, &bm_pose, 2, 0.4f, -1, 0, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(NEAR(pos.y, 2.0f));
+		/* Head look pitches the head node: the top of the head moves */
+		Gltf_EvalPose(&bm_gltf, &bm_pose, -1, 0.0f, bm_headNode, 45 * MATH_DEG2RAD, 0);
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, c, &pos, &nrm);
+		CHECK(!NEAR(pos.z, -0.25f) && pos.y < 2.0f);
+	}
+
+	/* Embedded 4x4 texture was adopted (already power of two) */
+	if (checkTexture) {
+		CHECK(bm_bmp.scan0 != NULL && bm_bmp.width == 4 && bm_bmp.height == 4);
+		CHECK(NEAR(bm_uScale, 1.0f));
+	}
+}
+
 int main(int argc, char** argv) {
-	if (argc < 3) { printf("usage: test_load model.obj model.png\n"); return 2; }
+	if (argc < 5) { printf("usage: test_load model.obj model.png skinned.glb skinned.gltf\n"); return 2; }
 	Platform_Init();
 
 	TestParsers();
 	TestClassify();
 	TestRotation();
 	TestShade();
+	TestJson();
+	TestMatrix();
 	TestExampleModel(argv[1], argv[2]);
 	TestEdgeCases();
+	TestSkinnedModel(argv[3], true);
+	TestSkinnedModel(argv[4], true);
 	BM_Free();
 
 	if (failures) { printf("%d check(s) failed\n", failures); return 1; }

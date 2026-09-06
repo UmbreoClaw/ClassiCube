@@ -1,26 +1,32 @@
 /*
  * BlenderModel - ClassiCube plugin
  *
- * Loads a Wavefront OBJ mesh (exported from Blender) plus a PNG texture and
- * registers it as the "blender" entity model. The model can then be used as
- * the local player's model, and is rendered in both third person (the whole
- * mesh) and first person (the part named like an arm, drawn as the held arm).
+ * Loads a model made in Blender and registers it as the "blender" entity
+ * model. The model can then be used as the local player's model, and is
+ * rendered in both third person (the whole mesh) and first person (the part
+ * or bones named like an arm, drawn as the held arm).
+ *
+ * Two file formats are supported:
+ *   - Wavefront OBJ (+ PNG): rigid parts. Parts named like head / arm / leg
+ *     are animated the way ClassiCube animates the humanoid model.
+ *   - glTF 2.0 (.glb or .gltf): skinned meshes with animation clips. Bones
+ *     and weights are evaluated on the CPU every frame. Clips are picked by
+ *     name (idle / walk / jump / fly) from the entity's state.
  *
  * Everything is client side: other players still see whatever model the
  * server tells them about.
  *
- * Mesh conventions (Blender's default OBJ export settings already match):
- *   - 1 OBJ unit = 1 block (blendermodel-scale multiplies this)
- *   - Y is up, the model faces -Z, faces are wound counter-clockwise
- *   - texture coordinates use the usual OBJ layout (V = 0 at the bottom)
- *   - each Blender object becomes an "o <name>" part. A part named like
- *     head / arm / leg (with .L/.R, _L/_R or left/right for the side) is
- *     animated the same way ClassiCube animates the humanoid model.
+ * Mesh conventions:
+ *   - 1 unit = 1 block (blendermodel-scale multiplies this), Y is up
+ *   - the model faces -Z. OBJ files are used as they are; glTF files
+ *     (whose front is +Z by spec) are turned around. "flip" toggles this.
+ *   - faces are wound counter-clockwise
  *
- * Optional metadata comment lines (written by blender_export_classicube.py):
+ * Optional OBJ metadata comment lines (written by blender_export_classicube.py):
  *   # pivot <part name> <x> <y> <z>   rotation origin of an animated part
  *   # eye <y>                          eye height above the feet (blocks)
  *   # size <w> <h> <l>                 collision box size (blocks)
+ * glTF files carry the same information as "extras": cc_eye_height, cc_size.
  *
  * Licensed under BSD-3, same as ClassiCube.
  */
@@ -41,12 +47,14 @@
 #include "src/Stream.h"
 #include "src/String_.h"
 #include "src/Vectors.h"
+#include "bm_gltf.h"
 
 #define BM_MODEL_NAME  "blender"
 #define BM_PREFIX      "&eBlenderModel: &f"
 #define BM_MAX_PARTS   128
 #define BM_MAX_POLY    64
 #define BM_LINE_SIZE   1024
+#define BM_MAX_ANIM_STATES 32
 
 /* The game draws quads through a shared 16-bit index buffer, so a single */
 /* vertex buffer holds at most 65536 vertices. Triangles are uploaded as   */
@@ -55,12 +63,15 @@
 #define BM_CHUNK_VERTS (BM_CHUNK_TRIS * 4)
 #define BM_MAX_CHUNKS  64
 
-#define OPT_BM_FILE     "blendermodel-file"
-#define OPT_BM_TEXTURE  "blendermodel-texture"
-#define OPT_BM_SCALE    "blendermodel-scale"
-#define OPT_BM_ARMSCALE "blendermodel-arm-scale"
-#define OPT_BM_AUTO     "blendermodel-auto-apply"
-#define OPT_BM_FORCE    "blendermodel-force"
+#define OPT_BM_FILE      "blendermodel-file"
+#define OPT_BM_TEXTURE   "blendermodel-texture"
+#define OPT_BM_SCALE     "blendermodel-scale"
+#define OPT_BM_ARMSCALE  "blendermodel-arm-scale"
+#define OPT_BM_AUTO      "blendermodel-auto-apply"
+#define OPT_BM_FORCE     "blendermodel-force"
+#define OPT_BM_FLIP      "blendermodel-flip"
+#define OPT_BM_HEADLOOK  "blendermodel-head-look"
+#define OPT_BM_ANIMSPEED "blendermodel-anim-speed"
 
 #define BM_DEFAULT_FILE "blendermodel/model.obj"
 
@@ -106,19 +117,35 @@ struct BM_Part {
 
 struct BM_Pivot { char name[STRING_SIZE]; int nameLen; Vec3 pos; };
 
+/* Which animation clip an entity is playing, and since when */
+struct BM_AnimState { struct Entity* entity; int clip; double clipStart, lastUsed; };
+
 
 /*########################################################################################################################*
 *-----------------------------------------------------------State---------------------------------------------------------*
 *#########################################################################################################################*/
-/* Loaded mesh */
+/* Loaded OBJ mesh */
 static struct BM_Corner* bm_corners;
 static int bm_numCorners, bm_capCorners;
 static struct BM_Part bm_parts[BM_MAX_PARTS];
 static int bm_numParts;
+static int bm_staticTris, bm_animTris, bm_armPart = -1;
+
+/* Loaded glTF model */
+static struct GltfModel bm_gltf;
+static struct GltfPose  bm_pose;
+static cc_bool bm_isGltf;
+static int bm_headNode = -1;
+static int bm_clipIdle = -1, bm_clipWalk = -1, bm_clipJump = -1, bm_clipFly = -1, bm_forcedClip = -1;
+static struct BM_Corner* bm_gltfArm; /* rest pose arm, already posed */
+static int bm_gltfArmCount;
+static Vec3 bm_gltfArmPivot;
+static struct BM_AnimState bm_animStates[BM_MAX_ANIM_STATES];
+
+/* Shared by both formats */
 static Vec3 bm_min, bm_max, bm_size;
 static float bm_eyeY, bm_nameY;
 static cc_bool bm_hasEye, bm_hasSize, bm_loaded;
-static int bm_staticTris, bm_animTris, bm_armPart = -1;
 
 /* Parser scratch state */
 static Vec3*  bm_pos; static int bm_numPos, bm_capPos;
@@ -142,10 +169,13 @@ static PackedCol bm_chunkCol;
 static cc_bool bm_chunkNoShade, bm_chunksBuilt, bm_chunksFailed;
 static GfxResourceID bm_dynVb;
 static int bm_dynCap;
+static GfxResourceID bm_skinVbs[BM_MAX_CHUNKS]; /* dynamic, one per 16383 triangles of a glTF mesh */
+static int bm_numSkinVbs;
 
 /* Settings */
-static float bm_scale = 1.0f, bm_armScale = 1.0f;
-static cc_bool bm_autoApply = true, bm_force;
+static float bm_scale = 1.0f, bm_armScale = 1.0f, bm_animSpeed = 1.0f;
+static cc_bool bm_autoApply = true, bm_force, bm_flip;
+static int bm_headLook = 1; /* 1 on, 0 off, -1 inverted */
 static char bm_pathBuffer[FILENAME_SIZE];
 static cc_string bm_path = String_FromArray(bm_pathBuffer);
 static char bm_texPathBuffer[FILENAME_SIZE];
@@ -243,6 +273,9 @@ static void* BM_Grow(void* mem, int* capacity, int needed, int elemSize, const c
 
 static Vec3 BM_Vec3(float x, float y, float z) { Vec3 v; v.x = x; v.y = y; v.z = z; return v; }
 
+/* Applies the 180 degree turn used to make a +Z facing model face -Z */
+static Vec3 BM_Flipped(Vec3 v) { v.x = -v.x; v.z = -v.z; return v; }
+
 static void BM_CopyName(char* dst, int* dstLen, const cc_string* src) {
 	int len = src->length < STRING_SIZE ? src->length : STRING_SIZE;
 	Mem_Copy(dst, src->buffer, len);
@@ -256,6 +289,23 @@ static cc_string BM_PartName(const struct BM_Part* part) {
 	name.capacity = STRING_SIZE;
 	return name;
 }
+
+static cc_bool BM_PathHasExt(const cc_string* path, const char* ext) {
+	cc_string e = String_FromReadonly(ext);
+	return String_CaselessEnds(path, &e);
+}
+
+static void BM_ExtendBounds(Vec3* min, Vec3* max, Vec3 p) {
+	if (p.x < min->x) min->x = p.x;
+	if (p.y < min->y) min->y = p.y;
+	if (p.z < min->z) min->z = p.z;
+	if (p.x > max->x) max->x = p.x;
+	if (p.y > max->y) max->y = p.y;
+	if (p.z > max->z) max->z = p.z;
+}
+
+/* Reported by the glTF loader */
+void Gltf_LogMsg(const char* msg) { BM_Msg1("%c", msg); }
 
 
 /*########################################################################################################################*
@@ -271,9 +321,14 @@ static void BM_FreeChunks(void) {
 }
 
 static void BM_FreeGpu(void) {
+	int i;
 	BM_FreeChunks();
 	Gfx_DeleteDynamicVb(&bm_dynVb);
 	bm_dynCap = 0;
+	for (i = 0; i < bm_numSkinVbs; i++) {
+		Gfx_DeleteDynamicVb(&bm_skinVbs[i]);
+	}
+	bm_numSkinVbs = 0;
 }
 
 static void BM_FreeTexture(void) {
@@ -309,6 +364,15 @@ static void BM_ResetMesh(void) {
 	bm_animTris   = 0;
 	bm_armPart    = -1;
 	bm_chunksFailed = false;
+
+	Gltf_Free(&bm_gltf);
+	Gltf_Pose_Free(&bm_pose);
+	Mem_Free(bm_gltfArm);
+	bm_gltfArm = NULL; bm_gltfArmCount = 0;
+	bm_isGltf   = false;
+	bm_headNode = -1;
+	bm_clipIdle = -1; bm_clipWalk = -1; bm_clipJump = -1; bm_clipFly = -1; bm_forcedClip = -1;
+	Mem_Set(bm_animStates, 0, sizeof(bm_animStates));
 }
 
 
@@ -410,6 +474,12 @@ static void BM_ParseFace(cc_string* line) {
 	}
 }
 
+/* Positions and pivots in the file are scaled (and turned around when flip is on) */
+static Vec3 BM_ObjPoint(float x, float y, float z) {
+	Vec3 v = BM_Vec3(x * bm_scale, y * bm_scale, z * bm_scale);
+	return bm_flip ? BM_Flipped(v) : v;
+}
+
 /* key is the word following '#', line is the rest of the comment */
 static void BM_ParseMetadata(cc_string* key, cc_string* line) {
 	cc_string name;
@@ -424,7 +494,7 @@ static void BM_ParseMetadata(cc_string* key, cc_string* line) {
 
 		pivot = &bm_pivots[bm_numPivots++];
 		BM_CopyName(pivot->name, &pivot->nameLen, &name);
-		pivot->pos = BM_Vec3(f[0] * bm_scale, f[1] * bm_scale, f[2] * bm_scale);
+		pivot->pos = BM_ObjPoint(f[0], f[1], f[2]);
 	} else if (String_CaselessEqualsConst(key, "eye")) {
 		if (!BM_ParseFloats(line, f, 1)) return;
 		bm_eyeY  = f[0] * bm_scale;
@@ -453,7 +523,7 @@ static void BM_ParseLine(cc_string* line) {
 			if (!(mem = BM_Grow(bm_pos, &bm_capPos, bm_numPos + 1, sizeof(Vec3), "positions"))) return;
 			bm_pos = (Vec3*)mem;
 		}
-		bm_pos[bm_numPos++] = BM_Vec3(f[0] * bm_scale, f[1] * bm_scale, f[2] * bm_scale);
+		bm_pos[bm_numPos++] = BM_ObjPoint(f[0], f[1], f[2]);
 	} else if (String_CaselessEqualsConst(&key, "vt")) {
 		if (!BM_ParseFloats(line, f, 2)) return;
 		if (bm_numUV >= bm_capUV) {
@@ -465,12 +535,14 @@ static void BM_ParseLine(cc_string* line) {
 		bm_uv[bm_numUV].y = 1.0f - f[1];
 		bm_numUV++;
 	} else if (String_CaselessEqualsConst(&key, "vn")) {
+		Vec3 n;
 		if (!BM_ParseFloats(line, f, 3)) return;
 		if (bm_numNrm >= bm_capNrm) {
 			if (!(mem = BM_Grow(bm_nrm, &bm_capNrm, bm_numNrm + 1, sizeof(Vec3), "normals"))) return;
 			bm_nrm = (Vec3*)mem;
 		}
-		bm_nrm[bm_numNrm++] = BM_Vec3(f[0], f[1], f[2]);
+		n = BM_Vec3(f[0], f[1], f[2]);
+		bm_nrm[bm_numNrm++] = bm_flip ? BM_Flipped(n) : n;
 	} else if (String_CaselessEqualsConst(&key, "f")) {
 		BM_ParseFace(line);
 	} else if (String_CaselessEqualsConst(&key, "o")) {
@@ -536,13 +608,7 @@ static void BM_ComputePartBounds(struct BM_Part* part) {
 	Vec3_Negate(&part->max, &part->min);
 
 	for (i = part->first; i < part->first + part->count; i++) {
-		Vec3 p = bm_corners[i].pos;
-		if (p.x < part->min.x) part->min.x = p.x;
-		if (p.y < part->min.y) part->min.y = p.y;
-		if (p.z < part->min.z) part->min.z = p.z;
-		if (p.x > part->max.x) part->max.x = p.x;
-		if (p.y > part->max.y) part->max.y = p.y;
-		if (p.z > part->max.z) part->max.z = p.z;
+		BM_ExtendBounds(&part->min, &part->max, bm_corners[i].pos);
 	}
 }
 
@@ -571,7 +637,13 @@ static void BM_AssignPivot(struct BM_Part* part) {
 	}
 }
 
-static void BM_FinishLoad(void) {
+static void BM_ApplyDefaults(void) {
+	if (!bm_hasEye)  bm_eyeY = bm_min.y + (bm_max.y - bm_min.y) * (BM_HUMAN_EYE_Y / 2.0f);
+	if (!bm_hasSize) bm_size = BM_Vec3(BM_HUMAN_SIZE_X, BM_HUMAN_SIZE_Y, BM_HUMAN_SIZE_Z);
+	bm_nameY = bm_max.y + 0.1f;
+}
+
+static void BM_FinishObjLoad(void) {
 	int i, kept = 0, animTris;
 
 	/* Drop parts that ended up without any faces */
@@ -592,13 +664,8 @@ static void BM_FinishLoad(void) {
 		BM_ComputePartBounds(part);
 		part->kind = BM_ClassifyName(&name);
 		BM_AssignPivot(part);
-
-		if (part->min.x < bm_min.x) bm_min.x = part->min.x;
-		if (part->min.y < bm_min.y) bm_min.y = part->min.y;
-		if (part->min.z < bm_min.z) bm_min.z = part->min.z;
-		if (part->max.x > bm_max.x) bm_max.x = part->max.x;
-		if (part->max.y > bm_max.y) bm_max.y = part->max.y;
-		if (part->max.z > bm_max.z) bm_max.z = part->max.z;
+		BM_ExtendBounds(&bm_min, &bm_max, part->min);
+		BM_ExtendBounds(&bm_min, &bm_max, part->max);
 	}
 
 	/* All animated parts share one dynamic vertex buffer, so demote parts */
@@ -632,10 +699,7 @@ static void BM_FinishLoad(void) {
 	if (bm_armPart >= 0 && bm_parts[bm_armPart].count / 3 > BM_CHUNK_TRIS) {
 		BM_Msg("Arm part has too many triangles, first person arm will be cut off");
 	}
-
-	if (!bm_hasEye)  bm_eyeY = bm_min.y + (bm_max.y - bm_min.y) * (BM_HUMAN_EYE_Y / 2.0f);
-	if (!bm_hasSize) bm_size = BM_Vec3(BM_HUMAN_SIZE_X, BM_HUMAN_SIZE_Y, BM_HUMAN_SIZE_Z);
-	bm_nameY  = bm_max.y + 0.1f;
+	BM_ApplyDefaults();
 	bm_loaded = bm_numCorners > 0;
 }
 
@@ -660,7 +724,7 @@ static cc_bool BM_LoadObj(const cc_string* path) {
 	}
 	file.Close(&file);
 
-	BM_FinishLoad();
+	BM_FinishObjLoad();
 	if (bm_badFaces) BM_Msg1("Skipped %i faces with invalid indices", &bm_badFaces);
 	BM_FreeScratch();
 
@@ -672,24 +736,11 @@ static cc_bool BM_LoadObj(const cc_string* path) {
 /*########################################################################################################################*
 *----------------------------------------------------------Texture--------------------------------------------------------*
 *#########################################################################################################################*/
-static cc_bool BM_LoadTexture(const cc_string* path) {
-	struct Stream stream;
-	struct Bitmap bmp;
-	cc_result res;
-	int w, h, w2, h2, y;
-
-	res = Stream_OpenFile(&stream, path);
-	if (res) { BM_Msg2("Couldn't open texture %s (error %h)", path, &res); return false; }
-	res = Png_Decode(&bmp, &stream);
-	stream.Close(&stream);
-	if (res) {
-		BM_Msg2("Couldn't decode texture %s (error %h)", path, &res);
-		Mem_Free(bmp.scan0);
-		return false;
-	}
+/* Takes ownership of bmp, padding it to power of two dimensions if needed */
+static cc_bool BM_AdoptTexture(struct Bitmap bmp) {
+	int w = bmp.width, h = bmp.height, w2, h2, y;
 	BM_FreeTexture();
 
-	w = bmp.width; h = bmp.height;
 	if (Gfx.MaxTexWidth && (w > Gfx.MaxTexWidth || h > Gfx.MaxTexHeight)) {
 		BM_Msg2("Texture is too large for this GPU (max %i x %i)", &Gfx.MaxTexWidth, &Gfx.MaxTexHeight);
 		Mem_Free(bmp.scan0);
@@ -714,6 +765,23 @@ static cc_bool BM_LoadTexture(const cc_string* path) {
 	return true;
 }
 
+static cc_bool BM_LoadTexture(const cc_string* path) {
+	struct Stream stream;
+	struct Bitmap bmp;
+	cc_result res;
+
+	res = Stream_OpenFile(&stream, path);
+	if (res) { BM_Msg2("Couldn't open texture %s (error %h)", path, &res); return false; }
+	res = Png_Decode(&bmp, &stream);
+	stream.Close(&stream);
+	if (res) {
+		BM_Msg2("Couldn't decode texture %s (error %h)", path, &res);
+		Mem_Free(bmp.scan0);
+		return false;
+	}
+	return BM_AdoptTexture(bmp);
+}
+
 static cc_bool BM_EnsureTexture(void) {
 	if (bm_texId) return true;
 	if (!bm_bmp.scan0 || Gfx.LostContext) return false;
@@ -721,6 +789,146 @@ static cc_bool BM_EnsureTexture(void) {
 	bm_texId = Gfx_CreateTexture(&bm_bmp, TEXTURE_FLAG_MANAGED, false);
 	bm_modelTex.texID = bm_texId;
 	return bm_texId != 0;
+}
+
+
+/*########################################################################################################################*
+*--------------------------------------------------------glTF loading-----------------------------------------------------*
+*#########################################################################################################################*/
+/* Whether node or one of its ancestors is the given node */
+static cc_bool BM_NodeIsUnder(int node, int ancestor) {
+	int depth = 0;
+	while (node >= 0 && depth++ < 256) {
+		if (node == ancestor) return true;
+		node = bm_gltf.nodes[node].parent;
+	}
+	return false;
+}
+
+/* Palette entry with the largest weight of a corner, or -1 */
+static int BM_HeaviestNode(const struct GltfCorner* c) {
+	int j, best = -1;
+	float bestW = 0.0f;
+	for (j = 0; j < 4; j++) {
+		if (c->weights[j] > bestW && c->joints[j] < bm_gltf.numPalette) { bestW = c->weights[j]; best = c->joints[j]; }
+	}
+	return best < 0 ? -1 : bm_gltf.paletteNode[best];
+}
+
+/* Finds the topmost node of the right (or failing that left) arm chain, or -1 */
+static int BM_FindArmRoot(void) {
+	int i, kind, wanted, best = -1;
+	for (wanted = BM_PART_RIGHT_ARM; wanted >= BM_PART_LEFT_ARM && best < 0; wanted--) {
+		for (i = 0; i < bm_gltf.numNodes; i++) {
+			cc_string name = Gltf_NodeName(&bm_gltf, i);
+			int parent = bm_gltf.nodes[i].parent;
+			kind = BM_ClassifyName(&name);
+			if (kind != wanted) continue;
+			/* Skip bones whose parent is already part of the same arm */
+			if (parent >= 0) {
+				cc_string parentName = Gltf_NodeName(&bm_gltf, parent);
+				if (BM_ClassifyName(&parentName) == wanted) continue;
+			}
+			best = i;
+			break;
+		}
+	}
+	return best;
+}
+
+static void BM_BuildGltfArm(void) {
+	int armRoot = BM_FindArmRoot(), i, count = 0;
+	Vec3 pos, nrm;
+	bm_armPart = -1;
+	if (armRoot < 0) return;
+
+	for (i = 0; i < bm_gltf.numCorners; i++) {
+		if (BM_NodeIsUnder(BM_HeaviestNode(&bm_gltf.corners[i]), armRoot)) count++;
+	}
+	/* Triangles are whole, so counts are multiples of 3 as long as a triangle's corners agree; */
+	/* be safe and round down */
+	count -= count % 3;
+	if (!count) return;
+	if (count / 3 > BM_CHUNK_TRIS) count = BM_CHUNK_TRIS * 3;
+
+	bm_gltfArm = (struct BM_Corner*)Mem_TryAlloc(count, sizeof(struct BM_Corner));
+	if (!bm_gltfArm) return;
+
+	for (i = 0; i + 2 < bm_gltf.numCorners && bm_gltfArmCount < count; i += 3) {
+		int k;
+		if (!BM_NodeIsUnder(BM_HeaviestNode(&bm_gltf.corners[i]), armRoot)) continue;
+		for (k = 0; k < 3; k++) {
+			struct BM_Corner* dst = &bm_gltfArm[bm_gltfArmCount++];
+			Gltf_SkinCorner(&bm_gltf, &bm_pose, &bm_gltf.corners[i + k], &pos, &nrm);
+			dst->pos = pos; dst->nrm = nrm;
+			dst->u = bm_gltf.corners[i + k].u;
+			dst->v = bm_gltf.corners[i + k].v;
+		}
+	}
+	bm_gltfArmPivot = Gltf_NodePosition(&bm_gltf, &bm_pose, armRoot);
+	bm_armPart = armRoot; /* only used as "has an arm" for glTF models */
+}
+
+static void BM_PickClips(void) {
+	static const char* const idleWords[] = { "idle", "stand", "rest", "breath" };
+	static const char* const walkWords[] = { "walk", "run", "move", "sprint" };
+	static const char* const jumpWords[] = { "jump", "fall", "air" };
+	static const char* const flyWords[]  = { "fly", "float", "hover", "swim" };
+
+	bm_clipIdle = Gltf_FindClip(&bm_gltf, idleWords, 4);
+	bm_clipWalk = Gltf_FindClip(&bm_gltf, walkWords, 4);
+	bm_clipJump = Gltf_FindClip(&bm_gltf, jumpWords, 3);
+	bm_clipFly  = Gltf_FindClip(&bm_gltf, flyWords,  4);
+
+	/* A model with clips but no recognisable names just plays the first one */
+	if (bm_gltf.numClips && bm_clipIdle < 0 && bm_clipWalk < 0) bm_clipIdle = 0;
+}
+
+static cc_bool BM_LoadGltf(const cc_string* path) {
+	int i;
+	Vec3 pos, nrm;
+	BM_ResetMesh();
+
+	/* glTF's front is +Z, so turn the model around unless the user asked not to */
+	if (!Gltf_Load(&bm_gltf, path, bm_scale, !bm_flip)) {
+		BM_Msg1("Couldn't load %s", path);
+		Gltf_Free(&bm_gltf);
+		return false;
+	}
+	if (!Gltf_Pose_Alloc(&bm_gltf, &bm_pose)) { BM_Msg("Out of memory"); Gltf_Free(&bm_gltf); return false; }
+
+	/* Rest pose gives the bounds, the first person arm and the head node */
+	Gltf_EvalPose(&bm_gltf, &bm_pose, -1, 0.0f, -1, 0.0f, 0.0f);
+	bm_min = Vec3_BigPos();
+	Vec3_Negate(&bm_max, &bm_min);
+	for (i = 0; i < bm_gltf.numCorners; i++) {
+		Gltf_SkinCorner(&bm_gltf, &bm_pose, &bm_gltf.corners[i], &pos, &nrm);
+		BM_ExtendBounds(&bm_min, &bm_max, pos);
+	}
+
+	for (i = 0; i < bm_gltf.numNodes; i++) {
+		cc_string name = Gltf_NodeName(&bm_gltf, i);
+		if (BM_ClassifyName(&name) == BM_PART_HEAD) { bm_headNode = i; break; }
+	}
+
+	BM_BuildGltfArm();
+	BM_PickClips();
+
+	bm_hasEye = bm_gltf.hasEye; bm_eyeY = bm_gltf.eyeY * bm_scale;
+	bm_hasSize = bm_gltf.hasSize;
+	bm_size = BM_Vec3(bm_gltf.size.x * bm_scale, bm_gltf.size.y * bm_scale, bm_gltf.size.z * bm_scale);
+	BM_ApplyDefaults();
+
+	/* Embedded texture, if any; ownership moves to the texture code */
+	if (bm_gltf.texture.scan0) {
+		struct Bitmap bmp = bm_gltf.texture;
+		bm_gltf.texture.scan0 = NULL;
+		BM_AdoptTexture(bmp);
+	}
+
+	bm_isGltf = true;
+	bm_loaded = true;
+	return true;
 }
 
 
@@ -785,6 +993,13 @@ static PackedCol BM_Shade(PackedCol col, const Vec3* n, cc_bool noShade) {
 	return PackedCol_Scale(col, factor / sum);
 }
 
+static void BM_WriteVertex(struct VertexTextured* dst, Vec3 p, const Vec3* n, float u, float v, PackedCol col, cc_bool noShade) {
+	dst->x = p.x; dst->y = p.y; dst->z = p.z;
+	dst->Col = BM_Shade(col, n, noShade);
+	dst->U   = u * bm_uScale;
+	dst->V   = v * bm_vScale;
+}
+
 /* Writes one triangle as a degenerate quad (4 vertices, last one repeated) */
 static void BM_WriteTri(struct VertexTextured* dst, const struct BM_Corner* c, PackedCol col, cc_bool noShade, const struct BM_Xform* x) {
 	int i;
@@ -796,10 +1011,7 @@ static void BM_WriteTri(struct VertexTextured* dst, const struct BM_Corner* c, P
 			Vec3_AddBy(&p, &x->add);
 			if (x->rot) p = BM_Rot_Apply(x->rot, p);
 		}
-		dst->x = p.x; dst->y = p.y; dst->z = p.z;
-		dst->Col = BM_Shade(col, &c[i].nrm, noShade);
-		dst->U   = c[i].u * bm_uScale;
-		dst->V   = c[i].v * bm_vScale;
+		BM_WriteVertex(dst, p, &c[i].nrm, c[i].u, c[i].v, col, noShade);
 	}
 	*dst = *(dst - 1);
 }
@@ -854,8 +1066,13 @@ static cc_bool BM_BuildChunks(PackedCol col, cc_bool noShade) {
 	return true;
 }
 
+static int BM_ArmTris(void) {
+	if (bm_isGltf) return bm_gltfArmCount / 3;
+	return bm_armPart >= 0 ? bm_parts[bm_armPart].count / 3 : 0;
+}
+
 static cc_bool BM_EnsureDynVb(void) {
-	int armTris = bm_armPart >= 0 ? bm_parts[bm_armPart].count / 3 : 0;
+	int armTris = BM_ArmTris();
 	int needed  = bm_animTris > armTris ? bm_animTris : armTris;
 	if (needed > BM_CHUNK_TRIS) needed = BM_CHUNK_TRIS;
 	needed *= 4;
@@ -887,7 +1104,7 @@ static void BM_PartRot(const struct Entity* e, const struct BM_Part* part, struc
 	}
 }
 
-static void BM_DrawAnimated(struct Entity* e, PackedCol col) {
+static void BM_DrawAnimatedParts(struct Entity* e, PackedCol col) {
 	struct VertexTextured* dst;
 	struct BM_Xform xform;
 	struct BM_Rot rot;
@@ -912,12 +1129,9 @@ static void BM_DrawAnimated(struct Entity* e, PackedCol col) {
 	Gfx_DrawVb_IndexedTris(total);
 }
 
-static void BM_Draw(struct Entity* e) {
-	PackedCol col = Models.Cols[0];
+static void BM_DrawObj(struct Entity* e, PackedCol col) {
 	int i;
-	if (!bm_loaded || Gfx.LostContext || bm_chunksFailed) return;
-	if (!BM_EnsureTexture()) return;
-	Gfx_BindTexture(bm_texId);
+	if (bm_chunksFailed) return;
 
 	if (bm_staticTris) {
 		/* Lighting is baked into the vertices, so rebuild when the entity's colour changes */
@@ -929,23 +1143,141 @@ static void BM_Draw(struct Entity* e) {
 			Gfx_DrawVb_IndexedTris(bm_chunkCounts[i]);
 		}
 	}
-	BM_DrawAnimated(e, col);
+	BM_DrawAnimatedParts(e, col);
+}
+
+
+/*########################################################################################################################*
+*------------------------------------------------------glTF animation-----------------------------------------------------*
+*#########################################################################################################################*/
+static struct BM_AnimState* BM_GetAnimState(struct Entity* e) {
+	struct BM_AnimState* oldest = &bm_animStates[0];
+	int i;
+	for (i = 0; i < BM_MAX_ANIM_STATES; i++) {
+		struct BM_AnimState* s = &bm_animStates[i];
+		if (s->entity == e) { s->lastUsed = Game.Time; return s; }
+		if (!s->entity || s->lastUsed < oldest->lastUsed) oldest = s;
+	}
+
+	oldest->entity    = e;
+	oldest->clip      = -2; /* forces a clip start */
+	oldest->clipStart = Game.Time;
+	oldest->lastUsed  = Game.Time;
+	return oldest;
+}
+
+static int BM_ChooseClip(struct Entity* e) {
+	cc_bool moving = e->Anim.Swing > 0.05f, flying = false;
+	if (bm_forcedClip >= 0) return bm_forcedClip;
+	if (Entities.CurPlayer && e == &Entities.CurPlayer->Base) flying = Entities.CurPlayer->Hacks.Flying;
+
+	if (flying && bm_clipFly >= 0) return bm_clipFly;
+	if (!e->OnGround && !flying) {
+		if (bm_clipJump >= 0) return bm_clipJump;
+		if (bm_clipFly  >= 0) return bm_clipFly;
+	}
+	if (moving && bm_clipWalk >= 0) return bm_clipWalk;
+	if (bm_clipIdle >= 0) return bm_clipIdle;
+	return bm_clipWalk;
+}
+
+static float BM_ClipTime(struct Entity* e, int clip) {
+	struct BM_AnimState* state = BM_GetAnimState(e);
+	double elapsed, duration;
+	if (state->clip != clip) { state->clip = clip; state->clipStart = Game.Time; }
+	if (clip < 0) return 0.0f;
+
+	duration = bm_gltf.clips[clip].duration;
+	elapsed  = (Game.Time - state->clipStart) * bm_animSpeed;
+	if (duration <= 0.0) return 0.0f;
+	/* Loop */
+	elapsed -= duration * (double)(long)(elapsed / duration);
+	return (float)elapsed;
+}
+
+static cc_bool BM_EnsureSkinVbs(void) {
+	int needed = (bm_gltf.numCorners / 3 + BM_CHUNK_TRIS - 1) / BM_CHUNK_TRIS, i;
+	if (needed > BM_MAX_CHUNKS) needed = BM_MAX_CHUNKS;
+	if (bm_numSkinVbs >= needed) return true;
+
+	for (i = bm_numSkinVbs; i < needed; i++) {
+		int tris = bm_gltf.numCorners / 3 - i * BM_CHUNK_TRIS;
+		if (tris > BM_CHUNK_TRIS) tris = BM_CHUNK_TRIS;
+		bm_skinVbs[i] = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, tris * 4);
+		if (!bm_skinVbs[i]) return false;
+		bm_numSkinVbs = i + 1;
+	}
+	return true;
+}
+
+static void BM_DrawGltf(struct Entity* e, PackedCol col) {
+	int clip = BM_ChooseClip(e), chunk, i, tris, t, totalTris;
+	float time = BM_ClipTime(e, clip);
+	float pitch = 0.0f, yaw = 0.0f;
+	Vec3 pos, nrm;
+	if (!BM_EnsureSkinVbs()) return;
+
+	if (bm_headLook && bm_headNode >= 0) {
+		/* Same angles the humanoid head uses: pitch, plus how far the head is turned from the body */
+		pitch = -e->Pitch * MATH_DEG2RAD * bm_headLook;
+		yaw   = (e->Yaw - e->RotY) * MATH_DEG2RAD * bm_headLook;
+	}
+	Gltf_EvalPose(&bm_gltf, &bm_pose, clip, time, bm_headNode, pitch, yaw);
+
+	totalTris = bm_gltf.numCorners / 3;
+	for (chunk = 0; chunk < bm_numSkinVbs; chunk++) {
+		struct VertexTextured* dst;
+		tris = totalTris - chunk * BM_CHUNK_TRIS;
+		if (tris > BM_CHUNK_TRIS) tris = BM_CHUNK_TRIS;
+		if (tris <= 0) break;
+
+		dst = (struct VertexTextured*)Gfx_LockDynamicVb(bm_skinVbs[chunk], VERTEX_FORMAT_TEXTURED, tris * 4);
+		for (t = 0; t < tris; t++, dst += 4) {
+			const struct GltfCorner* c = &bm_gltf.corners[(chunk * BM_CHUNK_TRIS + t) * 3];
+			for (i = 0; i < 3; i++) {
+				Gltf_SkinCorner(&bm_gltf, &bm_pose, &c[i], &pos, &nrm);
+				BM_WriteVertex(&dst[i], pos, &nrm, c[i].u, c[i].v, col, e->NoShade);
+			}
+			dst[3] = dst[2];
+		}
+		Gfx_UnlockDynamicVb(bm_skinVbs[chunk]);
+		Gfx_DrawVb_IndexedTris(tris * 4);
+	}
+}
+
+
+/*########################################################################################################################*
+*---------------------------------------------------------Model hooks-----------------------------------------------------*
+*#########################################################################################################################*/
+static void BM_Draw(struct Entity* e) {
+	PackedCol col = Models.Cols[0];
+	if (!bm_loaded || Gfx.LostContext) return;
+	if (!BM_EnsureTexture()) return;
+	Gfx_BindTexture(bm_texId);
+
+	if (bm_isGltf) { BM_DrawGltf(e, col); }
+	else { BM_DrawObj(e, col); }
 }
 
 /* Called by Model_RenderArm, which has already set up the view matrix so that */
 /* the humanoid's right arm appears in the bottom right of the screen */
 static void BM_DrawArm(struct Entity* e) {
-	const struct BM_Part* part;
+	const struct BM_Corner* corners;
 	struct VertexTextured* dst;
 	struct BM_Xform xform;
 	struct BM_Rot rot;
-	Vec3 armPivot;
+	Vec3 armPivot, partPivot;
 	int t, tris, total;
 
-	if (!bm_loaded || bm_armPart < 0 || Gfx.LostContext) return;
-	if (!BM_EnsureTexture() || !BM_EnsureDynVb()) return;
-	part  = &bm_parts[bm_armPart];
-	tris  = part->count / 3;
+	if (!bm_loaded || Gfx.LostContext) return;
+	if (bm_isGltf) {
+		corners = bm_gltfArm; tris = bm_gltfArmCount / 3; partPivot = bm_gltfArmPivot;
+	} else if (bm_armPart >= 0) {
+		corners = &bm_corners[bm_parts[bm_armPart].first]; tris = bm_parts[bm_armPart].count / 3; partPivot = bm_parts[bm_armPart].pivot;
+	} else {
+		return;
+	}
+	if (!tris || !BM_EnsureTexture() || !BM_EnsureDynVb()) return;
 	if (tris > BM_CHUNK_TRIS) tris = BM_CHUNK_TRIS;
 	total = tris * 4;
 
@@ -961,23 +1293,19 @@ static void BM_DrawArm(struct Entity* e) {
 	}
 
 	/* Move the arm so its own pivot sits where the humanoid's shoulder is */
-	xform.sub   = part->pivot;
+	xform.sub   = partPivot;
 	xform.scale = bm_armScale;
 	xform.add   = BM_Vec3(BM_HUMAN_ARM_PIVOT_X, BM_HUMAN_ARM_PIVOT_Y, 0.0f);
 	xform.rot   = &rot;
 
 	dst = (struct VertexTextured*)Gfx_LockDynamicVb(bm_dynVb, VERTEX_FORMAT_TEXTURED, total);
 	for (t = 0; t < tris; t++, dst += 4) {
-		BM_WriteTri(dst, &bm_corners[part->first + t * 3], Models.Cols[0], e->NoShade, &xform);
+		BM_WriteTri(dst, &corners[t * 3], Models.Cols[0], e->NoShade, &xform);
 	}
 	Gfx_UnlockDynamicVb(bm_dynVb);
 	Gfx_DrawVb_IndexedTris(total);
 }
 
-
-/*########################################################################################################################*
-*--------------------------------------------------------Model struct-----------------------------------------------------*
-*#########################################################################################################################*/
 static void  BM_MakeParts(void) { }
 static float BM_GetNameY(struct Entity* e) { return bm_loaded ? bm_nameY : 32.5f / 16.0f; }
 static float BM_GetEyeY(struct Entity* e)  { return bm_loaded ? bm_eyeY  : BM_HUMAN_EYE_Y; }
@@ -1033,19 +1361,26 @@ static void BM_DeriveTexturePath(void) {
 	String_AppendConst(&bm_texPath, ".png");
 }
 
+static cc_bool BM_LoadModelFile(const cc_string* path) {
+	if (BM_PathHasExt(path, ".glb") || BM_PathHasExt(path, ".gltf")) return BM_LoadGltf(path);
+	return BM_LoadObj(path);
+}
+
 static cc_bool BM_Reload(void) {
 	cc_bool wasApplied = BM_IsApplied();
 	int tris;
 	BM_DeriveTexturePath();
 
-	if (!BM_LoadObj(&bm_path)) return false;
-	if (!BM_LoadTexture(&bm_texPath)) {
+	if (!BM_LoadModelFile(&bm_path)) return false;
+	/* glTF files usually bring their own texture */
+	if (!bm_bmp.scan0 && !BM_LoadTexture(&bm_texPath)) {
 		BM_Msg("Model will be drawn untextured until a texture is loaded");
 	}
 
-	tris = bm_staticTris + bm_animTris;
+	tris = bm_isGltf ? bm_gltf.numCorners / 3 : bm_staticTris + bm_animTris;
 	BM_Msg2("Loaded %s (%i triangles)", &bm_path, &tris);
-	if (bm_armPart < 0) BM_Msg("No part named like an arm, so nothing is drawn in first person");
+	if (bm_isGltf) BM_Msg2("%i bones, %i animation clips", &bm_gltf.numNodes, &bm_gltf.numClips);
+	if (bm_armPart < 0) BM_Msg("No part or bone named like an arm, so nothing is drawn in first person");
 
 	/* Refresh collision/picking bounds if the player is already using the model */
 	if (wasApplied) BM_SetPlayerModel(BM_MODEL_NAME);
@@ -1094,18 +1429,59 @@ static cc_bool BM_ParseOnOff(const cc_string* str, cc_bool* value) {
 	return Convert_ParseBool(str, value);
 }
 
+static void BM_PrintClip(const char* role, int clip) {
+	cc_string name = Gltf_ClipName(&bm_gltf, clip);
+	if (clip < 0) { Chat_Add1("  &7%c&f: none", role); }
+	else { Chat_Add2("  &7%c&f: %s", role, &name); }
+}
+
 static void BM_PrintInfo(void) {
 	int i;
 	if (!bm_loaded) { BM_Msg("No model is loaded"); return; }
 	BM_Msg2("Model: %s, texture: %s", &bm_path, &bm_texPath);
-	BM_Msg2("Static triangles: %i, animated triangles: %i", &bm_staticTris, &bm_animTris);
 
+	if (bm_isGltf) {
+		int tris = bm_gltf.numCorners / 3;
+		cc_string head = Gltf_NodeName(&bm_gltf, bm_headNode);
+		cc_string arm  = Gltf_NodeName(&bm_gltf, bm_armPart);
+		BM_Msg2("glTF: %i triangles, %i bones", &tris, &bm_gltf.numNodes);
+		BM_Msg2("Head bone: %s, arm bone: %s", &head, &arm);
+		BM_PrintClip("idle", bm_clipIdle);
+		BM_PrintClip("walk", bm_clipWalk);
+		BM_PrintClip("jump", bm_clipJump);
+		BM_PrintClip("fly",  bm_clipFly);
+		for (i = 0; i < bm_gltf.numClips; i++) {
+			cc_string name = Gltf_ClipName(&bm_gltf, i);
+			float dur = bm_gltf.clips[i].duration;
+			Chat_Add3("  &7clip %i&f: %s (%f2 s)", &i, &name, &dur);
+		}
+		return;
+	}
+
+	BM_Msg2("Static triangles: %i, animated triangles: %i", &bm_staticTris, &bm_animTris);
 	for (i = 0; i < bm_numParts; i++) {
 		cc_string name = BM_PartName(&bm_parts[i]);
 		int tris = bm_parts[i].count / 3;
 		Chat_Add4("  &7%s&f: %c, %i triangles%c", &name, bm_kindNames[bm_parts[i].kind], &tris,
 			i == bm_armPart ? " (first person arm)" : "");
 	}
+}
+
+static void BM_CommandAnim(const cc_string* rest) {
+	int clip;
+	if (!bm_isGltf) { BM_Msg("Only glTF models have animation clips"); return; }
+	if (!rest->length || String_CaselessEqualsConst(rest, "auto")) {
+		bm_forcedClip = -1;
+		BM_Msg("Clips are chosen automatically from movement");
+		return;
+	}
+	if (String_CaselessEqualsConst(rest, "list")) { BM_PrintInfo(); return; }
+
+	clip = Gltf_FindClipByName(&bm_gltf, rest);
+	if (clip < 0 && Convert_ParseInt(rest, &clip) && (clip < 0 || clip >= bm_gltf.numClips)) clip = -1;
+	if (clip < 0) { BM_Msg1("No clip named %s", rest); return; }
+	bm_forcedClip = clip;
+	BM_Msg1("Playing clip %s", rest);
 }
 
 static void BM_Command(const cc_string* args, int argsCount) {
@@ -1115,8 +1491,9 @@ static void BM_Command(const cc_string* args, int argsCount) {
 
 	line = argsCount ? args[0] : String_Empty;
 	if (!BM_NextToken(&line, &sub)) {
-		BM_Msg("&a/client blendermodel &fload [file] | apply | reset | info");
-		BM_Msg("&a/client blendermodel &fscale [n] | armscale [n] | auto [on/off] | force [on/off]");
+		BM_Msg("&a/client blendermodel &fload [file] | apply | reset | info | anim [name/auto]");
+		BM_Msg("&a/client blendermodel &fscale [n] | armscale [n] | animspeed [n] | flip [on/off]");
+		BM_Msg("&a/client blendermodel &fauto [on/off] | force [on/off] | headlook [on/off/invert]");
 		return;
 	}
 	rest = line;
@@ -1140,6 +1517,8 @@ static void BM_Command(const cc_string* args, int argsCount) {
 		BM_Msg("Back to the humanoid model (force is now off)");
 	} else if (String_CaselessEqualsConst(&sub, "info")) {
 		BM_PrintInfo();
+	} else if (String_CaselessEqualsConst(&sub, "anim")) {
+		BM_CommandAnim(&rest);
 	} else if (String_CaselessEqualsConst(&sub, "scale")) {
 		if (!rest.length) { BM_Msg1("Scale is %f3", &bm_scale); return; }
 		if (!Convert_ParseFloat(&rest, &value) || value <= 0.0f) { BM_Msg("Scale must be a positive number"); return; }
@@ -1151,6 +1530,23 @@ static void BM_Command(const cc_string* args, int argsCount) {
 		if (!Convert_ParseFloat(&rest, &value) || value <= 0.0f) { BM_Msg("Arm scale must be a positive number"); return; }
 		bm_armScale = value;
 		BM_SaveFloat(OPT_BM_ARMSCALE, value);
+	} else if (String_CaselessEqualsConst(&sub, "animspeed")) {
+		if (!rest.length) { BM_Msg1("Animation speed is %f3", &bm_animSpeed); return; }
+		if (!Convert_ParseFloat(&rest, &value) || value <= 0.0f) { BM_Msg("Speed must be a positive number"); return; }
+		bm_animSpeed = value;
+		BM_SaveFloat(OPT_BM_ANIMSPEED, value);
+	} else if (String_CaselessEqualsConst(&sub, "flip")) {
+		if (!BM_ParseOnOff(&rest, &flag)) { BM_Msg1("Flip (turn the model around) is %t", &bm_flip); return; }
+		bm_flip = flag;
+		BM_SaveBool(OPT_BM_FLIP, flag);
+		BM_Reload();
+	} else if (String_CaselessEqualsConst(&sub, "headlook")) {
+		if (String_CaselessEqualsConst(&rest, "invert")) { bm_headLook = -1; }
+		else if (BM_ParseOnOff(&rest, &flag)) { bm_headLook = flag ? 1 : 0; }
+		else { BM_Msg1("Head look is %i (1 on, 0 off, -1 inverted)", &bm_headLook); return; }
+		Options_SetInt(OPT_BM_HEADLOOK, bm_headLook);
+		Options_SaveIfChanged();
+		BM_Msg1("Head look is now %i", &bm_headLook);
 	} else if (String_CaselessEqualsConst(&sub, "auto")) {
 		if (!BM_ParseOnOff(&rest, &flag)) { BM_Msg1("Auto apply on map load is %t", &bm_autoApply); return; }
 		bm_autoApply = flag;
@@ -1170,9 +1566,9 @@ static struct ChatCommand bm_cmd = {
 	"BlenderModel", BM_Command, COMMAND_FLAG_UNSPLIT_ARGS,
 	{
 		"&a/client blendermodel load [file]",
-		"&eLoads an OBJ model (and file.png) exported from Blender.",
-		"&a/client blendermodel apply / reset / info / scale / armscale",
-		"&a/client blendermodel auto [on/off] / force [on/off]",
+		"&eLoads an OBJ (and file.png) or glTF (.glb/.gltf) model exported from Blender.",
+		"&a/client blendermodel apply / reset / info / anim / scale / armscale / animspeed",
+		"&a/client blendermodel flip / auto [on/off] / force [on/off] / headlook",
 		"&eauto applies the model on map load, force re-applies it if the server changes it.",
 	}
 };
@@ -1184,10 +1580,13 @@ static struct ChatCommand bm_cmd = {
 static void BM_LoadOptions(void) {
 	Options_Get(OPT_BM_FILE,    &bm_path,    BM_DEFAULT_FILE);
 	Options_Get(OPT_BM_TEXTURE, &bm_texPath, "");
-	bm_scale     = Options_GetFloat(OPT_BM_SCALE,    0.001f, 1000.0f, 1.0f);
-	bm_armScale  = Options_GetFloat(OPT_BM_ARMSCALE, 0.001f, 1000.0f, 1.0f);
+	bm_scale     = Options_GetFloat(OPT_BM_SCALE,     0.001f, 1000.0f, 1.0f);
+	bm_armScale  = Options_GetFloat(OPT_BM_ARMSCALE,  0.001f, 1000.0f, 1.0f);
+	bm_animSpeed = Options_GetFloat(OPT_BM_ANIMSPEED, 0.001f, 1000.0f, 1.0f);
 	bm_autoApply = Options_GetBool(OPT_BM_AUTO,  true);
 	bm_force     = Options_GetBool(OPT_BM_FORCE, false);
+	bm_flip      = Options_GetBool(OPT_BM_FLIP,  false);
+	bm_headLook  = Options_GetInt(OPT_BM_HEADLOOK, -1, 1, 1);
 }
 
 static void BM_Init(void) {

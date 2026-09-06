@@ -4,7 +4,7 @@ To find the functions and variables available for use in plugins, look for `CC_A
 
 [Source code of some actual plugins](https://github.com/ClassiCube/ClassiCube-Plugins/)
 
-This repository also contains an example plugin in [plugins/BlenderModel](/plugins/BlenderModel), which registers a custom entity model loaded from an OBJ file.
+This repository also contains an example plugin in [plugins/BlenderModel](/plugins/BlenderModel), which registers a custom entity model loaded from an OBJ or glTF file (with skinned animation).
 
 ### Setup
 

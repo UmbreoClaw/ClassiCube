@@ -3,7 +3,7 @@
 # Writes an OBJ in exactly the form the BlenderModel plugin expects, plus the
 # extra metadata it can use, and optionally saves the model's texture next to it:
 #   - one "o <name>" part per mesh object (modifiers applied, triangulated)
-#   - Y up, -Z forward, 1 Blender unit = 1 block (the plugin can rescale later)
+#   - Y up, the Blender front (-Y) becomes the game front (-Z), 1 unit = 1 block
 #   - "# pivot <name> x y z" using each object's origin, so animated parts
 #     (Head, Arm.L, Arm.R, Leg.L, Leg.R ...) rotate about the point you chose
 #   - "# eye <y>" and "# size <w> <h> <l>" from the scene custom properties
@@ -32,11 +32,12 @@ from bpy.props import BoolProperty, FloatProperty, StringProperty
 from bpy_extras.io_utils import ExportHelper
 from mathutils import Matrix, Vector
 
-# Blender is Z up with -Y forward; ClassiCube (and OBJ convention) is Y up with -Z forward.
-# This rotation has determinant +1, so face winding is preserved.
-AXIS_CONVERSION = Matrix(((1, 0, 0, 0),
+# Blender is Z up and a character built in the front view faces -Y; ClassiCube is
+# Y up and its models face -Z. Blender (x, y, z) therefore becomes (-x, z, y):
+# a proper rotation (determinant +1), so face winding is preserved.
+AXIS_CONVERSION = Matrix(((-1, 0, 0, 0),
                           (0, 0, 1, 0),
-                          (0, -1, 0, 0),
+                          (0, 1, 0, 0),
                           (0, 0, 0, 1)))
 
 
