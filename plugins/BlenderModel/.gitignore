@@ -1,0 +1,7 @@
+BlenderModel.so
+BlenderModel.dylib
+BlenderModel.dll
+test/test_load
+test/*.o
+test/edge.obj
+__pycache__/

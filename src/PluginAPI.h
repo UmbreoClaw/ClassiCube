@@ -1,13 +1,13 @@
 #ifndef CC_PLUGIN_H
 #define CC_PLUGIN_H
-#include "PluginAPI.h"
-CC_BEGIN_HEADER
 
 /* Represents the interface for plugins.
    Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 */
 
-#if !defined INTERNAL_PLUGIN_HDR && defined CC_BUILD_WIN
+/* NOTE: CC_API/CC_VAR must be defined before Core.h is included, as Core.h */
+/*  otherwise defines them as 'export' rather than 'import' */
+#if !defined INTERNAL_PLUGIN_HDR && defined _WIN32
 	// When compiling external plugins, functions/variables need to be imported from ClassiCube exe instead of exporting them
 	// need to specifically declare as imported for MSVC
 	#define CC_API __declspec(dllimport)
@@ -24,6 +24,9 @@ CC_BEGIN_HEADER
 	// but just to be on the safe side, ensure that it's always exported
 	#define PLUGIN_EXPORT __attribute__((visibility("default")))
 #endif
+
+#include "Core.h"
+CC_BEGIN_HEADER
 
 /* All plugins are required to have the following */
 /*   PLUGIN_EXPORT int Plugin_ApiVersion = GAME_API_VER; */
