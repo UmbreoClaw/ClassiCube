@@ -1,0 +1,52 @@
+/* Edge-aware a-trous wavelet blur for the indirect lighting term.
+   Run several times with increasing step sizes (1, 2, 4). Pixels with a long
+   accumulated history are already converged and get blurred less. */
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, binding = 0) uniform readonly  image2D gbufCur;
+layout(rgba32f, binding = 1) uniform readonly  image2D normalCur;
+layout(rgba16f, binding = 2) uniform readonly  image2D srcImg;
+layout(rgba16f, binding = 3) uniform writeonly image2D dstImg;
+
+uniform int stepSize;
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	if (px.x >= screen.x || px.y >= screen.y) return;
+
+	vec4 g = imageLoad(gbufCur, px);
+	vec4 c = imageLoad(srcImg, px);
+	if (g.w < 0.0) { imageStore(dstImg, px, c); return; }
+
+	vec4  n = imageLoad(normalCur, px);
+	/* Less blur once enough samples have accumulated */
+	float historyScale = clamp(1.0 - c.w / 48.0, 0.15, 1.0);
+	float kernel[5] = float[5](1.0 / 16.0, 1.0 / 4.0, 3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
+
+	vec3  sum = vec3(0.0);
+	float wsum = 0.0;
+
+	for (int j = -2; j <= 2; j++) {
+		for (int i = -2; i <= 2; i++) {
+			ivec2 q = px + ivec2(i, j) * stepSize;
+			if (q.x < 0 || q.y < 0 || q.x >= screen.x || q.y >= screen.y) continue;
+
+			vec4 gq = imageLoad(gbufCur, q);
+			if (gq.w < 0.0) continue;
+			vec4 nq = imageLoad(normalCur, q);
+			if (dot(nq.xyz, n.xyz) < 0.9) continue;
+
+			/* distance of the neighbour from this pixel's surface plane */
+			float planeDist = abs(dot(gq.xyz - g.xyz, n.xyz));
+			float w = kernel[i + 2] * kernel[j + 2] * exp(-planeDist * planeDist * 400.0);
+			if (i != 0 || j != 0) w *= historyScale;
+			if (abs(nq.w - n.w) > 0.5) w *= 0.25;
+
+			sum  += imageLoad(srcImg, q).rgb * w;
+			wsum += w;
+		}
+	}
+
+	vec3 result = wsum > 0.0 ? sum / wsum : c.rgb;
+	imageStore(dstImg, px, vec4(result, c.w));
+}

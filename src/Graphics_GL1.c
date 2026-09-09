@@ -475,6 +475,11 @@ cc_bool Gfx_WarnIfNecessary(void) {
 
 cc_bool Gfx_GetUIOptions(struct MenuOptionsScreen* s) { return false; }
 
+#ifdef CC_BUILD_RAYTRACING
+/* Fixed function pipeline never has a shader program bound */
+void GLBackend_RestoreProgram(void) { }
+#endif
+
 void Gfx_GetApiInfo(cc_string* info) {
 	int pointerSize = sizeof(void*) * 8;
 

@@ -31,6 +31,7 @@
 #include "EnvRenderer.h"
 #include "HeldBlockRenderer.h"
 #include "SelOutlineRenderer.h"
+#include "RayTracer.h"
 #include "Menus.h"
 #include "Audio.h"
 #include "Stream.h"
@@ -227,6 +228,9 @@ void Game_UpdateBlock(int x, int y, int z, BlockID block) {
 	}
 	Lighting.OnBlockChanged(x, y, z, old, block);
 	MapRenderer_OnBlockChanged(x, y, z, block);
+#ifdef CC_BUILD_RAYTRACING
+	RayTracer_OnBlockChanged(x, y, z, block);
+#endif
 }
 
 void Game_ChangeBlock(int x, int y, int z, BlockID block) {
@@ -436,6 +440,9 @@ static void Game_Load(void) {
 	Game_AddComponent(&HeldBlockRenderer_Component);
 	/* Gfx_SetDepthWrite(true) */
 	Game_AddComponent(&SelOutlineRenderer_Component);
+#ifdef CC_BUILD_RAYTRACING
+	Game_AddComponent(&RayTracer_Component);
+#endif
 	Game_AddComponent(&Audio_Component);
 	Game_AddComponent(&AxisLinesRenderer_Component);
 	Game_AddComponent(&Formats_Component);
@@ -490,6 +497,7 @@ void Game_SetMinFrameTime(float frameTimeMS) {
 static void Render3DFrame(float delta, float t) {
 	struct Matrix mvp;
 	Vec3 pos;
+	cc_bool rayTraced = false;
 
 	Camera.Active->GetView(&Gfx.View);
 	/*Gfx_LoadMatrix(MATRIX_PROJ, &Gfx.Projection);
@@ -508,7 +516,17 @@ static void Render3DFrame(float delta, float t) {
 	EnvRenderer_RenderClouds();
 
 	MapRenderer_Update(delta);
+#ifdef CC_BUILD_RAYTRACING
+	/* Ray tracing draws both normal and translucent blocks in one pass */
+	rayTraced = RayTracer_Active();
+	if (rayTraced) {
+		RayTracer_Render(delta);
+	} else {
+		MapRenderer_RenderNormal(delta);
+	}
+#else
 	MapRenderer_RenderNormal(delta);
+#endif
 	EnvRenderer_RenderMapSides();
 
 	EntityShadows_Render();
@@ -518,7 +536,9 @@ static void Render3DFrame(float delta, float t) {
 
 	/* Render water over translucent blocks when under the water outside the map for proper alpha blending */
 	pos = Camera.CurrentPos;
-	if (pos.y < Env.EdgeHeight && (pos.x < 0 || pos.z < 0 || pos.x > World.Width || pos.z > World.Length)) {
+	if (rayTraced) {
+		EnvRenderer_RenderMapEdges();
+	} else if (pos.y < Env.EdgeHeight && (pos.x < 0 || pos.z < 0 || pos.x > World.Width || pos.z > World.Length)) {
 		MapRenderer_RenderTranslucent(delta);
 		EnvRenderer_RenderMapEdges();
 	} else {

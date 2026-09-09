@@ -425,6 +425,13 @@ static void ReloadUniforms(void) {
 	}
 }
 
+#ifdef CC_BUILD_RAYTRACING
+/* Rebinds the shader program after external code (e.g. the ray tracer) changed it */
+void GLBackend_RestoreProgram(void) {
+	if (gfx_activeShader) glUseProgram(gfx_activeShader->program);
+}
+#endif
+
 /* Switches program to one that duplicates current fixed function state */
 /* Compiles program and reloads uniforms if needed */
 static void SwitchProgram(void) {

@@ -34,6 +34,7 @@
 #include "Utils.h"
 #include "Errors.h"
 #include "SystemFonts.h"
+#include "RayTracer.h"
 
 typedef void (*Button_GetText)(struct ButtonWidget* btn, cc_string* raw);
 typedef void (*Button_SetText)(struct ButtonWidget* btn, const cc_string* raw);
@@ -767,6 +768,11 @@ static void    GrO_SetMipmaps(cc_bool v) {
 	TexturePack_ExtractCurrent(true);
 }
 
+#ifdef CC_BUILD_RAYTRACING
+static int  GrO_GetRayTracing(void)  { return RayTracer_Mode; }
+static void GrO_SetRayTracing(int v) { RayTracer_SetMode(v); }
+#endif
+
 static void GraphicsOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 	MenuOptionsScreen_BeginButtons(s);
 	{
@@ -812,6 +818,15 @@ static void GraphicsOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 
 		MenuOptionsScreen_AddBool(s, "3D anaglyph",
 			ClO_GetAnaglyph,   ClO_SetAnaglyph, NULL);
+#ifdef CC_BUILD_RAYTRACING
+		MenuOptionsScreen_AddEnum(s, "Ray tracing", RayTracerMode_Names, RT_MODE_COUNT,
+			GrO_GetRayTracing, GrO_SetRayTracing,
+			"&eOff: &fBlocks are drawn normally.\n" \
+			"&eShadows: &fRay traced sun shadows.\n" \
+			"&eGI: &fShadows plus light bouncing off blocks.\n" \
+			"&eFull: &fGI plus soft shadows and water reflections.\n" \
+			"&cNote: &eRequires a GPU with OpenGL 4.3 and the OpenGL build of the game.");
+#endif
 	};
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);
 	s->OnLightingModeServerChanged = GrO_CheckLightingModeAllowed;

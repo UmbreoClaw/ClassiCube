@@ -694,6 +694,15 @@ typedef cc_uint8  cc_bool;
 #if defined DEFAULT_GFX_BACKEND && !defined CC_GFX_BACKEND
 	#define CC_GFX_BACKEND DEFAULT_GFX_BACKEND
 #endif
+
+/* GPU ray tracing (see RayTracer.c) requires a desktop OpenGL 4.3 context */
+#if !defined CC_BUILD_RAYTRACING && !defined CC_NO_RAYTRACING
+	#if (defined CC_BUILD_WIN || defined CC_BUILD_LINUX) && !defined CC_BUILD_GLES && !defined CC_BUILD_CONSOLE
+		#if CC_GFX_BACKEND == CC_GFX_BACKEND_GL1 || CC_GFX_BACKEND == CC_GFX_BACKEND_GL2
+			#define CC_BUILD_RAYTRACING
+		#endif
+	#endif
+#endif
 #if defined DEFAULT_SSL_BACKEND && !defined CC_SSL_BACKEND
 	#define CC_SSL_BACKEND DEFAULT_SSL_BACKEND
 #endif

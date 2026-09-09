@@ -1,0 +1,70 @@
+/* Temporal accumulation: reprojects each pixel's hit point into the previous
+   frame and blends the noisy lighting terms with the accumulated history when
+   the same surface was visible there. */
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(rgba32f, binding = 0) uniform readonly  image2D gbufCur;
+layout(rgba32f, binding = 1) uniform readonly  image2D normalCur;
+layout(rgba16f, binding = 2) uniform readonly  image2D directCur;
+layout(rgba16f, binding = 3) uniform readonly  image2D indirectCur;
+layout(rgba32f, binding = 4) uniform readonly  image2D gbufPrev;
+layout(rgba32f, binding = 5) uniform readonly  image2D normalPrev;
+layout(rgba16f, binding = 6) uniform readonly  image2D accumDirPrev;
+layout(rgba16f, binding = 7) uniform readonly  image2D accumIndPrev;
+layout(rgba16f, binding = 8) uniform writeonly image2D accumDirOut;  /* rgb = direct, w = history length */
+layout(rgba16f, binding = 9) uniform writeonly image2D accumIndOut;  /* rgb = indirect, w = history length */
+
+#define MAX_HISTORY 48.0
+
+void main() {
+	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
+	if (px.x >= screen.x || px.y >= screen.y) return;
+
+	vec4 g   = imageLoad(gbufCur, px);
+	vec4 dir = imageLoad(directCur, px);
+	vec4 ind = imageLoad(indirectCur, px);
+	if (g.w < 0.0) {
+		imageStore(accumDirOut, px, vec4(0.0));
+		imageStore(accumIndOut, px, vec4(0.0));
+		return;
+	}
+
+	vec4  nrm = imageLoad(normalCur, px);
+	float history = 0.0;
+	vec3  prevDir = vec3(0.0), prevInd = vec3(0.0);
+
+	/* Where was this world position on screen last frame? */
+	vec4 prevClip = prevViewProj * vec4(g.xyz, 1.0);
+	if (prevClip.w > 0.0) {
+		vec2 prevNdc = prevClip.xy / prevClip.w;
+		ivec2 pp = ivec2(floor((prevNdc * 0.5 + 0.5) * vec2(screen.xy)));
+
+		if (all(greaterThanEqual(pp, ivec2(0))) && all(lessThan(pp, screen.xy))) {
+			vec4 pg = imageLoad(gbufPrev, pp);
+			vec4 pn = imageLoad(normalPrev, pp);
+
+			bool samePoint  = pg.w > 0.0 && distance(pg.xyz, g.xyz) < 0.02 + 0.004 * g.w;
+			bool sameNormal = dot(pn.xyz, nrm.xyz) > 0.9;
+			bool sameBlock  = abs(pn.w - nrm.w) < 0.5;
+
+			if (samePoint && sameNormal && sameBlock) {
+				vec4 ad = imageLoad(accumDirPrev, pp);
+				vec4 ai = imageLoad(accumIndPrev, pp);
+				history = ai.w;
+				prevDir = ad.rgb;
+				prevInd = ai.rgb;
+			}
+		}
+	}
+
+	history = min(history + 1.0, MAX_HISTORY);
+	float alpha = 1.0 / history;
+
+	vec3 outDir = mix(prevDir, dir.rgb, alpha);
+	vec3 outInd = mix(prevInd, ind.rgb, alpha);
+	/* Hard shadows are noise free, so don't smear them over time */
+	if ((screen.w & FLAG_SOFT_SHADOWS) == 0) outDir = dir.rgb;
+
+	imageStore(accumDirOut, px, vec4(outDir, history));
+	imageStore(accumIndOut, px, vec4(outInd, history));
+}

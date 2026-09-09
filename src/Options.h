@@ -27,6 +27,7 @@ Copyright 2014-2025 ClassiCube | Licensed under BSD-3
 #define OPT_SMOOTH_LIGHTING "gfx-smoothlighting"
 #define OPT_LIGHTING_MODE "gfx-lightingmode"
 #define OPT_MIPMAPS "gfx-mipmaps"
+#define OPT_RAYTRACING "gfx-raytracing"
 #define OPT_CHAT_LOGGING "chat-logging"
 #define OPT_WINDOW_WIDTH "window-width"
 #define OPT_WINDOW_HEIGHT "window-height"
