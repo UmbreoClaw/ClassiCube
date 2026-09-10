@@ -20,6 +20,7 @@ layout(std140, binding = 0) uniform Params {
 	ivec4 screen;       /* xy = render size, z = frame index, w = flags */
 	ivec4 atlas;        /* x = atlas1D shift, y = atlas1D mask, z = atlas count, w = tile size in pixels */
 	vec4  misc;         /* x = atlas1D V per tile, y = max primary distance, z = GI ray distance, w = pixel angular size */
+	ivec4 window;       /* xy = window size in pixels (render size may be smaller, see rt-scale) */
 };
 
 #define FLAG_GI          1
@@ -42,6 +43,10 @@ layout(binding = 2) uniform sampler2D atlas0;
 layout(binding = 3) uniform sampler2D atlas1;
 layout(binding = 4) uniform sampler2D atlas2;
 layout(binding = 5) uniform sampler2D atlas3;
+/* 1 byte per 8x8x8 region of the world: 0 if the region is entirely air, so rays can skip it */
+layout(binding = 12) uniform usampler3D coarseTex;
+#define COARSE_SHIFT 3
+#define COARSE_SIZE  8.0
 
 #define DRAW_OPAQUE            0
 #define DRAW_TRANSPARENT       1
@@ -78,6 +83,10 @@ bool fullBright(uint block) { return blocks[block].tint.w > 0.5; }
 uint tileFor(uint block, uint face) {
 	if (face < 4u) return blocks[block].texA[face];
 	return blocks[block].texB[face - 4u];
+}
+
+uint coarseAt(ivec3 cc) {
+	return texelFetch(coarseTex, ivec3(cc.x, cc.z, cc.y), 0).r;
 }
 
 uint blockAt(ivec3 p) {
@@ -117,11 +126,12 @@ bool texelSolid(uint block, uint face, vec2 uv) {
 /* Intersects the ray with the geometry of one block inside cell c.
    tMin/tMax bound the ray segment that lies inside the cell */
 bool hitCell(ivec3 c, uint block, vec3 ro, vec3 rd, vec3 invRd, float tMin, float tMax, bool shadowRay, bool skipTranslucent, inout Hit h) {
-	int  draw = drawType(block);
+	BlockInfo bi = blocks[block];
+	int  draw = int(bi.minBB.w);
 	vec3 base = vec3(c);
 
 	if (draw == DRAW_GAS) return false;
-	if (shadowRay && !blocksLight(block)) return false;
+	if (shadowRay && (int(bi.maxBB.w) & BLOCKFLAG_BLOCKS_LIGHT) == 0) return false;
 	if (draw == DRAW_TRANSLUCENT && skipTranslucent) return false;
 
 	if (draw == DRAW_SPRITE) {
@@ -158,8 +168,8 @@ bool hitCell(ivec3 c, uint block, vec3 ro, vec3 rd, vec3 invRd, float tMin, floa
 		return true;
 	}
 
-	vec3 bmin = base + blocks[block].minBB.xyz;
-	vec3 bmax = base + blocks[block].maxBB.xyz;
+	vec3 bmin = base + bi.minBB.xyz;
+	vec3 bmax = base + bi.maxBB.xyz;
 	vec3 t1 = (bmin - ro) * invRd;
 	vec3 t2 = (bmax - ro) * invRd;
 	vec3 tn = min(t1, t2);
@@ -227,8 +237,37 @@ bool traceRay(vec3 ro, vec3 rd, float maxT, bool shadowRay, bool skipTranslucent
 	ivec3 stp = ivec3(sign(rd));
 	vec3  side = vec3(greaterThan(rd, vec3(0.0)));
 	float t = 0.0;
+	ivec3 lastCoarse = ivec3(-1);
+	bool  coarseEmpty = false;
 
 	for (int i = 0; i < MAX_DDA_STEPS; i++) {
+		ivec3 cc = c >> COARSE_SHIFT;
+		if (cc != lastCoarse) {
+			lastCoarse  = cc;
+			coarseEmpty = coarseAt(cc) == 0u;
+		}
+
+		if (coarseEmpty) {
+			/* Whole 8x8x8 region is air - jump straight to where the ray leaves it */
+			vec3 cmin = vec3(cc << COARSE_SHIFT);
+			vec3 tf = max((cmin - ro) * invRd, (cmin + COARSE_SIZE - ro) * invRd);
+			if (rd.x == 0.0) tf.x = 1e30;
+			if (rd.y == 0.0) tf.y = 1e30;
+			if (rd.z == 0.0) tf.z = 1e30;
+			t = min(min(tf.x, tf.y), tf.z);
+			if (t > maxT) return false;
+
+			ivec3 lo = cc << COARSE_SHIFT;
+			c = clamp(ivec3(floor(ro + rd * t)), lo, lo + int(COARSE_SIZE) - 1);
+			/* step the axis that was crossed into the neighbouring region exactly */
+			if (t == tf.x)      c.x = (stp.x > 0) ? lo.x + int(COARSE_SIZE) : lo.x - 1;
+			else if (t == tf.y) c.y = (stp.y > 0) ? lo.y + int(COARSE_SIZE) : lo.y - 1;
+			else                c.z = (stp.z > 0) ? lo.z + int(COARSE_SIZE) : lo.z - 1;
+
+			if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, worldSize.xyz))) return false;
+			continue;
+		}
+
 		/* Distance to each of the three cell boundaries in front of the ray. Recomputed from the */
 		/*  cell coordinates every step, so no floating point drift accumulates between the cell */
 		/*  walk and the exact slab tests in hitCell (drift caused cracks between blocks) */

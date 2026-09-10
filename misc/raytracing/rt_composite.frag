@@ -11,7 +11,9 @@ layout(binding = 11) uniform sampler2D normalTex;
 out vec4 fragColour;
 
 void main() {
-	ivec2 px = ivec2(gl_FragCoord.xy);
+	/* The trace buffers may be smaller than the window (rt-scale option) */
+	ivec2 px = ivec2(vec2(gl_FragCoord.xy) * vec2(screen.xy) / vec2(window.xy));
+	px = clamp(px, ivec2(0), screen.xy - 1);
 	vec4 g = texelFetch(gbufTex, px, 0);
 	if (g.w < 0.0) discard;
 

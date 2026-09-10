@@ -161,6 +161,7 @@ struct RTParams {
 	cc_int32 screen[4];
 	cc_int32 atlas[4];
 	float misc[4];
+	cc_int32 window[4];
 };
 
 /* Must match BlockInfo in rt_common.glsl (std430 layout) */
@@ -178,11 +179,12 @@ struct RTBlockInfo {
 
 static struct {
 	cc_bool triedInit, initialised, supported;
-	cc_bool worldValid, worldWide, worldTried, blocksDirty;
+	cc_bool worldValid, worldWide, worldTried, blocksDirty, atlasWarned;
 	int width, height, frame;
 	RTuint traceProg, temporalProg, atrousProg, compositeProg;
 	RTint  atrousStepLoc;
-	RTuint paramsUbo, blocksSsbo, worldTex, vao;
+	RTuint paramsUbo, blocksSsbo, worldTex, coarseTex, vao;
+	int coarseW, coarseH, coarseL;
 	/* [0] and [1] alternate each frame, so the previous frame's data stays available */
 	RTuint gbuf[2], normal[2], accumDir[2], accumInd[2];
 	RTuint albedo, direct, indirect, extra, atrousTmp[2];
@@ -191,7 +193,7 @@ static struct {
 	int max3DSize;
 } rt;
 
-static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance; int debug; } rt_opts;
+static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance; int debug, scale; } rt_opts;
 
 
 /*########################################################################################################################*
@@ -381,7 +383,70 @@ static void RT_CreateScreenTextures(int width, int height) {
 
 static void RT_FreeWorldTexture(void) {
 	RT_DeleteTexture(&rt.worldTex);
+	RT_DeleteTexture(&rt.coarseTex);
 	rt.worldValid = false;
+}
+
+/* Builds the coarse occupancy grid: one byte per 8x8x8 region, 0 if the region is all air. */
+/* Rays skip straight across empty regions instead of stepping through every block in them */
+static cc_bool RT_BuildCoarseGrid(void) {
+	int cw = (World.Width + 7) >> 3, ch = (World.Height + 7) >> 3, cl = (World.Length + 7) >> 3;
+	cc_uint8* coarse = (cc_uint8*)Mem_TryAllocCleared(cw * ch * cl, 1);
+	int x, y, z, i = 0;
+	if (!coarse) return false;
+
+	for (y = 0; y < World.Height; y++) {
+		for (z = 0; z < World.Length; z++) {
+			cc_uint8* row = &coarse[((y >> 3) * cl + (z >> 3)) * cw];
+			for (x = 0; x < World.Width; x++, i++) {
+				if (World_GetRawBlock(i)) row[x >> 3] = 1;
+			}
+		}
+	}
+
+	_glGenTextures(1, &rt.coarseTex);
+	_glActiveTexture(GL_TEXTURE0 + 12);
+	_glBindTexture(GL_TEXTURE_3D, rt.coarseTex);
+	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+	_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	_glTexImage3D(GL_TEXTURE_3D, 0, GL_R8UI, cw, cl, ch, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, coarse);
+	_glActiveTexture(GL_TEXTURE0);
+	Mem_Free(coarse);
+
+	rt.coarseW = cw; rt.coarseH = ch; rt.coarseL = cl;
+	return true;
+}
+
+/* Updates the coarse grid entry containing the given block after it changed */
+static void RT_UpdateCoarseGrid(int x, int y, int z, BlockID block) {
+	int cx = x >> 3, cy = y >> 3, cz = z >> 3;
+	cc_uint8 value = 1;
+	int bx, by, bz, x1, y1, z1, x2, y2, z2;
+
+	if (block == 0) {
+		/* Region is only empty if every other block in it is air too */
+		x1 = cx << 3; y1 = cy << 3; z1 = cz << 3;
+		x2 = min(x1 + 8, World.Width); y2 = min(y1 + 8, World.Height); z2 = min(z1 + 8, World.Length);
+		value = 0;
+
+		for (by = y1; by < y2 && !value; by++) {
+			for (bz = z1; bz < z2 && !value; bz++) {
+				for (bx = x1; bx < x2; bx++) {
+					if (World_GetRawBlock(World_Pack(bx, by, bz))) { value = 1; break; }
+				}
+			}
+		}
+	}
+
+	_glActiveTexture(GL_TEXTURE0 + 12);
+	_glBindTexture(GL_TEXTURE_3D, rt.coarseTex);
+	_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	_glTexSubImage3D(GL_TEXTURE_3D, 0, cx, cz, cy, 1, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &value);
+	_glActiveTexture(GL_TEXTURE0);
 }
 
 /* Uploads the entire world into a 3D integer texture, stored as (x, z, y) */
@@ -429,7 +494,7 @@ static void RT_UploadWorld(void) {
 	}
 	_glActiveTexture(GL_TEXTURE0);
 
-	if (_glGetError() != GL_NO_ERROR) {
+	if (_glGetError() != GL_NO_ERROR || !RT_BuildCoarseGrid()) {
 		RT_FreeWorldTexture();
 		Chat_AddRaw("&cRay tracing: failed to upload world to GPU");
 		return;
@@ -629,6 +694,7 @@ static void RT_FillParams(struct RTParams* p, int flags) {
 	p->misc[1] = (float)Game_ViewDistance * 1.05f;
 	p->misc[2] = rt_opts.giDistance;
 	p->misc[3] = 2.0f * (float)(Math_Sin(fovy * 0.5f) / Math_Cos(fovy * 0.5f)) / (float)rt.height;
+	p->window[0] = Game.Width; p->window[1] = Game.Height; p->window[2] = 0; p->window[3] = 0;
 }
 
 static void RT_BindImage(int unit, RTuint tex, RTenum access, RTenum format) {
@@ -645,6 +711,13 @@ cc_bool RayTracer_Active(void) {
 	if (!rt.initialised && !RT_TryInit()) return false;
 	if (!rt.supported) return false;
 
+	if (Atlas1D.Count > RT_MAX_ATLASES) {
+		/* Only happens on GPUs with a tiny max texture size - draw normally until the atlas changes */
+		if (!rt.atlasWarned) Chat_AddRaw("&cRay tracing: terrain atlas is split into too many textures for this GPU");
+		rt.atlasWarned = true;
+		return false;
+	}
+
 	/* e.g. ray tracing was enabled from the menu after the map had already loaded */
 	if (!rt.worldValid && !rt.worldTried) RT_UploadWorld();
 	return rt.worldValid;
@@ -653,12 +726,12 @@ cc_bool RayTracer_Active(void) {
 void RayTracer_Render(float delta) {
 	struct RTParams params;
 	int cur, prev, flags, i, groupsX, groupsY;
-	int width = Game.Width, height = Game.Height;
+	int width  = max(1, Game.Width  * rt_opts.scale / 100);
+	int height = max(1, Game.Height * rt_opts.scale / 100);
 	RTuint atrousSrc, atrousDst, filtered;
 
 	if (!RayTracer_Active()) return;
 	if (Gfx.LostContext) return;
-	if (Atlas1D.Count > RT_MAX_ATLASES) { RT_Disable("terrain atlas is split into too many textures"); return; }
 
 	if (width != rt.width || height != rt.height) RT_CreateScreenTextures(width, height);
 	if (rt.blocksDirty) RT_UploadBlocks();
@@ -679,7 +752,8 @@ void RayTracer_Render(float delta) {
 
 	/* Make sure the terrain textures exist, then bind them for the shaders */
 	for (i = 0; i < Atlas1D.Count; i++) Atlas1D_Bind(i);
-	RT_BindSampler(1, GL_TEXTURE_3D, rt.worldTex);
+	RT_BindSampler(1,  GL_TEXTURE_3D, rt.worldTex);
+	RT_BindSampler(12, GL_TEXTURE_3D, rt.coarseTex);
 	for (i = 0; i < RT_MAX_ATLASES; i++) {
 		RT_BindSampler(2 + i, GL_TEXTURE_2D, i < Atlas1D.Count ? (RTuint)(cc_uintptr)Atlas1D.TexIds[i] : 0);
 	}
@@ -769,6 +843,7 @@ void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block) {
 		_glTexSubImage3D(GL_TEXTURE_3D, 0, x, z, y, 1, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &narrow);
 	}
 	_glActiveTexture(GL_TEXTURE0);
+	RT_UpdateCoarseGrid(x, y, z, block);
 }
 
 void RayTracer_SetMode(int mode) {
@@ -788,6 +863,7 @@ void RayTracer_SetMode(int mode) {
 *----------------------------------------------------Ray tracer component-------------------------------------------------*
 *#########################################################################################################################*/
 static void OnBlockDefChanged(void* obj) { rt.blocksDirty = true; }
+static void OnAtlasChanged(void* obj)    { rt.atlasWarned = false; }
 static void OnContextLost(void* obj)     { RT_FreeResources(); }
 
 static void OnInit(void) {
@@ -799,9 +875,11 @@ static void OnInit(void) {
 	rt_opts.emissive   = Options_GetFloat("rt-emissive",    0.0f, 8.0f, 2.0f);
 	rt_opts.giDistance = Options_GetFloat("rt-gi-distance", 4.0f, 256.0f, 48.0f);
 	rt_opts.debug      = Options_GetInt("rt-debug", 0, 16, 0);
+	rt_opts.scale      = Options_GetInt("rt-scale", 25, 100, 100);
 
 	Event_Register_(&BlockEvents.BlockDefChanged, NULL, OnBlockDefChanged);
 	Event_Register_(&GfxEvents.ContextLost,       NULL, OnContextLost);
+	Event_Register_(&TextureEvents.AtlasChanged,  NULL, OnAtlasChanged);
 }
 
 static void OnFree(void) {

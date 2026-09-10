@@ -15,9 +15,12 @@ writes depth.
 ## How it works
 
 The world is a voxel grid, so the tracer walks rays directly through a 3D texture of block ids
-(a 3D DDA) instead of building a triangle acceleration structure. That means there is no
-BVH/BLAS to rebuild when blocks change - a block edit is a single voxel upload - and it runs
-on any GPU with OpenGL 4.3 compute shaders. RT cores are not required or used: for a blocky
+(a 3D DDA) instead of building a triangle acceleration structure. A second, coarse texture
+marks which 8x8x8 regions contain any blocks at all, so rays crossing open air (sky rays,
+long shadow rays) jump a whole region at a time instead of stepping block by block. That
+means there is no BVH/BLAS to rebuild when blocks change - a block edit is a single voxel
+upload plus a one byte update of its region - and it runs on any GPU with OpenGL 4.3
+compute shaders. RT cores are not required or used: for a blocky
 world the voxel walk is already the fast path, and the visual result is the same.
 
 Per frame:
@@ -74,7 +77,7 @@ cl.exe /O2 /DCC_GFX_BACKEND=CC_GFX_BACKEND_GL1 src\*.c third_party\bearssl\*.c /
 Add `CC_GFX_BACKEND=CC_GFX_BACKEND_GL1` to *Project Properties -> C/C++ -> Preprocessor ->
 Preprocessor Definitions*, then build as usual.
 
-`CC_GFX_BACKEND_GL2` (the modern OpenGL backend) also works.
+`CC_GFX_BACKEND_GL2` (the modern OpenGL backend) also works on Linux; on Windows use `GL1`.
 
 ## Enabling it
 
@@ -100,10 +103,27 @@ Advanced settings (edit `options.txt`, no menu entry):
 | `rt-ambient`     | 0.25    | Minimum ambient light so caves are not pitch black (0 - 1)           |
 | `rt-emissive`    | 2.0     | How strongly full bright blocks (lava etc) light their surroundings  |
 | `rt-gi-distance` | 48      | Maximum length of bounce rays in blocks                              |
+| `rt-scale`       | 100     | Render the traced world at this percentage of the window size (25 - 100) and upscale. 75 is a good compromise on 4K screens |
 | `rt-debug`       | 0       | 1 direct light, 2 indirect, 3 albedo, 4 normals, 5 reflections/behind, 6 depth |
 
-Larger view distances cost more, since sky rays walk further through empty air before
-giving up. If the frame rate drops in very open maps, lower the view distance.
+Cost is dominated by resolution and by how far rays travel. If the frame rate drops, lower
+`rt-scale` first (it keeps the GUI and everything else at full resolution), then the view
+distance. While ray tracing is active the chunk meshes are not built, which also frees CPU time.
+
+## Automated builds
+
+`.github/workflows/build_raytracing.yml` builds the OpenGL variants of the game on every push to
+`main`/`master`, any `claude/*` branch and `raytracing*` branches, or on demand from the
+Actions tab (*Build ray tracing (Windows + Linux)* -> *Run workflow*). It also checks that
+`src/_RayTracerShaders.h` is in sync with the shader sources.
+
+The workflow uploads these artifacts (download from the run's page on GitHub, then unzip):
+
+| Artifact                            | Contents                                            |
+|-------------------------------------|-----------------------------------------------------|
+| ClassiCube-Win64-OpenGL-RayTracing  | 64 bit Windows, OpenGL backend (use this one)       |
+| ClassiCube-Win32-OpenGL-RayTracing  | 32 bit Windows, OpenGL backend                      |
+| ClassiCube-Linux64-OpenGL-RayTracing| 64 bit Linux                                        |
 
 ## Limitations / future work
 
@@ -113,6 +133,6 @@ giving up. If the frame rate drops in very open maps, lower the view distance.
 * Entities, particles and the held block are rasterised and do not cast ray traced shadows.
 * Only one bounce of indirect light is traced. Deep caves rely on `rt-ambient`.
 * The map border/edge water outside the map is still rasterised.
-* Two-level empty space skipping and a variance guided denoiser would make it faster and
-  cleaner still; the current denoiser is temporal accumulation plus a 3 pass a-trous blur.
+* A variance guided denoiser (SVGF style) would make the indirect light cleaner while moving;
+  the current denoiser is temporal accumulation plus a 3 pass a-trous blur.
 * Anaglyph 3D renders the world twice per frame, which confuses the temporal history.

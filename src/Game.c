@@ -515,16 +515,18 @@ static void Render3DFrame(float delta, float t) {
 	EnvRenderer_RenderSky();
 	EnvRenderer_RenderClouds();
 
-	MapRenderer_Update(delta);
 #ifdef CC_BUILD_RAYTRACING
-	/* Ray tracing draws both normal and translucent blocks in one pass */
+	/* Ray tracing draws both normal and translucent blocks in one pass, */
+	/*  and doesn't need chunk meshes, so skip building them meanwhile */
 	rayTraced = RayTracer_Active();
 	if (rayTraced) {
 		RayTracer_Render(delta);
 	} else {
+		MapRenderer_Update(delta);
 		MapRenderer_RenderNormal(delta);
 	}
 #else
+	MapRenderer_Update(delta);
 	MapRenderer_RenderNormal(delta);
 #endif
 	EnvRenderer_RenderMapSides();
@@ -538,6 +540,14 @@ static void Render3DFrame(float delta, float t) {
 	pos = Camera.CurrentPos;
 	if (rayTraced) {
 		EnvRenderer_RenderMapEdges();
+		/* Weather is normally drawn by the translucent chunk pass, which ray tracing replaces */
+		if (Env.Weather != WEATHER_SUNNY) {
+			Gfx_SetAlphaBlending(true);
+			Gfx_SetAlphaTest(true);
+			EnvRenderer_RenderWeather(delta);
+			Gfx_SetAlphaTest(false);
+			Gfx_SetAlphaBlending(false);
+		}
 	} else if (pos.y < Env.EdgeHeight && (pos.x < 0 || pos.z < 0 || pos.x > World.Width || pos.z > World.Length)) {
 		MapRenderer_RenderTranslucent(delta);
 		EnvRenderer_RenderMapEdges();
