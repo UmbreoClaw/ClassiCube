@@ -6,10 +6,10 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba32f, binding = 0) uniform writeonly image2D gbufImg;     /* xyz = hit position, w = distance (-1 = miss) */
 layout(rgba32f, binding = 1) uniform writeonly image2D normalImg;   /* xyz = normal, w = block id */
-layout(rgba16f, binding = 2) uniform writeonly image2D albedoImg;   /* rgb = albedo */
+layout(rgba16f, binding = 2) uniform writeonly image2D albedoImg;   /* rgb = albedo, w = distance to water surface (0 = none) */
 layout(rgba16f, binding = 3) uniform writeonly image2D directImg;   /* rgb = direct + ambient floor */
 layout(rgba16f, binding = 4) uniform writeonly image2D indirectImg; /* rgb = one bounce / sky sample (noisy) */
-layout(rgba16f, binding = 5) uniform writeonly image2D extraImg;    /* rgb = light not multiplied by albedo */
+layout(rgba16f, binding = 5) uniform writeonly image2D waterImg;    /* rgb = premultiplied water colour + reflection, a = alpha */
 
 /* Approximate mip level so distant textures don't alias */
 float lodFor(float dist) {
@@ -26,11 +26,12 @@ vec3 albedoOf(Hit h, float lod) {
 	return sampleTile(tileFor(h.block, h.face), h.uv, lod).rgb * blocks[h.block].tint.rgb;
 }
 
-/* Simple shading for secondary hits: sun + ambient floor + emissive, no further bounces */
-vec3 secondaryRadiance(Hit h, vec3 L, float minAmb) {
+/* Simple shading for secondary hits: sun + ambient floor (+ emissive), no further bounces */
+vec3 secondaryRadiance(Hit h, vec3 L, float minAmb, bool includeEmissive) {
 	vec3 n    = lightingNormal(h);
 	vec3 alb  = albedoOf(h, 2.0);
-	if (fullBright(h.block)) return alb * fogParams.z;
+	/* emitters are sampled explicitly by emitterLight(), so bounce rays don't count them again */
+	if (fullBright(h.block)) return includeEmissive ? alb * fogParams.z : vec3(0.0);
 
 	vec3 p    = h.pos + h.normal * 2e-3;
 	vec3 light = directSun(p, n, L) + shadowColour(n) * minAmb;
@@ -54,25 +55,56 @@ void main() {
 	vec3 ro = pNear.xyz;
 	vec3 rd = normalize(pFar.xyz - pNear.xyz);
 
-	Hit h;
-	if (!traceRay(ro, rd, misc.y, false, false, h)) {
-		imageStore(gbufImg,     px, vec4(0.0, 0.0, 0.0, -1.0));
-		imageStore(normalImg,   px, vec4(0.0));
-		imageStore(albedoImg,   px, vec4(0.0));
-		imageStore(directImg,   px, vec4(0.0));
-		imageStore(indirectImg, px, vec4(0.0));
-		imageStore(extraImg,    px, vec4(0.0));
-		return;
-	}
-
 	vec3 L = sunDir.xyz;
 	if ((flags & FLAG_SOFT_SHADOWS) != 0) L = coneSample(sunDir.xyz, sunDir.w, seed);
+
+	Hit h;
+	bool  hit    = traceRay(ro, rd, misc.y, false, false, h);
+	float waterT = 0.0;
+	vec4  water  = vec4(0.0);
+
+	if (hit && h.draw == uint(DRAW_TRANSLUCENT)) {
+		/* Water/ice is a translucent layer blended over whatever is behind it in a second */
+		/*  composite pass (like the rasteriser draws it after entities), so the surface */
+		/*  behind it becomes the primary hit for lighting, depth and denoising */
+		vec4  wtex  = sampleTile(tileFor(h.block, h.face), h.uv, lodFor(h.t));
+		vec3  wn    = h.normal;
+		vec3  wp    = h.pos + wn * 2e-3;
+		vec3  light = directSun(wp, wn, L) + shadowColour(wn);
+		vec3  wcol  = wtex.rgb * blocks[h.block].tint.rgb * light * wtex.a;
+
+		if ((flags & FLAG_REFLECTIONS) != 0) {
+			vec3  R = reflect(rd, wn);
+			float cosT = clamp(dot(-rd, wn), 0.0, 1.0);
+			float F = 0.04 + 0.96 * pow(1.0 - cosT, 5.0);
+			Hit rh;
+			vec3 refl = skyCol.rgb;
+			if (traceRay(wp, R, misc.y, false, false, rh)) {
+				refl = secondaryRadiance(rh, sunDir.xyz, minAmb, true) + albedoOf(rh, 2.0) * shadowColour(lightingNormal(rh)) * (1.0 - minAmb);
+			}
+			wcol += refl * F;
+		}
+		waterT = h.t;
+		water  = vec4(wcol, wtex.a);
+
+		hit = traceRay(h.pos + rd * 1e-3, rd, misc.y, false, true, h);
+	}
+
+	if (!hit) {
+		imageStore(gbufImg,     px, vec4(0.0, 0.0, 0.0, -1.0));
+		imageStore(normalImg,   px, vec4(0.0));
+		imageStore(albedoImg,   px, vec4(0.0, 0.0, 0.0, waterT));
+		imageStore(directImg,   px, vec4(0.0));
+		imageStore(indirectImg, px, vec4(0.0));
+		imageStore(waterImg,    px, water);
+		return;
+	}
 
 	vec3  n     = lightingNormal(h);
 	vec3  pOff  = h.pos + h.normal * 2e-3;
 	vec4  tex   = sampleTile(tileFor(h.block, h.face), h.uv, lodFor(h.t));
 	vec3  albedo = tex.rgb * blocks[h.block].tint.rgb;
-	vec3  direct, indirect, extra = vec3(0.0);
+	vec3  direct, indirect;
 
 	if (fullBright(h.block)) {
 		/* Lava, glowing blocks: show the texture at full brightness */
@@ -85,44 +117,21 @@ void main() {
 			vec3 d = cosineSample(n, seed);
 			Hit gh;
 			if (traceRay(pOff, d, misc.z, false, false, gh)) {
-				indirect = secondaryRadiance(gh, sunDir.xyz, minAmb);
+				indirect = secondaryRadiance(gh, sunDir.xyz, minAmb, false);
 			} else {
 				/* escaped to the sky: classic shadow colour is the sky ambient */
 				indirect = shadowColour(n) * (1.0 - minAmb);
 			}
+			indirect += emitterLight(pOff, n, seed);
 		} else {
 			indirect = shadowColour(n) * (1.0 - minAmb);
 		}
 	}
 
-	if (h.draw == uint(DRAW_TRANSLUCENT)) {
-		/* Water/ice: blend what is behind, and add a mirror reflection */
-		float alpha = tex.a;
-		Hit bh;
-		vec3 behind = skyCol.rgb;
-		if (traceRay(h.pos + rd * 1e-3, rd, misc.y, false, true, bh)) {
-			behind = secondaryRadiance(bh, sunDir.xyz, minAmb) + albedoOf(bh, 2.0) * shadowColour(lightingNormal(bh)) * (1.0 - minAmb);
-		}
-		extra += behind * (1.0 - alpha);
-		albedo *= alpha;
-
-		if ((flags & FLAG_REFLECTIONS) != 0) {
-			vec3  R = reflect(rd, h.normal);
-			float cosT = clamp(dot(-rd, h.normal), 0.0, 1.0);
-			float F = 0.04 + 0.96 * pow(1.0 - cosT, 5.0);
-			Hit rh;
-			vec3 refl = skyCol.rgb;
-			if (traceRay(pOff, R, misc.y, false, false, rh)) {
-				refl = secondaryRadiance(rh, sunDir.xyz, minAmb) + albedoOf(rh, 2.0) * shadowColour(lightingNormal(rh)) * (1.0 - minAmb);
-			}
-			extra += refl * F;
-		}
-	}
-
 	imageStore(gbufImg,     px, vec4(h.pos, h.t));
 	imageStore(normalImg,   px, vec4(h.normal, float(h.block)));
-	imageStore(albedoImg,   px, vec4(albedo, 1.0));
+	imageStore(albedoImg,   px, vec4(albedo, waterT));
 	imageStore(directImg,   px, vec4(direct, 1.0));
 	imageStore(indirectImg, px, vec4(indirect, 1.0));
-	imageStore(extraImg,    px, vec4(extra, 1.0));
+	imageStore(waterImg,    px, water);
 }

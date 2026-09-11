@@ -28,10 +28,18 @@ cc_bool RayTracer_Active(void);
 /* Changes the ray tracing mode, and saves it to the options */
 void RayTracer_SetMode(int mode);
 
-/* Renders the world (normal and translucent blocks) using ray tracing */
+/* Renders the world (opaque blocks) using ray tracing */
 void RayTracer_Render(float delta);
+/* Blends the ray traced translucent blocks (water) over what has been drawn so far */
+void RayTracer_RenderTranslucent(void);
 /* Notifies the ray tracer that a block in the world has changed */
 void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block);
+
+struct Entity; struct Matrix; struct VertexTextured;
+/* Called when an entity model is about to be drawn, so its geometry can cast ray traced shadows */
+void RayTracer_BeginEntity(struct Entity* e, const struct Matrix* transform);
+/* Records model space quads (4 vertices each) of the entity that was last begun */
+void RayTracer_AddEntityVertices(const struct VertexTextured* vertices, int count);
 
 CC_END_HEADER
 #endif

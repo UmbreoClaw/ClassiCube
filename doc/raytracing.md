@@ -3,9 +3,10 @@
 ClassiCube can render the world with a GPU path tracer instead of the usual chunk meshes.
 It provides:
 
-* ray traced sun shadows (optionally soft)
+* ray traced sun shadows (optionally soft), cast by blocks, clouds, players and other entities
 * one bounce of global illumination (light bouncing off blocks, coloured by them)
-* emissive light from full bright blocks such as lava
+* light from full bright blocks such as lava and lamps, sampled explicitly so it spreads
+  smoothly around them
 * mirror reflections on water and other translucent blocks
 
 Everything else (sky, clouds, entities, particles, held block, GUI) is still drawn by the
@@ -26,13 +27,22 @@ world the voxel walk is already the fast path, and the visual result is the same
 Per frame:
 
 1. `rt_trace.comp` traces one camera ray per pixel, then a shadow ray towards the sun,
-   a cosine weighted bounce ray (global illumination), and for water a reflection ray.
-   It writes a G-buffer (position, normal, block) and separate lighting terms.
+   a cosine weighted bounce ray (global illumination), a ray towards one nearby emitting
+   block (chosen with probability proportional to 1/distance^2), and for water a reflection
+   ray. It writes a G-buffer (position, normal, block) and separate lighting terms. Water is
+   recorded as a separate translucent layer; the surface behind it is the primary hit.
 2. `rt_temporal.comp` reprojects each pixel into the previous frame and accumulates the
    noisy terms over time when the same surface was visible there.
 3. `rt_atrous.comp` runs an edge aware blur (3 passes) over the indirect light.
-4. `rt_composite.frag` combines albedo, direct, indirect and reflection terms, applies the
-   same fog as the rasteriser, and writes colour + depth.
+4. `rt_composite.frag` combines albedo, direct and indirect terms, applies the same fog as
+   the rasteriser, and writes colour + depth for the opaque world.
+5. After entities and particles have been drawn, `rt_water.frag` blends the water layer
+   (with its reflection) over them, so a player standing in water is visible through it.
+
+Shadow rays also test the cloud layer (the scrolling cloud texture at the cloud height) and
+the entity models drawn this frame. Entity geometry is captured as the game draws each model
+(`Model.c` hands the transformed quads to `RayTracer_AddEntityVertices`), including the local
+player's own model in first person, which the game otherwise never draws.
 
 The lighting model deliberately reproduces the classic look: a face in full sun gets the
 environment's sun colour, a face that only sees the sky gets the shadow colour, and the usual
@@ -101,7 +111,8 @@ Advanced settings (edit `options.txt`, no menu entry):
 | `rt-sun-z`       | 0.20    | Horizontal Z component of the direction towards the sun              |
 | `rt-sun-radius`  | 0.04    | Angular size of the sun for soft shadows (0 = hard shadows)          |
 | `rt-ambient`     | 0.25    | Minimum ambient light so caves are not pitch black (0 - 1)           |
-| `rt-emissive`    | 2.0     | How strongly full bright blocks (lava etc) light their surroundings  |
+| `rt-emissive`    | 3.0     | How strongly full bright blocks (lava, lamps) light their surroundings |
+| `rt-cloud-shadow`| 0.6     | How much sunlight clouds block (0 = no cloud shadows, 1 = full)     |
 | `rt-gi-distance` | 48      | Maximum length of bounce rays in blocks                              |
 | `rt-scale`       | 100     | Render the traced world at this percentage of the window size (25 - 100) and upscale. 75 is a good compromise on 4K screens |
 | `rt-debug`       | 0       | 1 direct light, 2 indirect, 3 albedo, 4 normals, 5 reflections/behind, 6 depth |
@@ -130,7 +141,8 @@ The workflow uploads these artifacts (download from the run's page on GitHub, th
 * Lighting from the *fancy* lighting mode (lamp/lava light levels) is not used; full bright
   blocks emit light through the global illumination bounce instead.
 * Custom block models are traced as their bounding box; sprites as crossed quads.
-* Entities, particles and the held block are rasterised and do not cast ray traced shadows.
+* Entities are rasterised (not ray traced themselves), so they receive the rasteriser's flat
+  lighting and don't appear in reflections. Particles and the held block cast no shadows.
 * Only one bounce of indirect light is traced. Deep caves rely on `rt-ambient`.
 * The map border/edge water outside the map is still rasterised.
 * A variance guided denoiser (SVGF style) would make the indirect light cleaner while moving;

@@ -5,7 +5,7 @@ layout(binding = 6)  uniform sampler2D gbufTex;
 layout(binding = 7)  uniform sampler2D albedoTex;
 layout(binding = 8)  uniform sampler2D directTex;
 layout(binding = 9)  uniform sampler2D indirectTex;
-layout(binding = 10) uniform sampler2D extraTex;
+layout(binding = 10) uniform sampler2D waterTex;
 layout(binding = 11) uniform sampler2D normalTex;
 
 out vec4 fragColour;
@@ -20,8 +20,7 @@ void main() {
 	vec3 albedo   = texelFetch(albedoTex,   px, 0).rgb;
 	vec3 direct   = texelFetch(directTex,   px, 0).rgb;
 	vec3 indirect = texelFetch(indirectTex, px, 0).rgb;
-	vec3 extra    = texelFetch(extraTex,    px, 0).rgb;
-	vec3 colour   = albedo * (direct + indirect) + extra;
+	vec3 colour   = albedo * (direct + indirect);
 
 	/* rt-debug option: view individual lighting terms */
 	int debug = int(fogParams.w);
@@ -31,7 +30,7 @@ void main() {
 		if (debug == 2) colour = indirect;
 		if (debug == 3) colour = albedo;
 		if (debug == 4) colour = n.xyz * 0.5 + 0.5;
-		if (debug == 5) colour = extra;
+		if (debug == 5) colour = texelFetch(waterTex, px, 0).rgb;
 		if (debug == 6) colour = vec3(fract(g.w / 16.0));
 		if (debug == 7) colour = vec3(n.w / 64.0);
 		vec4 dclip = viewProj * vec4(g.xyz, 1.0);

@@ -1,4 +1,5 @@
 #include "Model.h"
+#include "RayTracer.h"
 #include "ExtMath.h"
 #include "Funcs.h"
 #include "Game.h"
@@ -106,6 +107,9 @@ void Model_Render(struct Model* model, struct Entity* e) {
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 
 	Model_GetEntityTransform(model, e, &transform);
+#ifdef CC_BUILD_RAYTRACING
+	RayTracer_BeginEntity(e, &transform);
+#endif
 	Matrix_Mul(&m, &transform, &Gfx.View);
 
 	Gfx_LoadMatrix(MATRIX_VIEW, &m);
@@ -172,6 +176,9 @@ void Model_ApplyTexture(struct Entity* e) {
 
 void Model_UpdateVB(void) {
 	struct Model* model = Models.Active;
+#ifdef CC_BUILD_RAYTRACING
+	RayTracer_AddEntityVertices(Models.Vertices, model->index);
+#endif
 	if (!Models.Vb)
 		Models.Vb = Gfx_CreateDynamicVb(VERTEX_FORMAT_TEXTURED, Models.MaxVertices);
 	
@@ -183,6 +190,7 @@ void Model_UpdateVB(void) {
 /* Need to restore vertices array to keep third party plugins such as MoreModels working */
 static struct VertexTextured* real_vertices;
 static GfxResourceID modelVB;
+static int modelVB_count;
 
 void Model_LockVB(struct Entity* entity, int verticesCount) {
 #ifdef CC_BUILD_CONSOLE
@@ -198,10 +206,14 @@ void Model_LockVB(struct Entity* entity, int verticesCount) {
 #endif
 
 	real_vertices   = Models.Vertices;
+	modelVB_count   = verticesCount;
 	Models.Vertices = (struct VertexTextured*)Gfx_LockDynamicVb(modelVB, VERTEX_FORMAT_TEXTURED, verticesCount);
 }
 
 void Model_UnlockVB(void) {
+#ifdef CC_BUILD_RAYTRACING
+	RayTracer_AddEntityVertices(Models.Vertices, modelVB_count);
+#endif
 	Gfx_UnlockDynamicVb(modelVB);
 	Models.Vertices = real_vertices;
 }
@@ -289,6 +301,10 @@ void Model_RenderArm(struct Model* model, struct Entity* e) {
 	Vec3 pos = e->Position;
 	if (model->bobbing) pos.y += e->Anim.BobbingModel;
 
+#ifdef CC_BUILD_RAYTRACING
+	/* the held block/arm is not a world entity, so isn't recorded */
+	RayTracer_BeginEntity(NULL, NULL);
+#endif
 	Model_SetupState(model, e);
 	Gfx_SetVertexFormat(VERTEX_FORMAT_TEXTURED);
 	Model_ApplyTexture(e);

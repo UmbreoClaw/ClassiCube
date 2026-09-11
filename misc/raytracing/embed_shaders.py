@@ -17,6 +17,7 @@ SHADERS = [
 	('RT_ATROUS_SRC',    'rt_atrous.comp',    True),
 	('RT_COMPOSITE_VS',  'rt_composite.vert', False),
 	('RT_COMPOSITE_FS',  'rt_composite.frag', True),
+	('RT_WATER_FS',      'rt_water.frag',     True),
 ]
 
 def read(name):

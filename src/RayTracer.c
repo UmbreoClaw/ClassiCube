@@ -16,6 +16,9 @@
 #include "String_.h"
 #include "Funcs.h"
 #include "Physics.h"
+#include "Entity.h"
+#include "Model.h"
+#include "EnvRenderer.h"
 #include "_RayTracerShaders.h"
 
 /*########################################################################################################################*
@@ -41,7 +44,11 @@ typedef cc_uintptr    RTintptr;
 typedef unsigned int  RTbitfield;
 
 #define GL_NO_ERROR                 0
+#define GL_ONE                      1
 #define GL_TRIANGLES                0x0004
+#define GL_SRC_ALPHA                0x0302
+#define GL_ONE_MINUS_SRC_ALPHA      0x0303
+#define GL_BLEND                    0x0BE2
 #define GL_UNSIGNED_BYTE            0x1401
 #define GL_UNSIGNED_SHORT           0x1403
 #define GL_FLOAT                    0x1406
@@ -66,6 +73,7 @@ typedef unsigned int  RTbitfield;
 #define GL_RGBA16F                  0x881A
 #define GL_STATIC_DRAW              0x88E4
 #define GL_DYNAMIC_DRAW             0x88E8
+#define GL_STREAM_DRAW              0x88E0
 #define GL_READ_ONLY                0x88B8
 #define GL_WRITE_ONLY               0x88B9
 #define GL_UNIFORM_BUFFER           0x8A11
@@ -93,6 +101,9 @@ typedef unsigned int  RTbitfield;
 	GL_FUNC(void,    glPixelStorei,      (RTenum pname, RTint param)) \
 	GL_FUNC(void,    glActiveTexture,    (RTenum texture)) \
 	GL_FUNC(void,    glDrawArrays,       (RTenum mode, RTint first, RTsizei count)) \
+	GL_FUNC(void,    glEnable,           (RTenum cap)) \
+	GL_FUNC(void,    glDisable,          (RTenum cap)) \
+	GL_FUNC(void,    glBlendFunc,        (RTenum sfactor, RTenum dfactor)) \
 	GL_FUNC(void,    glGenBuffers,       (RTsizei n, RTuint* buffers)) \
 	GL_FUNC(void,    glDeleteBuffers,    (RTsizei n, const RTuint* buffers)) \
 	GL_FUNC(void,    glBindBuffer,       (RTenum target, RTuint buffer)) \
@@ -162,6 +173,7 @@ struct RTParams {
 	cc_int32 atlas[4];
 	float misc[4];
 	cc_int32 window[4];
+	float clouds[4];
 };
 
 /* Must match BlockInfo in rt_common.glsl (std430 layout) */
@@ -173,15 +185,46 @@ struct RTBlockInfo {
 	float tint[4];
 };
 
+/* Entity geometry recorded each frame for shadow rays */
+#define RT_MAX_ENTITIES     64
+#define RT_MAX_ENTITY_QUADS 8192
+
+/* Must match EntityInfo in rt_common.glsl (std430 layout) */
+struct RTEntity {
+	float bbMin[4];
+	float bbMax[4];
+	cc_uint32 quadStart, quadCount, pad0, pad1;
+};
+
+static struct RTEntity rt_entities[RT_MAX_ENTITIES];
+static float rt_quads[RT_MAX_ENTITY_QUADS * 16]; /* 4 vertices x vec4 per quad */
+static struct {
+	int count, quadCount, current;
+	cc_bool localCaptured;
+	struct Matrix transform;
+	RTuint entitySsbo, quadSsbo;
+} rt_ent = { 0, 0, -1 };
+
+/* Light emitting (full bright) blocks, sampled explicitly for global illumination */
+#define RT_MAX_EMITTERS 128
+static struct {
+	cc_int32* indices;      /* packed world indices of every emitting block */
+	int count, capacity;
+	cc_bool dirty, rebuild; /* selection needs redoing / list needs rebuilding from the world */
+	Vec3 lastCam;
+	int uploaded;
+	RTuint ssbo;
+} rt_em;
+
 #define RT_FLAG_GI           1
 #define RT_FLAG_REFLECTIONS  2
 #define RT_FLAG_SOFT_SHADOWS 4
 
 static struct {
 	cc_bool triedInit, initialised, supported;
-	cc_bool worldValid, worldWide, worldTried, blocksDirty, atlasWarned;
+	cc_bool worldValid, worldWide, worldTried, blocksDirty, atlasWarned, frameDrawn;
 	int width, height, frame;
-	RTuint traceProg, temporalProg, atrousProg, compositeProg;
+	RTuint traceProg, temporalProg, atrousProg, compositeProg, waterProg;
 	RTint  atrousStepLoc;
 	RTuint paramsUbo, blocksSsbo, worldTex, coarseTex, vao;
 	int coarseW, coarseH, coarseL;
@@ -193,7 +236,7 @@ static struct {
 	int max3DSize;
 } rt;
 
-static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance; int debug, scale; } rt_opts;
+static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance, cloudShadow; int debug, scale; } rt_opts;
 
 
 /*########################################################################################################################*
@@ -323,6 +366,13 @@ static cc_bool RT_CreatePrograms(void) {
 	rt.compositeProg = RT_LinkProgram(vs, fs, "composite");
 	if (!rt.compositeProg) return false;
 
+	vs = RT_CompileShader(GL_VERTEX_SHADER,   RT_COMPOSITE_VS, "composite vertex");
+	if (!vs) return false;
+	fs = RT_CompileShader(GL_FRAGMENT_SHADER, RT_WATER_FS, "water fragment");
+	if (!fs) { _glDeleteShader(vs); return false; }
+	rt.waterProg = RT_LinkProgram(vs, fs, "water");
+	if (!rt.waterProg) return false;
+
 	rt.atrousStepLoc = _glGetUniformLocation(rt.atrousProg, "stepSize");
 	return true;
 }
@@ -394,6 +444,104 @@ static void RT_FreeWorldTexture(void) {
 	RT_DeleteTexture(&rt.worldTex);
 	RT_DeleteTexture(&rt.coarseTex);
 	rt.worldValid = false;
+	rt_em.count   = 0;
+	rt_em.uploaded = 0;
+	rt_em.dirty   = true;
+}
+
+
+/*########################################################################################################################*
+*----------------------------------------------------Emitting blocks------------------------------------------------------*
+*#########################################################################################################################*/
+static cc_bool RT_IsEmitter(BlockID block) {
+	return Blocks.Brightness[block] != 0 && Blocks.Draw[block] != DRAW_GAS;
+}
+
+static int RT_FindEmitter(int index) {
+	int i;
+	for (i = 0; i < rt_em.count; i++) {
+		if (rt_em.indices[i] == index) return i;
+	}
+	return -1;
+}
+
+static void RT_AddEmitter(int index) {
+	cc_int32* grown;
+	int newCapacity;
+
+	if (rt_em.count >= rt_em.capacity) {
+		newCapacity = rt_em.capacity ? rt_em.capacity * 2 : 256;
+		grown = (cc_int32*)Mem_TryRealloc(rt_em.indices, newCapacity, sizeof(cc_int32));
+		if (!grown) return;
+		rt_em.indices  = grown;
+		rt_em.capacity = newCapacity;
+	}
+	rt_em.indices[rt_em.count++] = index;
+	rt_em.dirty = true;
+}
+
+static void RT_RemoveEmitter(int at) {
+	rt_em.indices[at] = rt_em.indices[--rt_em.count];
+	rt_em.dirty = true;
+}
+
+/* Scans the whole world for light emitting blocks */
+static void RT_BuildEmitters(void) {
+	int i;
+	rt_em.count   = 0;
+	rt_em.rebuild = false;
+	if (!World.Blocks || !World.Loaded) return;
+
+	for (i = 0; i < World.Volume; i++) {
+		if (RT_IsEmitter(World_GetRawBlock(i))) RT_AddEmitter(i);
+	}
+	rt_em.dirty = true;
+}
+
+/* Uploads the emitters nearest to the camera (all of them if there are few enough) */
+static void RT_UploadEmitters(void) {
+	static cc_int32 selected[RT_MAX_EMITTERS * 4];
+	static float    selDist[RT_MAX_EMITTERS];
+	Vec3 cam = Camera.CurrentPos, d;
+	int i, k, n = 0, worst = 0, x, y, z, index;
+	float dist;
+
+	if (rt_em.rebuild) RT_BuildEmitters();
+
+	Vec3_Sub(&d, &cam, &rt_em.lastCam);
+	if (!rt_em.dirty && Vec3_LengthSquared(&d) < 4.0f) return;
+	rt_em.dirty   = false;
+	rt_em.lastCam = cam;
+
+	for (i = 0; i < rt_em.count; i++) {
+		index = rt_em.indices[i];
+		World_Unpack(index, x, y, z);
+		d.x = x + 0.5f - cam.x; d.y = y + 0.5f - cam.y; d.z = z + 0.5f - cam.z;
+		dist = Vec3_LengthSquared(&d);
+
+		if (n < RT_MAX_EMITTERS) {
+			k = n++;
+		} else {
+			/* keep only the nearest RT_MAX_EMITTERS */
+			if (dist >= selDist[worst]) continue;
+			k = worst;
+		}
+		selDist[k] = dist;
+		selected[k * 4 + 0] = x; selected[k * 4 + 1] = y; selected[k * 4 + 2] = z;
+		selected[k * 4 + 3] = World_GetRawBlock(index);
+
+		if (n == RT_MAX_EMITTERS) {
+			worst = 0;
+			for (k = 1; k < n; k++) { if (selDist[k] > selDist[worst]) worst = k; }
+		}
+	}
+
+	rt_em.uploaded = n;
+	if (n) {
+		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, rt_em.ssbo);
+		_glBufferData(GL_SHADER_STORAGE_BUFFER, n * 4 * sizeof(cc_int32), selected, GL_STREAM_DRAW);
+		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	}
 }
 
 /* Builds the coarse occupancy grid: one byte per 8x8x8 region, 0 if the region is all air. */
@@ -508,6 +656,7 @@ static void RT_UploadWorld(void) {
 		Chat_AddRaw("&cRay tracing: failed to upload world to GPU");
 		return;
 	}
+	RT_BuildEmitters();
 	rt.worldValid = true;
 	rt.havePrev   = false;
 }
@@ -559,12 +708,17 @@ static void RT_FreeResources(void) {
 	if (rt.temporalProg)  _glDeleteProgram(rt.temporalProg);
 	if (rt.atrousProg)    _glDeleteProgram(rt.atrousProg);
 	if (rt.compositeProg) _glDeleteProgram(rt.compositeProg);
-	rt.traceProg = 0; rt.temporalProg = 0; rt.atrousProg = 0; rt.compositeProg = 0;
+	if (rt.waterProg)     _glDeleteProgram(rt.waterProg);
+	rt.traceProg = 0; rt.temporalProg = 0; rt.atrousProg = 0; rt.compositeProg = 0; rt.waterProg = 0;
 
 	if (rt.paramsUbo)  _glDeleteBuffers(1, &rt.paramsUbo);
 	if (rt.blocksSsbo) _glDeleteBuffers(1, &rt.blocksSsbo);
 	if (rt.vao)        _glDeleteVertexArrays(1, &rt.vao);
+	if (rt_ent.entitySsbo) _glDeleteBuffers(1, &rt_ent.entitySsbo);
+	if (rt_ent.quadSsbo)   _glDeleteBuffers(1, &rt_ent.quadSsbo);
+	if (rt_em.ssbo)        _glDeleteBuffers(1, &rt_em.ssbo);
 	rt.paramsUbo = 0; rt.blocksSsbo = 0; rt.vao = 0;
+	rt_ent.entitySsbo = 0; rt_ent.quadSsbo = 0; rt_em.ssbo = 0;
 	rt.initialised = false;
 	rt.triedInit   = false;
 }
@@ -611,6 +765,9 @@ static cc_bool RT_TryInit(void) {
 	_glBufferData(GL_UNIFORM_BUFFER, sizeof(struct RTParams), NULL, GL_DYNAMIC_DRAW);
 	_glBindBuffer(GL_UNIFORM_BUFFER, 0);
 	_glGenBuffers(1, &rt.blocksSsbo);
+	_glGenBuffers(1, &rt_ent.entitySsbo);
+	_glGenBuffers(1, &rt_ent.quadSsbo);
+	_glGenBuffers(1, &rt_em.ssbo);
 	_glGenVertexArrays(1, &rt.vao);
 
 	rt.initialised = true;
@@ -709,7 +866,112 @@ static void RT_FillParams(struct RTParams* p, int flags) {
 	p->misc[1] = (float)Game_ViewDistance * 1.05f;
 	p->misc[2] = rt_opts.giDistance;
 	p->misc[3] = 2.0f * (float)(Math_Sin(fovy * 0.5f) / Math_Cos(fovy * 0.5f)) / (float)rt.height;
-	p->window[0] = Game.Width; p->window[1] = Game.Height; p->window[2] = 0; p->window[3] = 0;
+	p->window[0] = Game.Width; p->window[1] = Game.Height; p->window[2] = rt_ent.count; p->window[3] = rt_em.uploaded;
+
+	/* Clouds: same texture mapping and scrolling as EnvRenderer_RenderClouds */
+	p->clouds[0] = (float)Env.CloudsHeight;
+	p->clouds[1] = (float)(Game.Time / 2048.0f * 0.6f * Env.CloudsSpeed);
+	p->clouds[2] = rt_opts.cloudShadow;
+	p->clouds[3] = (EnvRenderer_CloudsTexture() && Env.CloudsHeight >= -2000 && rt_opts.cloudShadow > 0.0f) ? 1.0f : 0.0f;
+}
+
+/*########################################################################################################################*
+*-----------------------------------------------------Entity geometry-----------------------------------------------------*
+*#########################################################################################################################*/
+static cc_bool RT_IsWorldEntity(struct Entity* e) {
+	int i;
+	for (i = 0; i < ENTITIES_MAX_COUNT; i++) {
+		if (Entities.List[i] == e) return true;
+	}
+	return false;
+}
+
+void RayTracer_BeginEntity(struct Entity* e, const struct Matrix* transform) {
+	struct RTEntity* ent;
+	rt_ent.current = -1;
+	if (!e || RayTracer_Mode == RT_MODE_OFF || !rt.worldValid) return;
+	if (!RT_IsWorldEntity(e) || rt_ent.count >= RT_MAX_ENTITIES) return;
+
+	rt_ent.current   = rt_ent.count++;
+	rt_ent.transform = *transform;
+	if (Entities.CurPlayer && e == &Entities.CurPlayer->Base) rt_ent.localCaptured = true;
+
+	ent = &rt_entities[rt_ent.current];
+	ent->bbMin[0] = ent->bbMin[1] = ent->bbMin[2] =  1e30f; ent->bbMin[3] = 0.0f;
+	ent->bbMax[0] = ent->bbMax[1] = ent->bbMax[2] = -1e30f; ent->bbMax[3] = 0.0f;
+	ent->quadStart = rt_ent.quadCount;
+	ent->quadCount = 0;
+	ent->pad0 = 0; ent->pad1 = 0;
+}
+
+void RayTracer_AddEntityVertices(const struct VertexTextured* vertices, int count) {
+	struct RTEntity* ent;
+	Vec3 in, out;
+	float* dst;
+	int i, k;
+	if (rt_ent.current < 0) return;
+	ent = &rt_entities[rt_ent.current];
+
+	for (i = 0; i + 4 <= count; i += 4) {
+		if (rt_ent.quadCount >= RT_MAX_ENTITY_QUADS) return;
+		dst = &rt_quads[rt_ent.quadCount * 16];
+
+		for (k = 0; k < 4; k++) {
+			in.x = vertices[i + k].x; in.y = vertices[i + k].y; in.z = vertices[i + k].z;
+			Vec3_Transform(&out, &in, &rt_ent.transform);
+			dst[k * 4 + 0] = out.x; dst[k * 4 + 1] = out.y; dst[k * 4 + 2] = out.z; dst[k * 4 + 3] = 1.0f;
+
+			ent->bbMin[0] = min(ent->bbMin[0], out.x); ent->bbMax[0] = max(ent->bbMax[0], out.x);
+			ent->bbMin[1] = min(ent->bbMin[1], out.y); ent->bbMax[1] = max(ent->bbMax[1], out.y);
+			ent->bbMin[2] = min(ent->bbMin[2], out.z); ent->bbMax[2] = max(ent->bbMax[2], out.z);
+		}
+		rt_ent.quadCount++;
+		ent->quadCount++;
+	}
+}
+
+/* Uploads this frame's entity geometry, then resets the recording for the next frame */
+static void RT_UploadEntities(void) {
+	struct Entity* e;
+	int i, valid = 0;
+
+	/* In first person the local player's model is never drawn, so record it here to get its */
+	/*  shadow. Colour and depth writes are disabled so the model doesn't actually show up */
+	if (!rt_ent.localCaptured && Entities.CurPlayer) {
+		e = &Entities.CurPlayer->Base;
+		if (e->Model) {
+			Gfx_SetColorWrite(false, false, false, false);
+			Gfx_SetDepthWrite(false);
+			Model_Render(e->Model, e);
+			Gfx_SetDepthWrite(true);
+			Gfx_SetColorWrite(true, true, true, true);
+		}
+	}
+
+	/* Drop entities that produced no geometry */
+	for (i = 0; i < rt_ent.count; i++) {
+		if (!rt_entities[i].quadCount) continue;
+		/* small margin so shadow rays starting exactly on the bounds still test the quads */
+		rt_entities[i].bbMin[0] -= 0.01f; rt_entities[i].bbMin[1] -= 0.01f; rt_entities[i].bbMin[2] -= 0.01f;
+		rt_entities[i].bbMax[0] += 0.01f; rt_entities[i].bbMax[1] += 0.01f; rt_entities[i].bbMax[2] += 0.01f;
+		rt_entities[valid++] = rt_entities[i];
+	}
+	rt_ent.count = valid;
+
+	if (rt_ent.count) {
+		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, rt_ent.entitySsbo);
+		_glBufferData(GL_SHADER_STORAGE_BUFFER, rt_ent.count * sizeof(struct RTEntity), rt_entities, GL_STREAM_DRAW);
+		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, rt_ent.quadSsbo);
+		_glBufferData(GL_SHADER_STORAGE_BUFFER, rt_ent.quadCount * 16 * sizeof(float), rt_quads, GL_STREAM_DRAW);
+		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+	}
+	_glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, rt_ent.entitySsbo);
+	_glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, rt_ent.quadSsbo);
+}
+
+static void RT_ResetEntities(void) {
+	rt_ent.count = 0; rt_ent.quadCount = 0; rt_ent.current = -1;
+	rt_ent.localCaptured = false;
 }
 
 static void RT_BindImage(int unit, RTuint tex, RTenum access, RTenum format) {
@@ -757,7 +1019,11 @@ void RayTracer_Render(float delta) {
 
 	cur  = rt.frame & 1;
 	prev = cur ^ 1;
+	RT_UploadEntities();
+	RT_UploadEmitters();
+	_glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, rt_em.ssbo);
 	RT_FillParams(&params, flags);
+	RT_ResetEntities();
 
 	_glBindBuffer(GL_UNIFORM_BUFFER, rt.paramsUbo);
 	_glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(params), &params);
@@ -769,6 +1035,7 @@ void RayTracer_Render(float delta) {
 	for (i = 0; i < Atlas1D.Count; i++) Atlas1D_Bind(i);
 	RT_BindSampler(1,  GL_TEXTURE_3D, rt.worldTex);
 	RT_BindSampler(14, GL_TEXTURE_3D, rt.coarseTex);
+	RT_BindSampler(15, GL_TEXTURE_2D, (RTuint)(cc_uintptr)EnvRenderer_CloudsTexture());
 	for (i = 0; i < RT_MAX_ATLASES; i++) {
 		RT_BindSampler(2 + i, GL_TEXTURE_2D, i < Atlas1D.Count ? (RTuint)(cc_uintptr)Atlas1D.TexIds[i] : 0);
 	}
@@ -844,6 +1111,30 @@ void RayTracer_Render(float delta) {
 	_glUseProgram(0);
 	GLBackend_RestoreProgram();
 	rt.frame++;
+	rt.frameDrawn = true;
+}
+
+void RayTracer_RenderTranslucent(void) {
+	if (!rt.frameDrawn || Gfx.LostContext) return;
+	rt.frameDrawn = false;
+
+	/* Blend the water layer over the opaque world and the entities drawn since, */
+	/*  with premultiplied alpha (the reflection isn't scaled by the water's alpha) */
+	_glEnable(GL_BLEND);
+	_glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	_glUseProgram(rt.waterProg);
+	_glBindBufferBase(GL_UNIFORM_BUFFER, 0, rt.paramsUbo);
+	RT_BindSampler(6, GL_TEXTURE_2D, rt.albedo);
+	RT_BindSampler(7, GL_TEXTURE_2D, rt.extra);
+	_glBindVertexArray(rt.vao);
+	_glDrawArrays(GL_TRIANGLES, 0, 3);
+	_glBindVertexArray(0);
+
+	_glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	_glDisable(GL_BLEND);
+	_glActiveTexture(GL_TEXTURE0);
+	_glUseProgram(0);
+	GLBackend_RestoreProgram();
 }
 
 void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block) {
@@ -861,6 +1152,17 @@ void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block) {
 	}
 	_glActiveTexture(GL_TEXTURE0);
 	RT_UpdateCoarseGrid(x, y, z, block);
+
+	/* keep the emitter list in sync */
+	{
+		int index = World_Pack(x, y, z);
+		int at    = RT_FindEmitter(index);
+		if (RT_IsEmitter(block)) {
+			if (at < 0) RT_AddEmitter(index);
+		} else if (at >= 0) {
+			RT_RemoveEmitter(at);
+		}
+	}
 }
 
 void RayTracer_SetMode(int mode) {
@@ -879,7 +1181,7 @@ void RayTracer_SetMode(int mode) {
 /*########################################################################################################################*
 *----------------------------------------------------Ray tracer component-------------------------------------------------*
 *#########################################################################################################################*/
-static void OnBlockDefChanged(void* obj) { rt.blocksDirty = true; }
+static void OnBlockDefChanged(void* obj) { rt.blocksDirty = true; rt_em.rebuild = true; }
 static void OnAtlasChanged(void* obj)    { rt.atlasWarned = false; }
 static void OnContextLost(void* obj)     { RT_FreeResources(); }
 
@@ -889,10 +1191,11 @@ static void OnInit(void) {
 	rt_opts.sunZ       = Options_GetFloat("rt-sun-z",      -4.0f, 4.0f, 0.20f);
 	rt_opts.sunRadius  = Options_GetFloat("rt-sun-radius",  0.0f, 0.5f, 0.04f);
 	rt_opts.ambient    = Options_GetFloat("rt-ambient",     0.0f, 1.0f, 0.25f);
-	rt_opts.emissive   = Options_GetFloat("rt-emissive",    0.0f, 8.0f, 2.0f);
+	rt_opts.emissive   = Options_GetFloat("rt-emissive",    0.0f, 16.0f, 3.0f);
 	rt_opts.giDistance = Options_GetFloat("rt-gi-distance", 4.0f, 256.0f, 48.0f);
 	rt_opts.debug      = Options_GetInt("rt-debug", 0, 16, 0);
 	rt_opts.scale      = Options_GetInt("rt-scale", 25, 100, 100);
+	rt_opts.cloudShadow = Options_GetFloat("rt-cloud-shadow", 0.0f, 1.0f, 0.6f);
 
 	Event_Register_(&BlockEvents.BlockDefChanged, NULL, OnBlockDefChanged);
 	Event_Register_(&GfxEvents.ContextLost,       NULL, OnContextLost);
@@ -901,6 +1204,8 @@ static void OnInit(void) {
 
 static void OnFree(void) {
 	RT_FreeResources();
+	Mem_Free(rt_em.indices);
+	rt_em.indices = NULL; rt_em.count = 0; rt_em.capacity = 0;
 }
 
 static void OnNewMap(void) {

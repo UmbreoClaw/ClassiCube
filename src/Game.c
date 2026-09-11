@@ -516,7 +516,7 @@ static void Render3DFrame(float delta, float t) {
 	EnvRenderer_RenderClouds();
 
 #ifdef CC_BUILD_RAYTRACING
-	/* Ray tracing draws both normal and translucent blocks in one pass, */
+	/* Ray tracing replaces the chunk passes (translucent blocks are composited later), */
 	/*  and doesn't need chunk meshes, so skip building them meanwhile */
 	rayTraced = RayTracer_Active();
 	if (rayTraced) {
@@ -531,7 +531,8 @@ static void Render3DFrame(float delta, float t) {
 #endif
 	EnvRenderer_RenderMapSides();
 
-	EntityShadows_Render();
+	/* Ray tracing casts real entity shadows, so the blob shadows are redundant */
+	if (!rayTraced) EntityShadows_Render();
 	if (Game_SelectedPos.valid && !Game_HideGui) {
 		SelOutlineRenderer_Render(&Game_SelectedPos, true);
 	}
@@ -540,6 +541,7 @@ static void Render3DFrame(float delta, float t) {
 	pos = Camera.CurrentPos;
 	if (rayTraced) {
 		EnvRenderer_RenderMapEdges();
+		RayTracer_RenderTranslucent();
 		/* Weather is normally drawn by the translucent chunk pass, which ray tracing replaces */
 		if (Env.Weather != WEATHER_SUNNY) {
 			Gfx_SetAlphaBlending(true);

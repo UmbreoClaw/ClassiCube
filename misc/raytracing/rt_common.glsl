@@ -20,7 +20,8 @@ layout(std140, binding = 0) uniform Params {
 	ivec4 screen;       /* xy = render size, z = frame index, w = flags */
 	ivec4 atlas;        /* x = atlas1D shift, y = atlas1D mask, z = atlas count, w = tile size in pixels */
 	vec4  misc;         /* x = atlas1D V per tile, y = max primary distance, z = GI ray distance, w = pixel angular size */
-	ivec4 window;       /* xy = window size in pixels (render size may be smaller, see rt-scale) */
+	ivec4 window;       /* xy = window size in pixels (render size may be smaller, see rt-scale), z = entity count, w = emitter count */
+	vec4  clouds;       /* x = clouds height, y = cloud texture scroll offset, z = shadow strength, w = enabled */
 };
 
 #define FLAG_GI          1
@@ -47,6 +48,19 @@ layout(binding = 5) uniform sampler2D atlas3;
 layout(binding = 14) uniform usampler3D coarseTex;
 #define COARSE_SHIFT 3
 #define COARSE_SIZE  8.0
+/* The game's cloud texture, for cloud shadows */
+layout(binding = 15) uniform sampler2D cloudsTex;
+
+/* Entity models drawn this frame, recorded as world space quads (must match RTEntity in RayTracer.c) */
+struct EntityInfo {
+	vec4  bbMin;
+	vec4  bbMax;
+	uvec4 range;  /* x = first quad, y = quad count */
+};
+layout(std430, binding = 2) readonly buffer EntityTable { EntityInfo entities[]; };
+layout(std430, binding = 3) readonly buffer EntityQuads { vec4 quadVerts[]; };
+/* Light emitting blocks near the camera: xyz = block position, w = block id */
+layout(std430, binding = 4) readonly buffer EmitterTable { ivec4 emitters[]; };
 
 #define DRAW_OPAQUE            0
 #define DRAW_TRANSPARENT       1
@@ -318,6 +332,57 @@ vec3 shadowColour(vec3 n) {
 	return shadowZSide.rgb;
 }
 
+/* Moller-Trumbore ray/triangle test, both sides */
+bool hitTriangle(vec3 ro, vec3 rd, vec3 a, vec3 b, vec3 c, float maxT) {
+	vec3 e1 = b - a, e2 = c - a;
+	vec3 pv = cross(rd, e2);
+	float det = dot(e1, pv);
+	if (abs(det) < 1e-7) return false;
+	float inv = 1.0 / det;
+	vec3 tv = ro - a;
+	float u = dot(tv, pv) * inv;
+	if (u < 0.0 || u > 1.0) return false;
+	vec3 qv = cross(tv, e1);
+	float v = dot(rd, qv) * inv;
+	if (v < 0.0 || u + v > 1.0) return false;
+	float t = dot(e2, qv) * inv;
+	return t > 1e-3 && t < maxT;
+}
+
+/* Whether the ray hits any entity (player) model recorded this frame */
+bool hitEntities(vec3 ro, vec3 rd, float maxT) {
+	vec3 invRd = 1.0 / rd;
+	for (int i = 0; i < window.z; i++) {
+		EntityInfo e = entities[i];
+		vec3 t1 = (e.bbMin.xyz - ro) * invRd;
+		vec3 t2 = (e.bbMax.xyz - ro) * invRd;
+		vec3 tn = min(t1, t2), tf = max(t1, t2);
+		float tEnter = max(max(tn.x, tn.y), tn.z);
+		float tExit  = min(min(tf.x, tf.y), tf.z);
+		if (tExit < max(tEnter, 0.0) || tEnter > maxT) continue;
+
+		uint first = e.range.x, count = e.range.y;
+		for (uint q = 0u; q < count; q++) {
+			uint b = (first + q) * 4u;
+			vec3 v0 = quadVerts[b].xyz, v1 = quadVerts[b + 1u].xyz;
+			vec3 v2 = quadVerts[b + 2u].xyz, v3 = quadVerts[b + 3u].xyz;
+			if (hitTriangle(ro, rd, v0, v1, v2, maxT) || hitTriangle(ro, rd, v0, v2, v3, maxT)) return true;
+		}
+	}
+	return false;
+}
+
+/* How much sunlight gets through the clouds along L from p (1 = no cloud) */
+float cloudShadow(vec3 p, vec3 L) {
+	if (clouds.w < 0.5 || L.y <= 0.0 || p.y >= clouds.x) return 1.0;
+	float t  = (clouds.x - p.y) / L.y;
+	vec2  xz = p.xz + L.xz * t;
+	/* same mapping as the cloud layer: 2048 blocks per texture repeat, scrolling along U */
+	vec2  uv = fract(vec2(xz.x / 2048.0 + clouds.y, xz.y / 2048.0));
+	float a  = textureLod(cloudsTex, uv, 0.0).a;
+	return 1.0 - a * clouds.z;
+}
+
 /* Direct sunlight contribution for a surface point, tracing a shadow ray towards the sun */
 vec3 directSun(vec3 p, vec3 n, vec3 L) {
 	float ndl = dot(n, L);
@@ -325,9 +390,10 @@ vec3 directSun(vec3 p, vec3 n, vec3 L) {
 
 	Hit sh;
 	if (traceRay(p, L, 512.0, true, false, sh)) return vec3(0.0);
+	if (window.z > 0 && hitEntities(p, L, 64.0)) return vec3(0.0);
 
 	/* Normalise so that an upward facing face receives the full classic sun colour */
-	float f = clamp(ndl / max(L.y, 0.2), 0.0, 1.0);
+	float f = clamp(ndl / max(L.y, 0.2), 0.0, 1.0) * cloudShadow(p, L);
 	return max(sunlitColour(n) - shadowColour(n), vec3(0.0)) * f;
 }
 
@@ -365,4 +431,39 @@ vec3 coneSample(vec3 dir, float tanRadius, inout uint seed) {
 	vec3 u = normalize(cross(t, dir));
 	vec3 v = cross(dir, u);
 	return normalize(dir + u * (cos(phi) * r) + v * (sin(phi) * r));
+}
+
+/* Light received from emitting blocks (lava, lamps...) by explicitly sampling one of them.
+   Picks an emitter with probability proportional to 1/distance^2, then traces a ray to it.
+   Noisy per frame, but the temporal accumulation and blur average it out. */
+vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
+	int count = window.w;
+	if (count == 0) return vec3(0.0);
+
+	float wsum = 0.0, chosenW = 0.0;
+	int chosen = -1;
+	for (int i = 0; i < count; i++) {
+		vec3 d = vec3(emitters[i].xyz) + 0.5 - p;
+		float d2 = dot(d, d);
+		if (d2 > 32.0 * 32.0 || dot(d, n) <= 0.0) continue;
+
+		float w = 1.0 / max(d2, 1.0);
+		wsum += w;
+		if (rand(seed) * wsum < w) { chosen = i; chosenW = w; }
+	}
+	if (chosen < 0) return vec3(0.0);
+
+	vec3  d    = vec3(emitters[chosen].xyz) + 0.5 - p;
+	float dist = length(d);
+	vec3  dir  = d / dist;
+	Hit eh;
+	if (!traceRay(p, dir, dist + 1.0, false, true, eh)) return vec3(0.0);
+	/* must have reached the emitter itself, not something in between */
+	if (ivec3(floor(eh.pos - eh.normal * 0.5)) != emitters[chosen].xyz) return vec3(0.0);
+
+	vec3  Le   = sampleTile(tileFor(eh.block, eh.face), eh.uv, 4.0).rgb * blocks[eh.block].tint.rgb * fogParams.z;
+	float cosR = max(dot(n, dir), 0.0);
+	float cosE = max(dot(-dir, eh.normal), 0.0);
+	float falloff = 1.0 / max(dist * dist, 1.0);
+	return Le * cosR * cosE * falloff * (wsum / chosenW) / 3.14159265;
 }
