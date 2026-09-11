@@ -3,16 +3,17 @@
    the same surface was visible there. */
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(rgba32f, binding = 0) uniform readonly  image2D gbufCur;
-layout(rgba32f, binding = 1) uniform readonly  image2D normalCur;
-layout(rgba16f, binding = 2) uniform readonly  image2D directCur;
-layout(rgba16f, binding = 3) uniform readonly  image2D indirectCur;
-layout(rgba32f, binding = 4) uniform readonly  image2D gbufPrev;
-layout(rgba32f, binding = 5) uniform readonly  image2D normalPrev;
-layout(rgba16f, binding = 6) uniform readonly  image2D accumDirPrev;
-layout(rgba16f, binding = 7) uniform readonly  image2D accumIndPrev;
-layout(rgba16f, binding = 8) uniform writeonly image2D accumDirOut;  /* rgb = direct, w = history length */
-layout(rgba16f, binding = 9) uniform writeonly image2D accumIndOut;  /* rgb = indirect, w = history length */
+/* Inputs are read through samplers: drivers only guarantee 8 image units per shader */
+layout(binding = 6)  uniform sampler2D gbufCur;
+layout(binding = 7)  uniform sampler2D normalCur;
+layout(binding = 8)  uniform sampler2D directCur;
+layout(binding = 9)  uniform sampler2D indirectCur;
+layout(binding = 10) uniform sampler2D gbufPrev;
+layout(binding = 11) uniform sampler2D normalPrev;
+layout(binding = 12) uniform sampler2D accumDirPrev;
+layout(binding = 13) uniform sampler2D accumIndPrev;
+layout(rgba16f, binding = 0) uniform writeonly image2D accumDirOut;  /* rgb = direct, w = history length */
+layout(rgba16f, binding = 1) uniform writeonly image2D accumIndOut;  /* rgb = indirect, w = history length */
 
 #define MAX_HISTORY 48.0
 
@@ -20,16 +21,16 @@ void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (px.x >= screen.x || px.y >= screen.y) return;
 
-	vec4 g   = imageLoad(gbufCur, px);
-	vec4 dir = imageLoad(directCur, px);
-	vec4 ind = imageLoad(indirectCur, px);
+	vec4 g   = texelFetch(gbufCur, px, 0);
+	vec4 dir = texelFetch(directCur, px, 0);
+	vec4 ind = texelFetch(indirectCur, px, 0);
 	if (g.w < 0.0) {
 		imageStore(accumDirOut, px, vec4(0.0));
 		imageStore(accumIndOut, px, vec4(0.0));
 		return;
 	}
 
-	vec4  nrm = imageLoad(normalCur, px);
+	vec4  nrm = texelFetch(normalCur, px, 0);
 	float history = 0.0;
 	vec3  prevDir = vec3(0.0), prevInd = vec3(0.0);
 
@@ -40,16 +41,16 @@ void main() {
 		ivec2 pp = ivec2(floor((prevNdc * 0.5 + 0.5) * vec2(screen.xy)));
 
 		if (all(greaterThanEqual(pp, ivec2(0))) && all(lessThan(pp, screen.xy))) {
-			vec4 pg = imageLoad(gbufPrev, pp);
-			vec4 pn = imageLoad(normalPrev, pp);
+			vec4 pg = texelFetch(gbufPrev, pp, 0);
+			vec4 pn = texelFetch(normalPrev, pp, 0);
 
 			bool samePoint  = pg.w > 0.0 && distance(pg.xyz, g.xyz) < 0.02 + 0.004 * g.w;
 			bool sameNormal = dot(pn.xyz, nrm.xyz) > 0.9;
 			bool sameBlock  = abs(pn.w - nrm.w) < 0.5;
 
 			if (samePoint && sameNormal && sameBlock) {
-				vec4 ad = imageLoad(accumDirPrev, pp);
-				vec4 ai = imageLoad(accumIndPrev, pp);
+				vec4 ad = texelFetch(accumDirPrev, pp, 0);
+				vec4 ai = texelFetch(accumIndPrev, pp, 0);
 				history = ai.w;
 				prevDir = ad.rgb;
 				prevInd = ai.rgb;

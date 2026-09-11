@@ -3,10 +3,10 @@
    accumulated history are already converged and get blurred less. */
 layout(local_size_x = 8, local_size_y = 8) in;
 
-layout(rgba32f, binding = 0) uniform readonly  image2D gbufCur;
-layout(rgba32f, binding = 1) uniform readonly  image2D normalCur;
-layout(rgba16f, binding = 2) uniform readonly  image2D srcImg;
-layout(rgba16f, binding = 3) uniform writeonly image2D dstImg;
+layout(binding = 6) uniform sampler2D gbufCur;
+layout(binding = 7) uniform sampler2D normalCur;
+layout(binding = 8) uniform sampler2D srcImg;
+layout(rgba16f, binding = 0) uniform writeonly image2D dstImg;
 
 uniform int stepSize;
 
@@ -14,11 +14,11 @@ void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
 	if (px.x >= screen.x || px.y >= screen.y) return;
 
-	vec4 g = imageLoad(gbufCur, px);
-	vec4 c = imageLoad(srcImg, px);
+	vec4 g = texelFetch(gbufCur, px, 0);
+	vec4 c = texelFetch(srcImg, px, 0);
 	if (g.w < 0.0) { imageStore(dstImg, px, c); return; }
 
-	vec4  n = imageLoad(normalCur, px);
+	vec4  n = texelFetch(normalCur, px, 0);
 	/* Less blur once enough samples have accumulated */
 	float historyScale = clamp(1.0 - c.w / 48.0, 0.15, 1.0);
 	float kernel[5] = float[5](1.0 / 16.0, 1.0 / 4.0, 3.0 / 8.0, 1.0 / 4.0, 1.0 / 16.0);
@@ -31,9 +31,9 @@ void main() {
 			ivec2 q = px + ivec2(i, j) * stepSize;
 			if (q.x < 0 || q.y < 0 || q.x >= screen.x || q.y >= screen.y) continue;
 
-			vec4 gq = imageLoad(gbufCur, q);
+			vec4 gq = texelFetch(gbufCur, q, 0);
 			if (gq.w < 0.0) continue;
-			vec4 nq = imageLoad(normalCur, q);
+			vec4 nq = texelFetch(normalCur, q, 0);
 			if (dot(nq.xyz, n.xyz) < 0.9) continue;
 
 			/* distance of the neighbour from this pixel's surface plane */
@@ -42,7 +42,7 @@ void main() {
 			if (i != 0 || j != 0) w *= historyScale;
 			if (abs(nq.w - n.w) > 0.5) w *= 0.25;
 
-			sum  += imageLoad(srcImg, q).rgb * w;
+			sum  += texelFetch(srcImg, q, 0).rgb * w;
 			wsum += w;
 		}
 	}

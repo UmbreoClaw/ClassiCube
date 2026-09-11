@@ -199,11 +199,20 @@ static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance; int 
 /*########################################################################################################################*
 *--------------------------------------------------------Utilities--------------------------------------------------------*
 *#########################################################################################################################*/
+/* Writes a message to client.log (Platform_Log only goes to the console/debugger on Windows) */
+static void RT_LogToFile(const char* title, const char* detail) {
+	cc_string msg; char msgBuffer[3072];
+	String_InitArray(msg, msgBuffer);
+	String_Format2(&msg, "%c\n%c\n", title, detail);
+	Logger_Log(&msg);
+	Platform_Log2("%c %c", title, detail);
+}
+
 static void RT_Disable(const char* reason) {
 	rt.supported = false;
 	RayTracer_Mode = RT_MODE_OFF;
 	Chat_Add1("&cRay tracing disabled: %c", reason);
-	Platform_Log1("Ray tracing disabled: %c", reason);
+	RT_LogToFile("Ray tracing disabled:", reason);
 }
 
 static void RT_ColToVec(float* dst, PackedCol col) {
@@ -265,7 +274,7 @@ static RTuint RT_CompileShader(RTenum type, const char* src, const char* name) {
 	_glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &logLen);
 	log[0] = '\0';
 	if (logLen > 0) _glGetShaderInfoLog(shader, sizeof(log) - 1, NULL, log);
-	Platform_Log2("Failed to compile ray tracing shader %c:\n%c", name, log);
+	RT_LogToFile("Failed to compile ray tracing shader:", log);
 	Window_ShowDialog("Failed to compile ray tracing shader", log);
 	_glDeleteShader(shader);
 	return 0;
@@ -288,7 +297,7 @@ static RTuint RT_LinkProgram(RTuint s1, RTuint s2, const char* name) {
 	_glGetProgramiv(prog, GL_INFO_LOG_LENGTH, &logLen);
 	log[0] = '\0';
 	if (logLen > 0) _glGetProgramInfoLog(prog, sizeof(log) - 1, NULL, log);
-	Platform_Log2("Failed to link ray tracing program %c:\n%c", name, log);
+	RT_LogToFile("Failed to link ray tracing program:", log);
 	Window_ShowDialog("Failed to link ray tracing program", log);
 	_glDeleteProgram(prog);
 	return 0;
@@ -405,7 +414,7 @@ static cc_bool RT_BuildCoarseGrid(void) {
 	}
 
 	_glGenTextures(1, &rt.coarseTex);
-	_glActiveTexture(GL_TEXTURE0 + 12);
+	_glActiveTexture(GL_TEXTURE0 + 14);
 	_glBindTexture(GL_TEXTURE_3D, rt.coarseTex);
 	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	_glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -442,7 +451,7 @@ static void RT_UpdateCoarseGrid(int x, int y, int z, BlockID block) {
 		}
 	}
 
-	_glActiveTexture(GL_TEXTURE0 + 12);
+	_glActiveTexture(GL_TEXTURE0 + 14);
 	_glBindTexture(GL_TEXTURE_3D, rt.coarseTex);
 	_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 	_glTexSubImage3D(GL_TEXTURE_3D, 0, cx, cz, cy, 1, 1, 1, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &value);
@@ -609,6 +618,12 @@ static cc_bool RT_TryInit(void) {
 	rt.blocksDirty = true;
 	RT_UploadWorld();
 	Platform_Log2("Ray tracing initialised (OpenGL %i.%i)", &major, &minor);
+	{
+		cc_string msg; char msgBuffer[128];
+		String_InitArray(msg, msgBuffer);
+		String_Format2(&msg, "Ray tracing initialised (OpenGL %i.%i)\n", &major, &minor);
+		Logger_Log(&msg);
+	}
 	return true;
 }
 
@@ -753,7 +768,7 @@ void RayTracer_Render(float delta) {
 	/* Make sure the terrain textures exist, then bind them for the shaders */
 	for (i = 0; i < Atlas1D.Count; i++) Atlas1D_Bind(i);
 	RT_BindSampler(1,  GL_TEXTURE_3D, rt.worldTex);
-	RT_BindSampler(12, GL_TEXTURE_3D, rt.coarseTex);
+	RT_BindSampler(14, GL_TEXTURE_3D, rt.coarseTex);
 	for (i = 0; i < RT_MAX_ATLASES; i++) {
 		RT_BindSampler(2 + i, GL_TEXTURE_2D, i < Atlas1D.Count ? (RTuint)(cc_uintptr)Atlas1D.TexIds[i] : 0);
 	}
@@ -773,35 +788,37 @@ void RayTracer_Render(float delta) {
 	_glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
 	/* 2) Temporal accumulation against the previous frame */
+	/* (inputs go through texture units, as only 8 image units are guaranteed) */
+	_glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
 	_glUseProgram(rt.temporalProg);
-	RT_BindImage(0, rt.gbuf[cur],      GL_READ_ONLY,  GL_RGBA32F);
-	RT_BindImage(1, rt.normal[cur],    GL_READ_ONLY,  GL_RGBA32F);
-	RT_BindImage(2, rt.direct,         GL_READ_ONLY,  GL_RGBA16F);
-	RT_BindImage(3, rt.indirect,       GL_READ_ONLY,  GL_RGBA16F);
-	RT_BindImage(4, rt.gbuf[prev],     GL_READ_ONLY,  GL_RGBA32F);
-	RT_BindImage(5, rt.normal[prev],   GL_READ_ONLY,  GL_RGBA32F);
-	RT_BindImage(6, rt.accumDir[prev], GL_READ_ONLY,  GL_RGBA16F);
-	RT_BindImage(7, rt.accumInd[prev], GL_READ_ONLY,  GL_RGBA16F);
-	RT_BindImage(8, rt.accumDir[cur],  GL_WRITE_ONLY, GL_RGBA16F);
-	RT_BindImage(9, rt.accumInd[cur],  GL_WRITE_ONLY, GL_RGBA16F);
+	RT_BindSampler(6,  GL_TEXTURE_2D, rt.gbuf[cur]);
+	RT_BindSampler(7,  GL_TEXTURE_2D, rt.normal[cur]);
+	RT_BindSampler(8,  GL_TEXTURE_2D, rt.direct);
+	RT_BindSampler(9,  GL_TEXTURE_2D, rt.indirect);
+	RT_BindSampler(10, GL_TEXTURE_2D, rt.gbuf[prev]);
+	RT_BindSampler(11, GL_TEXTURE_2D, rt.normal[prev]);
+	RT_BindSampler(12, GL_TEXTURE_2D, rt.accumDir[prev]);
+	RT_BindSampler(13, GL_TEXTURE_2D, rt.accumInd[prev]);
+	RT_BindImage(0, rt.accumDir[cur], GL_WRITE_ONLY, GL_RGBA16F);
+	RT_BindImage(1, rt.accumInd[cur], GL_WRITE_ONLY, GL_RGBA16F);
 	_glDispatchCompute(groupsX, groupsY, 1);
-	_glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+	_glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
 	/* 3) Spatial denoising of the indirect light */
 	filtered = rt.accumInd[cur];
 	if (flags & RT_FLAG_GI) {
 		_glUseProgram(rt.atrousProg);
-		RT_BindImage(0, rt.gbuf[cur],   GL_READ_ONLY, GL_RGBA32F);
-		RT_BindImage(1, rt.normal[cur], GL_READ_ONLY, GL_RGBA32F);
+		RT_BindSampler(6, GL_TEXTURE_2D, rt.gbuf[cur]);
+		RT_BindSampler(7, GL_TEXTURE_2D, rt.normal[cur]);
 		atrousSrc = rt.accumInd[cur];
 		atrousDst = rt.atrousTmp[0];
 
 		for (i = 0; i < 3; i++) {
 			_glUniform1i(rt.atrousStepLoc, 1 << i);
-			RT_BindImage(2, atrousSrc, GL_READ_ONLY,  GL_RGBA16F);
-			RT_BindImage(3, atrousDst, GL_WRITE_ONLY, GL_RGBA16F);
+			RT_BindSampler(8, GL_TEXTURE_2D, atrousSrc);
+			RT_BindImage(0, atrousDst, GL_WRITE_ONLY, GL_RGBA16F);
 			_glDispatchCompute(groupsX, groupsY, 1);
-			_glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+			_glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT);
 
 			filtered  = atrousDst;
 			atrousSrc = atrousDst;

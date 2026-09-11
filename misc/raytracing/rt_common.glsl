@@ -44,7 +44,7 @@ layout(binding = 3) uniform sampler2D atlas1;
 layout(binding = 4) uniform sampler2D atlas2;
 layout(binding = 5) uniform sampler2D atlas3;
 /* 1 byte per 8x8x8 region of the world: 0 if the region is entirely air, so rays can skip it */
-layout(binding = 12) uniform usampler3D coarseTex;
+layout(binding = 14) uniform usampler3D coarseTex;
 #define COARSE_SHIFT 3
 #define COARSE_SIZE  8.0
 
@@ -81,8 +81,10 @@ bool blocksLight(uint block) { return (int(blocks[block].maxBB.w) & BLOCKFLAG_BL
 bool fullBright(uint block) { return blocks[block].tint.w > 0.5; }
 
 uint tileFor(uint block, uint face) {
-	if (face < 4u) return blocks[block].texA[face];
-	return blocks[block].texB[face - 4u];
+	/* NOTE: NVIDIA's compiler rejects a constant out of range index even in a branch that */
+	/*  can't be taken, so the index must stay in range for every possible face value */
+	uvec4 tiles = (face < 4u) ? blocks[block].texA : blocks[block].texB;
+	return tiles[face & 3u];
 }
 
 uint coarseAt(ivec3 cc) {
