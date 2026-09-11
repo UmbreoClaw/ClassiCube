@@ -59,7 +59,7 @@ struct EntityInfo {
 };
 layout(std430, binding = 2) readonly buffer EntityTable { EntityInfo entities[]; };
 layout(std430, binding = 3) readonly buffer EntityQuads { vec4 quadVerts[]; };
-/* Light emitting blocks near the camera: xyz = block position, w = block id */
+/* Light emitting blocks near the camera: xyz = block position, w = block id | light level (0-15) << 16 */
 layout(std430, binding = 4) readonly buffer EmitterTable { ivec4 emitters[]; };
 
 #define DRAW_OPAQUE            0
@@ -433,9 +433,29 @@ vec3 coneSample(vec3 dir, float tanRadius, inout uint seed) {
 	return normalize(dir + u * (cos(phi) * r) + v * (sin(phi) * r));
 }
 
-/* Light received from emitting blocks (lava, lamps...) by explicitly sampling one of them.
-   Picks an emitter with probability proportional to 1/distance^2, then traces a ray to it.
-   Noisy per frame, but the temporal accumulation and blur average it out. */
+/* Average colour of the face of an emitting block that faces the receiver */
+vec3 emitterColour(uint block, vec3 dirToEmitter) {
+	BlockInfo bi = blocks[block];
+	if (int(bi.minBB.w) == DRAW_GAS) return vec3(1.0); /* invisible light source */
+
+	vec3 a = abs(dirToEmitter);
+	uint face;
+	if (a.x >= a.y && a.x >= a.z) face = dirToEmitter.x > 0.0 ? FACE_XMIN : FACE_XMAX;
+	else if (a.y >= a.z)          face = dirToEmitter.y > 0.0 ? FACE_YMIN : FACE_YMAX;
+	else                          face = dirToEmitter.z > 0.0 ? FACE_ZMIN : FACE_ZMAX;
+
+	uint tile = tileFor(block, face);
+	vec4 sum = sampleTile(tile, vec2(0.25, 0.25), 4.0) + sampleTile(tile, vec2(0.75, 0.25), 4.0)
+	         + sampleTile(tile, vec2(0.25, 0.75), 4.0) + sampleTile(tile, vec2(0.75, 0.75), 4.0);
+	/* weight by alpha so transparent texels (torches, lamps) don't darken the light */
+	return sum.a > 0.01 ? (sum.rgb / sum.a) * bi.tint.rgb : vec3(1.0);
+}
+
+/* Light received from emitting blocks (lava, lamps, server defined lights...) by explicitly
+   sampling one of them. Picks an emitter with probability proportional to 1/distance^2,
+   then checks nothing solid lies between the receiver and the emitter's cell. Emitters are
+   treated as small omnidirectional lights, so sprites, translucent and thin custom blocks
+   all work. Noisy per frame, but the temporal accumulation and blur average it out. */
 vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
 	int count = window.w;
 	if (count == 0) return vec3(0.0);
@@ -453,17 +473,23 @@ vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
 	}
 	if (chosen < 0) return vec3(0.0);
 
-	vec3  d    = vec3(emitters[chosen].xyz) + 0.5 - p;
+	ivec4 em   = emitters[chosen];
+	vec3  d    = vec3(em.xyz) + 0.5 - p;
 	float dist = length(d);
 	vec3  dir  = d / dist;
-	Hit eh;
-	if (!traceRay(p, dir, dist + 1.0, false, true, eh)) return vec3(0.0);
-	/* must have reached the emitter itself, not something in between */
-	if (ivec3(floor(eh.pos - eh.normal * 0.5)) != emitters[chosen].xyz) return vec3(0.0);
 
-	vec3  Le   = sampleTile(tileFor(eh.block, eh.face), eh.uv, 4.0).rgb * blocks[eh.block].tint.rgb * fogParams.z;
-	float cosR = max(dot(n, dir), 0.0);
-	float cosE = max(dot(-dir, eh.normal), 0.0);
+	/* distance at which the ray enters the emitter's cell */
+	vec3 invDir = 1.0 / dir;
+	vec3 t1 = (vec3(em.xyz) - p) * invDir;
+	vec3 t2 = (vec3(em.xyz) + 1.0 - p) * invDir;
+	float tCell = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
+	if (tCell > 1e-3) {
+		Hit eh;
+		if (traceRay(p, dir, tCell - 1e-3, false, true, eh)) return vec3(0.0);
+	}
+
+	vec3  Le      = emitterColour(uint(em.w & 0xFFFF), dir) * fogParams.z * (float(em.w >> 16) / 15.0);
+	float cosR    = max(dot(n, dir), 0.0);
 	float falloff = 1.0 / max(dist * dist, 1.0);
-	return Le * cosR * cosE * falloff * (wsum / chosenW) / 3.14159265;
+	return Le * cosR * falloff * (wsum / chosenW) / 3.14159265;
 }

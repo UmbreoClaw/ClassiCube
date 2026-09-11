@@ -454,7 +454,8 @@ static void RT_FreeWorldTexture(void) {
 *----------------------------------------------------Emitting blocks------------------------------------------------------*
 *#########################################################################################################################*/
 static cc_bool RT_IsEmitter(BlockID block) {
-	return Blocks.Brightness[block] != 0 && Blocks.Draw[block] != DRAW_GAS;
+	/* any block with a brightness emits, including invisible (gas) light sources */
+	return Blocks.Brightness[block] != 0;
 }
 
 static int RT_FindEmitter(int index) {
@@ -528,7 +529,12 @@ static void RT_UploadEmitters(void) {
 		}
 		selDist[k] = dist;
 		selected[k * 4 + 0] = x; selected[k * 4 + 1] = y; selected[k * 4 + 2] = z;
-		selected[k * 4 + 3] = World_GetRawBlock(index);
+		/* w = block id, with the block's light level (0-15, larger of lamp/lava nibbles) in the upper bits */
+		{
+			BlockID b = World_GetRawBlock(index);
+			int level = max(Blocks.Brightness[b] >> 4, Blocks.Brightness[b] & 15);
+			selected[k * 4 + 3] = b | (level << 16);
+		}
 
 		if (n == RT_MAX_EMITTERS) {
 			worst = 0;
