@@ -58,14 +58,21 @@ void main() {
 		}
 	}
 
-	history = min(history + 1.0, MAX_HISTORY);
-	float alpha = 1.0 / history;
-
-	vec3 outDir = mix(prevDir, dir.rgb, alpha);
-	vec3 outInd = mix(prevInd, ind.rgb, alpha);
+	float dirHistory = min(history + 1.0, MAX_HISTORY);
+	vec3  outDir = mix(prevDir, dir.rgb, 1.0 / dirHistory);
 	/* Hard shadows are noise free, so don't smear them over time */
 	if ((screen.w & FLAG_SOFT_SHADOWS) == 0) outDir = dir.rgb;
 
-	imageStore(accumDirOut, px, vec4(outDir, history));
+	vec3 outInd;
+	if (ind.a > 0.5) {
+		history = min(history + 1.0, MAX_HISTORY);
+		outInd  = mix(prevInd, ind.rgb, 1.0 / history);
+	} else {
+		/* no GI sample this frame (checkerboard): keep the history as is, */
+		/*  history 0 marks a hole for the blur pass to fill from neighbours */
+		outInd = prevInd;
+	}
+
+	imageStore(accumDirOut, px, vec4(outDir, dirHistory));
 	imageStore(accumIndOut, px, vec4(outInd, history));
 }

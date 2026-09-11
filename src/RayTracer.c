@@ -205,11 +205,17 @@ static struct {
 	RTuint entitySsbo, quadSsbo;
 } rt_ent = { 0, 0, -1 };
 
-/* Light emitting (full bright) blocks, sampled explicitly for global illumination */
-#define RT_MAX_EMITTERS 128
+/* Light emitting (full bright) blocks, sampled explicitly for global illumination. */
+/* Kept in 16x16x16 buckets so that selecting the ones near the camera (and keeping the */
+/*  list in sync on block changes) doesn't scan every emitter in maps full of lava/lamps */
+#define RT_MAX_EMITTERS   128
+#define RT_EM_BUCKET_SHIFT 4
+#define RT_EM_RADIUS       32.0f  /* must match the cutoff in emitterLight() */
+struct RTEmitterBucket { cc_int32* items; int count, capacity; };
 static struct {
-	cc_int32* indices;      /* packed world indices of every emitting block */
-	int count, capacity;
+	struct RTEmitterBucket* buckets;
+	int bucketsX, bucketsY, bucketsZ;
+	int count;              /* total emitters */
 	cc_bool dirty, rebuild; /* selection needs redoing / list needs rebuilding from the world */
 	Vec3 lastCam;
 	int uploaded;
@@ -236,7 +242,7 @@ static struct {
 	int max3DSize;
 } rt;
 
-static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance, cloudShadow; int debug, scale; } rt_opts;
+static struct { float sunX, sunZ, sunRadius, ambient, emissive, giDistance, cloudShadow; int debug, scale, giRate; } rt_opts;
 
 
 /*########################################################################################################################*
@@ -440,13 +446,14 @@ static void RT_CreateScreenTextures(int width, int height) {
 	rt.havePrev = false;
 }
 
+static void RT_FreeEmitters(void);
+
 static void RT_FreeWorldTexture(void) {
 	RT_DeleteTexture(&rt.worldTex);
 	RT_DeleteTexture(&rt.coarseTex);
 	rt.worldValid = false;
-	rt_em.count   = 0;
+	RT_FreeEmitters();
 	rt_em.uploaded = 0;
-	rt_em.dirty   = true;
 }
 
 
@@ -458,43 +465,73 @@ static cc_bool RT_IsEmitter(BlockID block) {
 	return Blocks.Brightness[block] != 0;
 }
 
-static int RT_FindEmitter(int index) {
+static struct RTEmitterBucket* RT_EmitterBucket(int x, int y, int z) {
+	int bx = x >> RT_EM_BUCKET_SHIFT, by = y >> RT_EM_BUCKET_SHIFT, bz = z >> RT_EM_BUCKET_SHIFT;
+	return &rt_em.buckets[(by * rt_em.bucketsZ + bz) * rt_em.bucketsX + bx];
+}
+
+static void RT_FreeEmitters(void) {
+	int i, total = rt_em.bucketsX * rt_em.bucketsY * rt_em.bucketsZ;
+	if (rt_em.buckets) {
+		for (i = 0; i < total; i++) Mem_Free(rt_em.buckets[i].items);
+		Mem_Free(rt_em.buckets);
+	}
+	rt_em.buckets = NULL;
+	rt_em.bucketsX = 0; rt_em.bucketsY = 0; rt_em.bucketsZ = 0;
+	rt_em.count = 0;
+	rt_em.dirty = true;
+}
+
+static int RT_FindEmitter(struct RTEmitterBucket* b, int index) {
 	int i;
-	for (i = 0; i < rt_em.count; i++) {
-		if (rt_em.indices[i] == index) return i;
+	for (i = 0; i < b->count; i++) {
+		if (b->items[i] == index) return i;
 	}
 	return -1;
 }
 
-static void RT_AddEmitter(int index) {
+static void RT_AddEmitter(struct RTEmitterBucket* b, int index) {
 	cc_int32* grown;
 	int newCapacity;
 
-	if (rt_em.count >= rt_em.capacity) {
-		newCapacity = rt_em.capacity ? rt_em.capacity * 2 : 256;
-		grown = (cc_int32*)Mem_TryRealloc(rt_em.indices, newCapacity, sizeof(cc_int32));
+	if (b->count >= b->capacity) {
+		newCapacity = b->capacity ? b->capacity * 2 : 16;
+		grown = (cc_int32*)Mem_TryRealloc(b->items, newCapacity, sizeof(cc_int32));
 		if (!grown) return;
-		rt_em.indices  = grown;
-		rt_em.capacity = newCapacity;
+		b->items    = grown;
+		b->capacity = newCapacity;
 	}
-	rt_em.indices[rt_em.count++] = index;
+	b->items[b->count++] = index;
+	rt_em.count++;
 	rt_em.dirty = true;
 }
 
-static void RT_RemoveEmitter(int at) {
-	rt_em.indices[at] = rt_em.indices[--rt_em.count];
+static void RT_RemoveEmitter(struct RTEmitterBucket* b, int at) {
+	b->items[at] = b->items[--b->count];
+	rt_em.count--;
 	rt_em.dirty = true;
 }
 
 /* Scans the whole world for light emitting blocks */
 static void RT_BuildEmitters(void) {
-	int i;
-	rt_em.count   = 0;
+	int x, y, z, i = 0, total;
+	RT_FreeEmitters();
 	rt_em.rebuild = false;
 	if (!World.Blocks || !World.Loaded) return;
 
-	for (i = 0; i < World.Volume; i++) {
-		if (RT_IsEmitter(World_GetRawBlock(i))) RT_AddEmitter(i);
+	rt_em.bucketsX = (World.Width  + (1 << RT_EM_BUCKET_SHIFT) - 1) >> RT_EM_BUCKET_SHIFT;
+	rt_em.bucketsY = (World.Height + (1 << RT_EM_BUCKET_SHIFT) - 1) >> RT_EM_BUCKET_SHIFT;
+	rt_em.bucketsZ = (World.Length + (1 << RT_EM_BUCKET_SHIFT) - 1) >> RT_EM_BUCKET_SHIFT;
+	total = rt_em.bucketsX * rt_em.bucketsY * rt_em.bucketsZ;
+	rt_em.buckets = (struct RTEmitterBucket*)Mem_TryAllocCleared(total, sizeof(struct RTEmitterBucket));
+	if (!rt_em.buckets) { rt_em.bucketsX = 0; rt_em.bucketsY = 0; rt_em.bucketsZ = 0; return; }
+
+	for (y = 0; y < World.Height; y++) {
+		for (z = 0; z < World.Length; z++) {
+			for (x = 0; x < World.Width; x++, i++) {
+				if (RT_IsEmitter(World_GetRawBlock(i))) RT_AddEmitter(RT_EmitterBucket(x, y, z), i);
+			}
+		}
 	}
 	rt_em.dirty = true;
 }
@@ -507,15 +544,33 @@ static void RT_UploadEmitters(void) {
 	int i, k, n = 0, worst = 0, x, y, z, index;
 	float dist;
 
+	struct RTEmitterBucket* bucket;
+	int bx, by, bz, bx1, by1, bz1, bx2, by2, bz2, reach;
+
 	if (rt_em.rebuild) RT_BuildEmitters();
 
 	Vec3_Sub(&d, &cam, &rt_em.lastCam);
 	if (!rt_em.dirty && Vec3_LengthSquared(&d) < 4.0f) return;
 	rt_em.dirty   = false;
 	rt_em.lastCam = cam;
+	if (!rt_em.buckets || !rt_em.count) { rt_em.uploaded = 0; return; }
 
-	for (i = 0; i < rt_em.count; i++) {
-		index = rt_em.indices[i];
+	/* Only buckets within reach of the camera (the shader ignores emitters further away */
+	/*  than RT_EM_RADIUS from a surface, and surfaces beyond a few blocks of the camera */
+	/*  matter less), so huge lava lakes elsewhere in the map cost nothing */
+	reach = ((int)RT_EM_RADIUS + 16 + (1 << RT_EM_BUCKET_SHIFT) - 1) >> RT_EM_BUCKET_SHIFT;
+	bx = ((int)cam.x) >> RT_EM_BUCKET_SHIFT; by = ((int)cam.y) >> RT_EM_BUCKET_SHIFT; bz = ((int)cam.z) >> RT_EM_BUCKET_SHIFT;
+	bx1 = max(bx - reach, 0); bx2 = min(bx + reach, rt_em.bucketsX - 1);
+	by1 = max(by - reach, 0); by2 = min(by + reach, rt_em.bucketsY - 1);
+	bz1 = max(bz - reach, 0); bz2 = min(bz + reach, rt_em.bucketsZ - 1);
+
+	for (by = by1; by <= by2; by++)
+	for (bz = bz1; bz <= bz2; bz++)
+	for (bx = bx1; bx <= bx2; bx++)
+	{
+	bucket = &rt_em.buckets[(by * rt_em.bucketsZ + bz) * rt_em.bucketsX + bx];
+	for (i = 0; i < bucket->count; i++) {
+		index = bucket->items[i];
 		World_Unpack(index, x, y, z);
 		d.x = x + 0.5f - cam.x; d.y = y + 0.5f - cam.y; d.z = z + 0.5f - cam.z;
 		dist = Vec3_LengthSquared(&d);
@@ -540,6 +595,7 @@ static void RT_UploadEmitters(void) {
 			worst = 0;
 			for (k = 1; k < n; k++) { if (selDist[k] > selDist[worst]) worst = k; }
 		}
+	}
 	}
 
 	rt_em.uploaded = n;
@@ -863,7 +919,7 @@ static void RT_FillParams(struct RTParams* p, int flags) {
 	p->fogParams[2] = rt_opts.emissive;
 	p->fogParams[3] = (float)rt_opts.debug;
 
-	p->worldSize[0] = World.Width; p->worldSize[1] = World.Height; p->worldSize[2] = World.Length; p->worldSize[3] = 0;
+	p->worldSize[0] = World.Width; p->worldSize[1] = World.Height; p->worldSize[2] = World.Length; p->worldSize[3] = rt_opts.giRate;
 	p->screen[0] = rt.width; p->screen[1] = rt.height; p->screen[2] = rt.frame; p->screen[3] = flags;
 	p->atlas[0] = Atlas1D.Shift; p->atlas[1] = Atlas1D.Mask; p->atlas[2] = Atlas1D.Count; p->atlas[3] = Atlas2D.TileSize;
 
@@ -1160,15 +1216,38 @@ void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block) {
 	RT_UpdateCoarseGrid(x, y, z, block);
 
 	/* keep the emitter list in sync */
-	{
+	if (rt_em.buckets) {
+		struct RTEmitterBucket* b = RT_EmitterBucket(x, y, z);
 		int index = World_Pack(x, y, z);
-		int at    = RT_FindEmitter(index);
+		int at    = RT_FindEmitter(b, index);
 		if (RT_IsEmitter(block)) {
-			if (at < 0) RT_AddEmitter(index);
+			if (at < 0) RT_AddEmitter(b, index);
 		} else if (at >= 0) {
-			RT_RemoveEmitter(at);
+			RT_RemoveEmitter(b, at);
 		}
 	}
+}
+
+const char* const RayTracerScale_Names[RT_SCALE_COUNT]   = { "100%", "75%", "50%" };
+const char* const RayTracerGIRate_Names[RT_GIRATE_COUNT] = { "Half", "Full" };
+static const int rt_scalePercent[RT_SCALE_COUNT] = { 100, 75, 50 };
+
+int RayTracer_GetScaleIndex(void) {
+	int i;
+	for (i = 0; i < RT_SCALE_COUNT; i++) { if (rt_scalePercent[i] == rt_opts.scale) return i; }
+	return 0;
+}
+
+void RayTracer_SetScaleIndex(int index) {
+	if (index < 0 || index >= RT_SCALE_COUNT) index = 0;
+	rt_opts.scale = rt_scalePercent[index];
+	Options_SetInt("rt-scale", rt_opts.scale);
+}
+
+int  RayTracer_GetGIRateIndex(void)      { return rt_opts.giRate == 2 ? 0 : 1; }
+void RayTracer_SetGIRateIndex(int index) {
+	rt_opts.giRate = (index == 0) ? 2 : 1;
+	Options_SetInt("rt-gi-rate", rt_opts.giRate);
 }
 
 void RayTracer_SetMode(int mode) {
@@ -1202,6 +1281,7 @@ static void OnInit(void) {
 	rt_opts.debug      = Options_GetInt("rt-debug", 0, 16, 0);
 	rt_opts.scale      = Options_GetInt("rt-scale", 25, 100, 100);
 	rt_opts.cloudShadow = Options_GetFloat("rt-cloud-shadow", 0.0f, 1.0f, 0.6f);
+	rt_opts.giRate     = Options_GetInt("rt-gi-rate", 1, 2, 2);
 
 	Event_Register_(&BlockEvents.BlockDefChanged, NULL, OnBlockDefChanged);
 	Event_Register_(&GfxEvents.ContextLost,       NULL, OnContextLost);
@@ -1210,8 +1290,7 @@ static void OnInit(void) {
 
 static void OnFree(void) {
 	RT_FreeResources();
-	Mem_Free(rt_em.indices);
-	rt_em.indices = NULL; rt_em.count = 0; rt_em.capacity = 0;
+	RT_FreeEmitters();
 }
 
 static void OnNewMap(void) {

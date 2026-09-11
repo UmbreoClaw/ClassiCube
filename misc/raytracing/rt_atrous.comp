@@ -33,6 +33,8 @@ void main() {
 
 			vec4 gq = texelFetch(gbufCur, q, 0);
 			if (gq.w < 0.0) continue;
+			vec4 cq = texelFetch(srcImg, q, 0);
+			if (cq.w <= 0.0) continue; /* hole (no sample yet) */
 			vec4 nq = texelFetch(normalCur, q, 0);
 			if (dot(nq.xyz, n.xyz) < 0.9) continue;
 
@@ -42,11 +44,12 @@ void main() {
 			if (i != 0 || j != 0) w *= historyScale;
 			if (abs(nq.w - n.w) > 0.5) w *= 0.25;
 
-			sum  += texelFetch(srcImg, q, 0).rgb * w;
+			sum  += cq.rgb * w;
 			wsum += w;
 		}
 	}
 
 	vec3 result = wsum > 0.0 ? sum / wsum : c.rgb;
-	imageStore(dstImg, px, vec4(result, c.w));
+	/* a hole that got filled from neighbours counts as having a sample from now on */
+	imageStore(dstImg, px, vec4(result, (c.w <= 0.0 && wsum > 0.0) ? 1.0 : c.w));
 }

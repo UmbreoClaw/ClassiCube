@@ -105,6 +105,10 @@ void main() {
 	vec4  tex   = sampleTile(tileFor(h.block, h.face), h.uv, lodFor(h.t));
 	vec3  albedo = tex.rgb * blocks[h.block].tint.rgb;
 	vec3  direct, indirect;
+	/* With rate 2 only half the pixels trace GI each frame (alternating checkerboard); */
+	/*  the temporal pass keeps the other half's history and the blur fills in the rest */
+	bool  giSample = worldSize.w <= 1 || (((px.x + px.y + screen.z) & 1) == 0);
+	float giValid  = 1.0;
 
 	if (fullBright(h.block)) {
 		/* Lava, glowing blocks: show the texture at full brightness */
@@ -113,7 +117,10 @@ void main() {
 	} else {
 		direct = directSun(pOff, n, L) + shadowColour(n) * minAmb;
 
-		if ((flags & FLAG_GI) != 0) {
+		if ((flags & FLAG_GI) != 0 && !giSample) {
+			indirect = vec3(0.0);
+			giValid  = 0.0;
+		} else if ((flags & FLAG_GI) != 0) {
 			vec3 d = cosineSample(n, seed);
 			Hit gh;
 			if (traceRay(pOff, d, misc.z, false, false, gh)) {
@@ -132,6 +139,6 @@ void main() {
 	imageStore(normalImg,   px, vec4(h.normal, float(h.block)));
 	imageStore(albedoImg,   px, vec4(albedo, waterT));
 	imageStore(directImg,   px, vec4(direct, 1.0));
-	imageStore(indirectImg, px, vec4(indirect, 1.0));
+	imageStore(indirectImg, px, vec4(indirect, giValid));
 	imageStore(waterImg,    px, water);
 }

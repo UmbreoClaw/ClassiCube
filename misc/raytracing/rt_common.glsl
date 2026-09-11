@@ -16,7 +16,7 @@ layout(std140, binding = 0) uniform Params {
 	vec4  skyCol;       /* rgb = colour seen by rays that escape the world */
 	vec4  fogCol;       /* rgb = fog colour, w = exp fog density (0 = linear fog) */
 	vec4  fogParams;    /* x = linear fog end, y = minimum ambient, z = emissive strength, w = unused */
-	ivec4 worldSize;    /* xyz = world dimensions */
+	ivec4 worldSize;    /* xyz = world dimensions, w = GI sample rate (1 = every pixel, 2 = checkerboard) */
 	ivec4 screen;       /* xy = render size, z = frame index, w = flags */
 	ivec4 atlas;        /* x = atlas1D shift, y = atlas1D mask, z = atlas count, w = tile size in pixels */
 	vec4  misc;         /* x = atlas1D V per tile, y = max primary distance, z = GI ray distance, w = pixel angular size */

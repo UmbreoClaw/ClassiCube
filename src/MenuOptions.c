@@ -771,6 +771,10 @@ static void    GrO_SetMipmaps(cc_bool v) {
 #ifdef CC_BUILD_RAYTRACING
 static int  GrO_GetRayTracing(void)  { return RayTracer_Mode; }
 static void GrO_SetRayTracing(int v) { RayTracer_SetMode(v); }
+static int  GrO_GetRTScale(void)     { return RayTracer_GetScaleIndex(); }
+static void GrO_SetRTScale(int v)    { RayTracer_SetScaleIndex(v); }
+static int  GrO_GetRTGIRate(void)    { return RayTracer_GetGIRateIndex(); }
+static void GrO_SetRTGIRate(int v)   { RayTracer_SetGIRateIndex(v); }
 #endif
 
 static void GraphicsOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
@@ -826,6 +830,14 @@ static void GraphicsOptionsScreen_InitWidgets(struct MenuOptionsScreen* s) {
 			"&eGI: &fShadows plus light bouncing off blocks.\n" \
 			"&eFull: &fGI plus soft shadows and water reflections.\n" \
 			"&cNote: &eRequires a GPU with OpenGL 4.3 and the OpenGL build of the game.");
+		MenuOptionsScreen_AddEnum(s, "RT resolution", RayTracerScale_Names, RT_SCALE_COUNT,
+			GrO_GetRTScale,    GrO_SetRTScale,
+			"&eResolution the ray traced world is rendered at, relative to the window.\n" \
+			"&eLower is much faster; the GUI and entities stay at full resolution.");
+		MenuOptionsScreen_AddEnum(s, "RT GI quality", RayTracerGIRate_Names, RT_GIRATE_COUNT,
+			GrO_GetRTGIRate,   GrO_SetRTGIRate,
+			"&eHalf: &fGlobal illumination is traced for half the pixels each frame (faster).\n" \
+			"&eFull: &fEvery pixel every frame (cleaner while moving).");
 #endif
 	};
 	MenuOptionsScreen_EndButtons(s, -1, Menu_SwitchOptions);

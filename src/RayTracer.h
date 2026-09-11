@@ -28,6 +28,17 @@ cc_bool RayTracer_Active(void);
 /* Changes the ray tracing mode, and saves it to the options */
 void RayTracer_SetMode(int mode);
 
+/* Resolution the world is traced at, relative to the window (see rt-scale) */
+#define RT_SCALE_COUNT 3
+extern const char* const RayTracerScale_Names[RT_SCALE_COUNT];
+int  RayTracer_GetScaleIndex(void);
+void RayTracer_SetScaleIndex(int index);
+/* Whether global illumination rays are traced for every pixel or half of them per frame */
+#define RT_GIRATE_COUNT 2
+extern const char* const RayTracerGIRate_Names[RT_GIRATE_COUNT];
+int  RayTracer_GetGIRateIndex(void);
+void RayTracer_SetGIRateIndex(int index);
+
 /* Renders the world (opaque blocks) using ray tracing */
 void RayTracer_Render(float delta);
 /* Blends the ray traced translucent blocks (water) over what has been drawn so far */

@@ -114,12 +114,20 @@ Advanced settings (edit `options.txt`, no menu entry):
 | `rt-emissive`    | 3.0     | How strongly full bright blocks (lava, lamps) light their surroundings |
 | `rt-cloud-shadow`| 0.6     | How much sunlight clouds block (0 = no cloud shadows, 1 = full)     |
 | `rt-gi-distance` | 48      | Maximum length of bounce rays in blocks                              |
-| `rt-scale`       | 100     | Render the traced world at this percentage of the window size (25 - 100) and upscale. 75 is a good compromise on 4K screens |
+| `rt-scale`       | 100     | Render the traced world at this percentage of the window size (25 - 100) and upscale. Also in the menu as *RT resolution* |
+| `rt-gi-rate`     | 2       | 2 = trace global illumination for half the pixels each frame (checkerboard), 1 = every pixel. Also in the menu as *RT GI quality* |
 | `rt-debug`       | 0       | 1 direct light, 2 indirect, 3 albedo, 4 normals, 5 reflections/behind, 6 depth |
 
-Cost is dominated by resolution and by how far rays travel. If the frame rate drops, lower
-`rt-scale` first (it keeps the GUI and everything else at full resolution), then the view
-distance. While ray tracing is active the chunk meshes are not built, which also frees CPU time.
+Cost is dominated by resolution and by how far rays travel. If the frame rate drops:
+
+1. *RT resolution* 75% or 50% in the graphics menu. The traced world is upscaled; GUI, text,
+   entities and particles stay at full resolution. 75% roughly doubles the frame rate, 50%
+   roughly quadruples it, and at 1440p 75% is hard to tell apart from 100%.
+2. *RT GI quality* Half (the default) traces bounce/emitter rays for half the pixels per frame.
+3. *Shadows* mode instead of GI/Full skips the bounce and emitter rays entirely.
+4. Lower the view distance; sky rays walk up to the view distance before giving up.
+
+While ray tracing is active the chunk meshes are not built, which also frees CPU time.
 
 ## Automated builds
 
