@@ -211,7 +211,7 @@ static struct {
 /* Light emitting (full bright) blocks, sampled explicitly for global illumination. */
 /* Kept in 16x16x16 buckets so that selecting the ones near the camera (and keeping the */
 /*  list in sync on block changes) doesn't scan every emitter in maps full of lava/lamps */
-#define RT_MAX_EMITTERS   128
+#define RT_MAX_EMITTERS   1024
 #define RT_EM_BUCKET_SHIFT 4
 #define RT_EM_RADIUS       16.0f  /* must match the cutoff in emitterLight() */
 struct RTEmitterBucket { cc_int32* items; int count, capacity; };
@@ -744,6 +744,7 @@ static void RT_UploadBlocks(void) {
 
 		flags = 0;
 		if (Blocks.BlocksLight[b]) flags |= 1;
+		if (Blocks.IsLiquid[b])    flags |= 2;
 		info->maxBB[3] = (float)flags;
 
 		for (f = 0; f < FACE_COUNT; f++) {
@@ -842,7 +843,13 @@ static cc_bool RT_TryInit(void) {
 	{
 		cc_string msg; char msgBuffer[128];
 		String_InitArray(msg, msgBuffer);
-		String_Format2(&msg, "Ray tracing initialised (OpenGL %i.%i)\n", &major, &minor);
+		String_Format2(&msg, "Ray tracing initialised (OpenGL %i.%i, build ", &major, &minor);
+#ifdef CC_COMMIT_SHA
+		String_AppendConst(&msg, CC_COMMIT_SHA);
+#else
+		String_AppendConst(&msg, "local");
+#endif
+		String_AppendConst(&msg, ")\n");
 		Logger_Log(&msg);
 	}
 	return true;

@@ -110,14 +110,23 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
   - brightness at a level is `1 - cos(level / 15 * pi/2)` (`InitPalette`), colour
     `Env.LampLightCol` for the lamp nibble and `Env.LavaLightCol` for the lava nibble
     (`ENV_DEFAULT_LAVALIGHT_COLOR` is a warm white, not orange), the two screen blended.
-  - several emitters combine by screen blend (`1 - prod(1 - c)`), so a lava lake is capped at
-    the light colour instead of summing to white. Block light is multiplied by the per-face
-    shade (1 / 0.6 / 0.8 / 0.5) like the palette is.
+  - several emitters combine by taking the strongest (the flood fill keeps the highest level),
+    so a lava lake gives a gradient from its edge instead of saturating everything in range
+    (screen blending was tried first: a 15x15 lake turned the whole cave uniform white).
+    Block light is multiplied by the per-face shade (1 / 0.6 / 0.8 / 0.5) like the palette is.
   - real occlusion: one emitter per pixel is chosen with probability proportional to its
-    contribution (weighted reservoir sampling); if a visibility ray to its cell is clear the
-    whole unoccluded total is returned, else 0 (unbiased estimate of contribution weighted
-    visibility, denoised like the rest of `indirect`). The ray stops at the emitter's cell so
-    sprites/translucent/thin models work.
+    contribution squared (weighted reservoir sampling, so the nearest dominate); if a
+    visibility ray to its cell is clear the whole unoccluded total is returned, else 0
+    (an estimate of weighted visibility, denoised like the rest of `indirect`). The ray stops
+    at the emitter's cell so sprites/translucent/thin models work, and passes through other
+    glowing blocks (`ignoreEmitters`) so a lake doesn't shadow its own far edge.
+  - emitters whose centre is up to 0.6 below the receiving surface still count: a lava lake
+    flush with the floor has its centres half a block below the floor top. The visibility
+    ray then aims at the projection of the centre onto the surface plane (skimming the floor
+    to the lava's top face) and the emitter cell is enlarged by 0.01 for the stop distance.
+    Without this the floor around a lake was pitch black while the ceiling was lit.
+  - the 1024 (`RT_MAX_EMITTERS`) emitters nearest to the camera are uploaded. With 128, a
+    15x15 lake did not fit and its far rows were missing, which darkened the far rim.
   - the network path (block placed by the server, then its definition changed to full bright
     by a BlockDefinitions packet, as `/b edit fullbright` on MCGalaxy does) was verified with
     `misc/raytracing/testing/fakeserver.py`: `BlockDefChanged` rebuilds the emitter list.
@@ -167,7 +176,15 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
 16. **`gfx-raytracing` stores the mode name** (`Off`/`Shadows`/`GI`/`Full`), not a number.
 17. **Yaw**: `Vec3_GetDirVector` gives x = sin(yaw), z = -cos(yaw): yaw 0 looks along -z,
     90 along +x, 180 along +z (the test scene comment had it wrong).
-18. **16-bit block ids can appear after load** (`World.Blocks2` split off when a server sends
+18. **Liquids**: the rasteriser shifts the whole liquid block down 1.5/16. The tracer instead
+    keeps liquids at full height when more liquid is above (so a stacked column is one
+    continuous body) and lowers only the top one. A liquid's side face next to a lower liquid
+    neighbour is still drawn above that neighbour's surface, otherwise rays slipped through the
+    gap at the base of a column and showed the pool floor without water.
+19. **One translucent layer per pixel** made a water column standing in a pool look opaque
+    (the pool surface behind it was skipped). `rt_trace.comp` accumulates up to 4 translucent
+    layers front to back into the water overlay; reflections only on the first.
+20. **16-bit block ids can appear after load** (`World.Blocks2` split off when a server sends
     a block > 255): `RayTracer_OnBlockChanged` re-uploads the world as R16UI when that happens.
 
 ## 6. Testing without a GPU (what worked)
@@ -204,6 +221,8 @@ Not done, in rough order of value:
 - Variance guided (SVGF style) denoiser; the current temporal + a-trous is fine when still,
   visibly noisy for emitter light while moving. Firefly clamp on `indirect` would help too.
 - Separate accumulation for emitter light (it has different noise statistics from sky GI).
+- Emitter selection is "nearest 1024 to the camera" scanned per pixel; a per bucket index on
+  the GPU would scale to lava oceans.
 - Entities are lit by the game's `Lighting.Color` at their position, so in *classic* lighting
   mode a player next to a lamp stays dark while the traced blocks are lit; feeding the
   traced light back to entity lighting would fix that.

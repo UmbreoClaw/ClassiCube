@@ -146,6 +146,8 @@ The workflow uploads these artifacts (download from the run's page on GitHub, th
 
 ## Limitations / future work
 
+* Where several glowing blocks are in range the strongest one wins (as the game's flood fill
+  does), so two lamps side by side are not brighter than one.
 * Block light follows the *fancy* lighting model (light level, lamp/lava colours from the
   environment) with real occlusion, but is estimated per pixel and denoised, so it flickers
   slightly while moving.

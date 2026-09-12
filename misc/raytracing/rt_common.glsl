@@ -72,6 +72,7 @@ layout(std430, binding = 4) readonly buffer EmitterTable { ivec4 emitters[]; };
 #define DRAW_SPRITE            5
 
 #define BLOCKFLAG_BLOCKS_LIGHT 1
+#define BLOCKFLAG_LIQUID       2
 
 #define FACE_XMIN 0
 #define FACE_XMAX 1
@@ -94,7 +95,10 @@ struct Hit {
 
 int  drawType(uint block)  { return int(blocks[block].minBB.w); }
 bool blocksLight(uint block) { return (int(blocks[block].maxBB.w) & BLOCKFLAG_BLOCKS_LIGHT) != 0; }
+bool isLiquid(uint block)    { return (int(blocks[block].maxBB.w) & BLOCKFLAG_LIQUID) != 0; }
 bool fullBright(uint block) { return blocks[block].tint.w > 0.5; }
+/* set while tracing emitter visibility rays: glowing blocks never block their own kind of light */
+bool ignoreEmitters = false;
 
 uint tileFor(uint block, uint face) {
 	/* NOTE: NVIDIA's compiler rejects a constant out of range index even in a branch that */
@@ -150,6 +154,7 @@ bool hitCell(ivec3 c, uint block, vec3 ro, vec3 rd, vec3 invRd, float tMin, floa
 
 	if (draw == DRAW_GAS) return false;
 	if (shadowRay && (int(bi.maxBB.w) & BLOCKFLAG_BLOCKS_LIGHT) == 0) return false;
+	if (ignoreEmitters && bi.tint.w > 0.5) return false;
 	if (draw == DRAW_TRANSLUCENT && skipTranslucent) return false;
 
 	if (draw == DRAW_SPRITE) {
@@ -188,6 +193,11 @@ bool hitCell(ivec3 c, uint block, vec3 ro, vec3 rd, vec3 invRd, float tMin, floa
 
 	vec3 bmin = base + bi.minBB.xyz;
 	vec3 bmax = base + bi.maxBB.xyz;
+	bool liquid = (int(bi.maxBB.w) & BLOCKFLAG_LIQUID) != 0;
+	/* Liquids are drawn a little lower than a full cell, but a liquid with more liquid above it
+	   fills its cell, so stacked water is one continuous column (like the rasteriser, which
+	   shifts the whole column down) */
+	if (liquid && isLiquid(blockAt(c + ivec3(0, 1, 0)))) bmax.y = base.y + 1.0;
 	vec3 t1 = (bmin - ro) * invRd;
 	vec3 t2 = (bmax - ro) * invRd;
 	vec3 tn = min(t1, t2);
@@ -214,9 +224,15 @@ bool hitCell(ivec3 c, uint block, vec3 ro, vec3 rd, vec3 invRd, float tMin, floa
 
 	/* Faces shared with an identical neighbouring block aren't drawn (e.g. between two water */
 	/*  blocks, which are slightly lower than a full cell so rays can slip between them) */
-	if (draw != DRAW_TRANSPARENT_THICK && blockAt(c + ivec3(normal)) == block) return false;
-
 	vec3 local = clamp(ro + rd * tEnter - base, 0.0, 1.0);
+	uint other = blockAt(c + ivec3(normal));
+	if (draw != DRAW_TRANSPARENT_THICK && (other == block || (liquid && isLiquid(other)))) {
+		/* except the part of a liquid's side that stands above a neighbouring liquid's lowered
+		   surface (the base of a water column standing in a pool) */
+		bool aboveNeighbour = liquid && normal.y == 0.0 && local.y > 1.0 - 1.5 / 16.0 + 1e-4
+			&& !isLiquid(blockAt(c + ivec3(normal) + ivec3(0, 1, 0)));
+		if (!aboveNeighbour) return false;
+	}
 	vec2 uv    = faceUV(face, local);
 
 	if (draw == DRAW_TRANSPARENT || draw == DRAW_TRANSPARENT_THICK) {
@@ -474,41 +490,53 @@ vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
 	int count = window.w;
 	if (count == 0) return vec3(0.0);
 
-	vec3  unlit = vec3(1.0);   /* screen blend of every emitter in range, ignoring occlusion */
+	vec3  total = vec3(0.0);   /* strongest light in range, ignoring occlusion (the game's flood
+	                              fill keeps the highest level, so a lava lake doesn't add up) */
 	float wsum = 0.0, chosenW = 0.0;
 	int chosen = -1;
 	for (int i = 0; i < count; i++) {
 		ivec4 em = emitters[i];
 		vec3  d  = vec3(em.xyz) + 0.5 - p;
 		float d2 = dot(d, d);
-		if (d2 > 16.0 * 16.0 || dot(d, n) <= 0.0) continue;
+		/* skip emitters whose whole cell is behind the receiving surface: a lava lake flush
+		   with the floor has its centres half a block below the floor top, but still lights it */
+		if (d2 > 16.0 * 16.0 || dot(d, n) <= -0.6) continue;
 
 		vec3  c = emitterColour(em.w, sqrt(d2));
 		float w = max(max(c.r, c.g), c.b);
 		if (w <= 0.0) continue;
-		unlit *= 1.0 - c;
-		wsum  += w;
+		total = max(total, c);
+		w *= w;   /* concentrate the visibility test on the nearest emitters */
+		wsum += w;
 		if (rand(seed) * wsum < w) { chosen = i; chosenW = w; }
 	}
 	if (chosen < 0) return vec3(0.0);
 
 	ivec4 em   = emitters[chosen];
 	vec3  d    = vec3(em.xyz) + 0.5 - p;
+	/* aim at the part of the cell on our side of the surface (a flush lava lake: skim the
+	   floor towards the lava's top face instead of shooting into the floor) */
+	float along = dot(d, n);
+	if (along < 0.0) d -= n * along;
 	float dist = length(d);
 	vec3  dir  = d / dist;
 
-	/* distance at which the ray enters the emitter's cell */
+	/* distance at which the ray enters the emitter's cell (slightly enlarged so a ray skimming
+	   along the surface still counts as reaching it) */
 	vec3 invDir = 1.0 / dir;
-	vec3 t1 = (vec3(em.xyz) - p) * invDir;
-	vec3 t2 = (vec3(em.xyz) + 1.0 - p) * invDir;
+	vec3 t1 = (vec3(em.xyz) - 0.01 - p) * invDir;
+	vec3 t2 = (vec3(em.xyz) + 1.01 - p) * invDir;
 	float tCell = max(max(min(t1.x, t2.x), min(t1.y, t2.y)), min(t1.z, t2.z));
 	if (tCell > 1e-3) {
 		Hit eh;
-		if (traceRay(p, dir, tCell - 1e-3, false, true, eh)) return vec3(0.0);
+		ignoreEmitters = true;
+		bool blocked = traceRay(p, dir, tCell - 1e-3, false, true, eh);
+		ignoreEmitters = false;
+		if (blocked) return vec3(0.0);
 	}
 
 	/* the chosen emitter was visible: its share of the total (w / wsum) times the estimator
 	   weight (wsum / w) is 1, so the whole unoccluded total is returned; averaged over frames
-	   this converges to the total scaled by the contribution weighted visibility */
-	return (1.0 - unlit) * faceShade(n) * fogParams.z;
+	   this converges to the total scaled by the weighted visibility */
+	return total * faceShade(n) * fogParams.z;
 }

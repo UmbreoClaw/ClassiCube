@@ -25,6 +25,10 @@ Block light check (dark cobble room with a fire block, compare against the game'
     MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Off  room_off  640 480 25
     MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Full room_full 640 480 40
 
+`make_cave.py` builds a cave at the bottom of the map with a lava lake flush with the floor
+(the case where the floor around the lake was dark); `make_scene.py` also has a free standing
+water column on the pool (spawn `11 4 180 20 16` looks at it).
+
 Server path check (`fakeserver.py` is a tiny classic + CPE server: dark room, places a fire
 block, then redefines it as full bright with a BlockDefinitions packet like `/b edit` does):
 

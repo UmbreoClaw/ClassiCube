@@ -24,6 +24,7 @@ fill(8, 9, 8, 15, 11, 15, WATER)
 fill(8, 8, 8, 15, 8, 15, SAND)
 fill(8, 9, 8, 15, 9, 15, SAND)
 fill(8, 10, 8, 15, 11, 15, WATER)
+fill(11, 12, 11, 11, 14, 11, WATER)  # free standing water column on the pool
 
 # Lava pool
 fill(30, 11, 8, 33, 11, 11, LAVA)
