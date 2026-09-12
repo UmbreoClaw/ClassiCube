@@ -25,5 +25,11 @@ Block light check (dark cobble room with a fire block, compare against the game'
     MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Off  room_off  640 480 25
     MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Full room_full 640 480 40
 
+Server path check (`fakeserver.py` is a tiny classic + CPE server: dark room, places a fire
+block, then redefines it as full bright with a BlockDefinitions packet like `/b edit` does):
+
+    python3 ~/rt-test/fakeserver.py &
+    cd ~/rt-test/run && DISPLAY=:99 ./ClassiCube tester x 127.0.0.1 25565
+
 The window is centred on the Xvfb screen, so crop at (screenW - W)/2, (screenH - H)/2.
 `sidebyside.py`, `crop.py` and `px.py` compare captures (no PIL required).

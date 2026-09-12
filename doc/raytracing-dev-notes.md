@@ -118,6 +118,10 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
     whole unoccluded total is returned, else 0 (unbiased estimate of contribution weighted
     visibility, denoised like the rest of `indirect`). The ray stops at the emitter's cell so
     sprites/translucent/thin models work.
+  - the network path (block placed by the server, then its definition changed to full bright
+    by a BlockDefinitions packet, as `/b edit fullbright` on MCGalaxy does) was verified with
+    `misc/raytracing/testing/fakeserver.py`: `BlockDefChanged` rebuilds the emitter list.
+    Note `LevelInit` resets the environment, so servers send EnvColors after the level.
   - `rt-block-light` (1.0) scales the result. Bounce rays return 0 on full bright hits to avoid
     double counting. Earlier versions used 1/d^2 falloff, which was invisible beyond two
     blocks and read as "full bright blocks don't light anything".
