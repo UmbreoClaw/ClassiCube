@@ -220,6 +220,7 @@ static struct {
 	int bucketsX, bucketsY, bucketsZ;
 	int count;              /* total emitters */
 	cc_bool dirty, rebuild; /* selection needs redoing / list needs rebuilding from the world */
+	cc_bool allocWarned, uploadLogged;
 	Vec3 lastCam;
 	int uploaded;
 	RTuint ssbo;
@@ -258,6 +259,16 @@ static void RT_LogToFile(const char* title, const char* detail) {
 	String_Format2(&msg, "%c\n%c\n", title, detail);
 	Logger_Log(&msg);
 	Platform_Log2("%c %c", title, detail);
+}
+
+/* Writes a formatted line (up to 4 integers) to client.log and the platform log */
+static void RT_LogFmt4(const char* fmt, int a, int b, int c, int d) {
+	cc_string msg; char msgBuffer[256];
+	String_InitArray(msg, msgBuffer);
+	String_Format4(&msg, fmt, &a, &b, &c, &d);
+	Platform_Log1("%s", &msg);
+	String_AppendConst(&msg, "\n");
+	Logger_Log(&msg);
 }
 
 static void RT_Disable(const char* reason) {
@@ -499,8 +510,15 @@ static void RT_AddEmitter(struct RTEmitterBucket* b, int index) {
 
 	if (b->count >= b->capacity) {
 		newCapacity = b->capacity ? b->capacity * 2 : 16;
-		grown = (cc_int32*)Mem_TryRealloc(b->items, newCapacity, sizeof(cc_int32));
-		if (!grown) return;
+		/* Mem_TryRealloc(NULL) fails on Windows (HeapReAlloc needs a valid block), which */
+		/*  silently left every bucket empty there, so no block ever emitted light */
+		grown = b->items ? (cc_int32*)Mem_TryRealloc(b->items, newCapacity, sizeof(cc_int32))
+		                 : (cc_int32*)Mem_TryAlloc(newCapacity, sizeof(cc_int32));
+		if (!grown) {
+			if (!rt_em.allocWarned) RT_LogToFile("Ray tracing:", "out of memory growing an emitter bucket");
+			rt_em.allocWarned = true;
+			return;
+		}
 		b->items    = grown;
 		b->capacity = newCapacity;
 	}
@@ -527,7 +545,11 @@ static void RT_BuildEmitters(void) {
 	rt_em.bucketsZ = (World.Length + (1 << RT_EM_BUCKET_SHIFT) - 1) >> RT_EM_BUCKET_SHIFT;
 	total = rt_em.bucketsX * rt_em.bucketsY * rt_em.bucketsZ;
 	rt_em.buckets = (struct RTEmitterBucket*)Mem_TryAllocCleared(total, sizeof(struct RTEmitterBucket));
-	if (!rt_em.buckets) { rt_em.bucketsX = 0; rt_em.bucketsY = 0; rt_em.bucketsZ = 0; return; }
+	if (!rt_em.buckets) {
+		rt_em.bucketsX = 0; rt_em.bucketsY = 0; rt_em.bucketsZ = 0;
+		RT_LogToFile("Ray tracing:", "out of memory allocating emitter buckets");
+		return;
+	}
 
 	for (y = 0; y < World.Height; y++) {
 		for (z = 0; z < World.Length; z++) {
@@ -537,6 +559,8 @@ static void RT_BuildEmitters(void) {
 		}
 	}
 	rt_em.dirty = true;
+	rt_em.uploadLogged = false;
+	RT_LogFmt4("Ray tracing: %i light emitting blocks in %i buckets", rt_em.count, total, 0, 0);
 }
 
 /* Uploads the emitters nearest to the camera (all of them if there are few enough) */
@@ -601,6 +625,10 @@ static void RT_UploadEmitters(void) {
 	}
 
 	rt_em.uploaded = n;
+	if (!rt_em.uploadLogged) {
+		RT_LogFmt4("Ray tracing: first emitter upload: %i of %i emitters near the camera", n, rt_em.count, 0, 0);
+		rt_em.uploadLogged = true;
+	}
 	if (n) {
 		_glBindBuffer(GL_SHADER_STORAGE_BUFFER, rt_em.ssbo);
 		_glBufferData(GL_SHADER_STORAGE_BUFFER, n * 4 * sizeof(cc_int32), selected, GL_STREAM_DRAW);
@@ -720,6 +748,7 @@ static void RT_UploadWorld(void) {
 		Chat_AddRaw("&cRay tracing: failed to upload world to GPU");
 		return;
 	}
+	RT_LogFmt4("Ray tracing: world %ix%ix%i uploaded as %i bit block ids", World.Width, World.Height, World.Length, rt.worldWide ? 16 : 8);
 	RT_BuildEmitters();
 	rt.worldValid = true;
 	rt.havePrev   = false;

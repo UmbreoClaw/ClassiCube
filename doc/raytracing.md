@@ -102,6 +102,8 @@ Preprocessor Definitions*, then build as usual.
 
 The setting is saved as `gfx-raytracing` in `options.txt`. If the driver or GPU can't run the
 shaders, the game falls back to normal rendering and prints why in chat and `client.log`.
+`client.log` also records the build id, the world upload and how many light emitting blocks
+were found, which is the first thing to check when lighting looks wrong.
 
 Advanced settings (edit `options.txt`, no menu entry):
 

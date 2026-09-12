@@ -184,7 +184,12 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
 19. **One translucent layer per pixel** made a water column standing in a pool look opaque
     (the pool surface behind it was skipped). `rt_trace.comp` accumulates up to 4 translucent
     layers front to back into the water overlay; reflections only on the first.
-20. **16-bit block ids can appear after load** (`World.Blocks2` split off when a server sends
+20. **`Mem_TryRealloc(NULL, ...)` fails on Windows** (`HeapReAlloc` needs a valid block; Linux
+    `realloc(NULL)` is a malloc). The emitter buckets grew from NULL with it, so on Windows every
+    bucket stayed empty and nothing emitted light while Mesa tests were fine. Use `Mem_TryAlloc`
+    for the first allocation. `client.log` now records the world upload, the emitter count and
+    the first emitter upload, so an empty list is visible without a debugger.
+21. **16-bit block ids can appear after load** (`World.Blocks2` split off when a server sends
     a block > 255): `RayTracer_OnBlockChanged` re-uploads the world as R16UI when that happens.
 
 ## 6. Testing without a GPU (what worked)
