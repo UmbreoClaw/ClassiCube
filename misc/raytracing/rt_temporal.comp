@@ -15,7 +15,30 @@ layout(binding = 13) uniform sampler2D accumIndPrev;
 layout(rgba16f, binding = 0) uniform writeonly image2D accumDirOut;  /* rgb = direct, w = history length */
 layout(rgba16f, binding = 1) uniform writeonly image2D accumIndOut;  /* rgb = indirect, w = history length */
 
-#define MAX_HISTORY 48.0
+#define MAX_HISTORY     48.0
+#define MAX_DIR_HISTORY 8.0
+
+/* Clamps a history colour to the range of the current frame's neighbourhood, so lighting that
+   changed (a shadow moving with a player, a light that went out) doesn't leave a trail */
+vec3 clampToNeighbourhood(sampler2D cur, ivec2 px, vec3 history, int radius, bool useValidity) {
+	vec3 mn = vec3(1e30), mx = vec3(-1e30), mean = vec3(0.0), m2 = vec3(0.0);
+	float n = 0.0;
+	for (int j = -radius; j <= radius; j++) {
+		for (int i = -radius; i <= radius; i++) {
+			ivec2 q = clamp(px + ivec2(i, j), ivec2(0), screen.xy - 1);
+			vec4 s = texelFetch(cur, q, 0);
+			if (useValidity && s.a <= 0.5) continue;
+			mn = min(mn, s.rgb); mx = max(mx, s.rgb);
+			mean += s.rgb; m2 += s.rgb * s.rgb; n += 1.0;
+		}
+	}
+	if (n < 1.0) return history;
+	if (!useValidity) return clamp(history, mn, mx);
+	/* noisy inputs: use mean +- 2 standard deviations instead of the hard min/max */
+	mean /= n;
+	vec3 sigma = sqrt(max(m2 / n - mean * mean, vec3(0.0)));
+	return clamp(history, mean - 2.0 * sigma, mean + 2.0 * sigma);
+}
 
 void main() {
 	ivec2 px = ivec2(gl_GlobalInvocationID.xy);
@@ -52,13 +75,13 @@ void main() {
 				vec4 ad = texelFetch(accumDirPrev, pp, 0);
 				vec4 ai = texelFetch(accumIndPrev, pp, 0);
 				history = ai.w;
-				prevDir = ad.rgb;
-				prevInd = ai.rgb;
+				prevDir = clampToNeighbourhood(directCur,   px, ad.rgb, 1, false);
+				prevInd = clampToNeighbourhood(indirectCur, px, ai.rgb, 2, true);
 			}
 		}
 	}
 
-	float dirHistory = min(history + 1.0, MAX_HISTORY);
+	float dirHistory = min(history + 1.0, MAX_DIR_HISTORY);
 	vec3  outDir = mix(prevDir, dir.rgb, 1.0 / dirHistory);
 	/* Hard shadows are noise free, so don't smear them over time */
 	if ((screen.w & FLAG_SOFT_SHADOWS) == 0) outDir = dir.rgb;

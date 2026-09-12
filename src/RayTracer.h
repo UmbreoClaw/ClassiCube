@@ -39,8 +39,8 @@ extern const char* const RayTracerGIRate_Names[RT_GIRATE_COUNT];
 int  RayTracer_GetGIRateIndex(void);
 void RayTracer_SetGIRateIndex(int index);
 
-/* Renders the world (opaque blocks) using ray tracing */
-void RayTracer_Render(float delta);
+/* Renders the world (opaque blocks) using ray tracing. t = frame interpolation factor */
+void RayTracer_Render(float delta, float t);
 /* Blends the ray traced translucent blocks (water) over what has been drawn so far */
 void RayTracer_RenderTranslucent(void);
 /* Notifies the ray tracer that a block in the world has changed */

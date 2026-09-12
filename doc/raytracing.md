@@ -111,7 +111,7 @@ Advanced settings (edit `options.txt`, no menu entry):
 | `rt-sun-z`       | 0.20    | Horizontal Z component of the direction towards the sun              |
 | `rt-sun-radius`  | 0.04    | Angular size of the sun for soft shadows (0 = hard shadows)          |
 | `rt-ambient`     | 0.25    | Minimum ambient light so caves are not pitch black (0 - 1)           |
-| `rt-emissive`    | 3.0     | How strongly full bright blocks (lava, lamps) light their surroundings |
+| `rt-block-light` | 1.0     | Multiplier for the light cast by full bright blocks (lava, lamps, server defined lights) |
 | `rt-cloud-shadow`| 0.6     | How much sunlight clouds block (0 = no cloud shadows, 1 = full)     |
 | `rt-gi-distance` | 48      | Maximum length of bounce rays in blocks                              |
 | `rt-scale`       | 100     | Render the traced world at this percentage of the window size (25 - 100) and upscale. Also in the menu as *RT resolution* |
@@ -146,11 +146,14 @@ The workflow uploads these artifacts (download from the run's page on GitHub, th
 
 ## Limitations / future work
 
-* Lighting from the *fancy* lighting mode (lamp/lava light levels) is not used; full bright
-  blocks emit light through the global illumination bounce instead.
+* Block light follows the *fancy* lighting model (light level, lamp/lava colours from the
+  environment) with real occlusion, but is estimated per pixel and denoised, so it flickers
+  slightly while moving.
 * Custom block models are traced as their bounding box; sprites as crossed quads.
-* Entities are rasterised (not ray traced themselves), so they receive the rasteriser's flat
-  lighting and don't appear in reflections. Particles and the held block cast no shadows.
+* Entities are rasterised (not ray traced themselves), so they receive the game's own
+  lighting (with *classic* lighting a player next to a lamp stays dark while the blocks around
+  are lit; use *fancy* lighting for consistent results) and don't appear in reflections.
+  Particles and the held block cast no shadows.
 * Only one bounce of indirect light is traced. Deep caves rely on `rt-ambient`.
 * The map border/edge water outside the map is still rasterised.
 * A variance guided denoiser (SVGF style) would make the indirect light cleaner while moving;

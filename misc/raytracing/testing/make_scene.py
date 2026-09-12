@@ -59,7 +59,7 @@ fill(40, 8, 30, 44, 11, 44, 0)
 fill(40, 12, 33, 44, 13, 44, STONE)
 fill(41, 8, 34, 43, 11, 43, 0)
 
-# Spawn: looking down +x/+z from the pool side. yaw 270 faces +x in ClassiCube
+# Spawn. Yaw 0 looks along -z, 90 along +x, 180 along +z (Vec3_GetDirVector)
 sx, sy, sz, syaw, spitch = int(sys.argv[2]) if len(sys.argv) > 2 else 6, int(sys.argv[6]) if len(sys.argv) > 6 else 15, int(sys.argv[3]) if len(sys.argv) > 3 else 20, int(sys.argv[4]) if len(sys.argv) > 4 else 300, int(sys.argv[5]) if len(sys.argv) > 5 else 15
 
 def tag_byte(name, v):   return b'\x01' + struct.pack('>H', len(name)) + name.encode() + struct.pack('>b', v)

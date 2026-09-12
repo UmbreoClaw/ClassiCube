@@ -520,7 +520,7 @@ static void Render3DFrame(float delta, float t) {
 	/*  and doesn't need chunk meshes, so skip building them meanwhile */
 	rayTraced = RayTracer_Active();
 	if (rayTraced) {
-		RayTracer_Render(delta);
+		RayTracer_Render(delta, t);
 	} else {
 		MapRenderer_Update(delta);
 		MapRenderer_RenderNormal(delta);

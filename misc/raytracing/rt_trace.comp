@@ -31,7 +31,7 @@ vec3 secondaryRadiance(Hit h, vec3 L, float minAmb, bool includeEmissive) {
 	vec3 n    = lightingNormal(h);
 	vec3 alb  = albedoOf(h, 2.0);
 	/* emitters are sampled explicitly by emitterLight(), so bounce rays don't count them again */
-	if (fullBright(h.block)) return includeEmissive ? alb * fogParams.z : vec3(0.0);
+	if (fullBright(h.block)) return includeEmissive ? alb : vec3(0.0);
 
 	vec3 p    = h.pos + h.normal * 2e-3;
 	vec3 light = directSun(p, n, L) + shadowColour(n) * minAmb;

@@ -19,5 +19,11 @@ Capture a view (mode Off/Shadows/GI/Full, output name, width, height, seconds to
     python3 ~/rt-test/make_scene.py ~/rt-test/run/maps/scene.cw 34 44 315 32 24
     EXTRA='singleplayerphysics=false\n' ~/rt-test/capture.sh Full overview 800 600 60
 
+Block light check (dark cobble room with a fire block, compare against the game's fancy lighting):
+
+    python3 ~/rt-test/make_room.py ~/rt-test/run/maps/room.cw
+    MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Off  room_off  640 480 25
+    MAP=room EXTRA='gfx-lightingmode=Fancy\nsingleplayerphysics=false\n' ~/rt-test/capture.sh Full room_full 640 480 40
+
 The window is centred on the Xvfb screen, so crop at (screenW - W)/2, (screenH - H)/2.
 `sidebyside.py`, `crop.py` and `px.py` compare captures (no PIL required).

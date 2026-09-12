@@ -22,6 +22,8 @@ layout(std140, binding = 0) uniform Params {
 	vec4  misc;         /* x = atlas1D V per tile, y = max primary distance, z = GI ray distance, w = pixel angular size */
 	ivec4 window;       /* xy = window size in pixels (render size may be smaller, see rt-scale), z = entity count, w = emitter count */
 	vec4  clouds;       /* x = clouds height, y = cloud texture scroll offset, z = shadow strength, w = enabled */
+	vec4  lampLightCol; /* Env.LampLightCol: colour of lamp light (upper brightness nibble) */
+	vec4  lavaLightCol; /* Env.LavaLightCol: colour of lava light (lower brightness nibble) */
 };
 
 #define FLAG_GI          1
@@ -59,7 +61,7 @@ struct EntityInfo {
 };
 layout(std430, binding = 2) readonly buffer EntityTable { EntityInfo entities[]; };
 layout(std430, binding = 3) readonly buffer EntityQuads { vec4 quadVerts[]; };
-/* Light emitting blocks near the camera: xyz = block position, w = block id | light level (0-15) << 16 */
+/* Light emitting blocks near the camera: xyz = block position, w = block id | lamp level << 16 | lava level << 20 */
 layout(std430, binding = 4) readonly buffer EmitterTable { ivec4 emitters[]; };
 
 #define DRAW_OPAQUE            0
@@ -433,42 +435,59 @@ vec3 coneSample(vec3 dir, float tanRadius, inout uint seed) {
 	return normalize(dir + u * (cos(phi) * r) + v * (sin(phi) * r));
 }
 
-/* Average colour of the face of an emitting block that faces the receiver */
-vec3 emitterColour(uint block, vec3 dirToEmitter) {
-	BlockInfo bi = blocks[block];
-	if (int(bi.minBB.w) == DRAW_GAS) return vec3(1.0); /* invisible light source */
-
-	vec3 a = abs(dirToEmitter);
-	uint face;
-	if (a.x >= a.y && a.x >= a.z) face = dirToEmitter.x > 0.0 ? FACE_XMIN : FACE_XMAX;
-	else if (a.y >= a.z)          face = dirToEmitter.y > 0.0 ? FACE_YMIN : FACE_YMAX;
-	else                          face = dirToEmitter.z > 0.0 ? FACE_ZMIN : FACE_ZMAX;
-
-	uint tile = tileFor(block, face);
-	vec4 sum = sampleTile(tile, vec2(0.25, 0.25), 4.0) + sampleTile(tile, vec2(0.75, 0.25), 4.0)
-	         + sampleTile(tile, vec2(0.25, 0.75), 4.0) + sampleTile(tile, vec2(0.75, 0.75), 4.0);
-	/* weight by alpha so transparent texels (torches, lamps) don't darken the light */
-	return sum.a > 0.01 ? (sum.rgb / sum.a) * bi.tint.rgb : vec3(1.0);
+/* Brightness of block light at a given level (0 - 15), following the curve the game's fancy
+   lighting palette uses (FancyLighting.c InitPalette) */
+float lightLevelCurve(float level) {
+	return 1.0 - cos(clamp(level, 0.0, 15.0) / 15.0 * 1.57079633);
 }
 
-/* Light received from emitting blocks (lava, lamps, server defined lights...) by explicitly
-   sampling one of them. Picks an emitter with probability proportional to 1/distance^2,
-   then checks nothing solid lies between the receiver and the emitter's cell. Emitters are
+/* Colour of an emitting block's light as seen from dist blocks away, following the game's
+   fancy lighting: the lamp nibble of a block's brightness emits Env.LampLightCol and the lava
+   nibble emits Env.LavaLightCol (classic full bright blocks have lava level 15). The light
+   level drops by one per block of distance, and the two colours are screen blended */
+vec3 emitterColour(int info, float dist) {
+	/* the game floods light block by block (Manhattan distance), which on average is about
+	   1.25x the straight line distance */
+	dist *= 1.25;
+	float lamp = lightLevelCurve(float((info >> 16) & 15) - dist);
+	float lava = lightLevelCurve(float((info >> 20) & 15) - dist);
+	vec3 a = lampLightCol.rgb * lamp, b = lavaLightCol.rgb * lava;
+	return a + b - a * b;
+}
+
+/* The classic per-face shading, which the game applies to block light as well as sunlight */
+float faceShade(vec3 n) {
+	if (n.y > 0.5)  return 1.0;
+	if (n.y < -0.5) return 0.5;
+	if (abs(n.x) > 0.5) return 0.6;
+	return 0.8;
+}
+
+/* Light received from emitting blocks (lava, lamps, server defined lights...). The strength
+   and reach match the game's fancy lighting (level 15 at the block, one level less per block
+   of distance, screen blended so a lava lake doesn't blow out to white) but with real
+   occlusion: one emitter is picked with probability proportional to its contribution and a
+   ray checks nothing solid lies between the receiver and that emitter's cell. Emitters are
    treated as small omnidirectional lights, so sprites, translucent and thin custom blocks
    all work. Noisy per frame, but the temporal accumulation and blur average it out. */
 vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
 	int count = window.w;
 	if (count == 0) return vec3(0.0);
 
+	vec3  unlit = vec3(1.0);   /* screen blend of every emitter in range, ignoring occlusion */
 	float wsum = 0.0, chosenW = 0.0;
 	int chosen = -1;
 	for (int i = 0; i < count; i++) {
-		vec3 d = vec3(emitters[i].xyz) + 0.5 - p;
+		ivec4 em = emitters[i];
+		vec3  d  = vec3(em.xyz) + 0.5 - p;
 		float d2 = dot(d, d);
-		if (d2 > 32.0 * 32.0 || dot(d, n) <= 0.0) continue;
+		if (d2 > 16.0 * 16.0 || dot(d, n) <= 0.0) continue;
 
-		float w = 1.0 / max(d2, 1.0);
-		wsum += w;
+		vec3  c = emitterColour(em.w, sqrt(d2));
+		float w = max(max(c.r, c.g), c.b);
+		if (w <= 0.0) continue;
+		unlit *= 1.0 - c;
+		wsum  += w;
 		if (rand(seed) * wsum < w) { chosen = i; chosenW = w; }
 	}
 	if (chosen < 0) return vec3(0.0);
@@ -488,8 +507,8 @@ vec3 emitterLight(vec3 p, vec3 n, inout uint seed) {
 		if (traceRay(p, dir, tCell - 1e-3, false, true, eh)) return vec3(0.0);
 	}
 
-	vec3  Le      = emitterColour(uint(em.w & 0xFFFF), dir) * fogParams.z * (float(em.w >> 16) / 15.0);
-	float cosR    = max(dot(n, dir), 0.0);
-	float falloff = 1.0 / max(dist * dist, 1.0);
-	return Le * cosR * falloff * (wsum / chosenW) / 3.14159265;
+	/* the chosen emitter was visible: its share of the total (w / wsum) times the estimator
+	   weight (wsum / w) is 1, so the whole unoccluded total is returned; averaged over frames
+	   this converges to the total scaled by the contribution weighted visibility */
+	return (1.0 - unlit) * faceShade(n) * fogParams.z;
 }

@@ -50,7 +50,9 @@ particles, selection).
      water overlay. Six images: GeForce has exactly 8 image units per shader.
 5. `rt_temporal.comp`: reprojects the hit position with `prevViewProj`, validates against the
    previous frame's gbuf/normal/block id, blends `indirect` (and `direct` only in soft shadow
-   mode) with history (max 48 frames). Inputs are samplers, only outputs are images.
+   mode) with history (max 48 frames, 8 for direct). History is clamped to the current frame's
+   3x3 (direct) / 5x5 mean +- 2 sigma (indirect) neighbourhood so moving shadows and lights
+   that change don't leave trails. Inputs are samplers, only outputs are images.
 6. `rt_atrous.comp` x3 (steps 1, 2, 4): edge aware blur of indirect, weights from normal
    equality, plane distance, block id, and less blur with longer history.
 7. `rt_composite.frag`: full screen triangle (`gl_VertexID`, own empty VAO), colour =
@@ -81,8 +83,11 @@ before it is first written).
   texLoc >> Atlas1D.Shift, row = texLoc & Atlas1D.Mask, v = (row + uv.y) * InvTileSize.
 - Entities: SSBO 2 = `RTEntity` (bbox + quad range), SSBO 3 = quads as 4 x vec4 world space.
   Up to 64 entities / 8192 quads per frame. Only entities in `Entities.List` are recorded.
-- Emitters: SSBO 4 = ivec4 (x, y, z, block | level << 16). Full list kept on the CPU
-  (`rt_em.indices`, grown with realloc), built by scanning the world, updated per block change.
+- Emitters: SSBO 4 = ivec4 (x, y, z, block | lamp level << 16 | lava level << 20), the two
+  nibbles of `Blocks.Brightness` (0b_LLLL_VVVV: lamp upper, lava lower; classic `fullBright=1`
+  is lava level 15, see `Block_ReadBrightness`). Kept on the CPU in 16^3 buckets
+  (`rt_em.buckets`), built by scanning the world, updated per block change, rebuilt on
+  `BlockDefChanged` (servers redefine brightness after the map loads).
 
 Texture unit map (compute): 1 world, 2-5 atlases, 6-13 pass inputs, 14 coarse, 15 clouds.
 Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO binding 0.
@@ -97,12 +102,25 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
   black; the sky bounce contributes `(1 - ambient) * shadow`.
 - Water blocks light (`BlocksLight` true in the block table) so pool floors are shadowed like
   the classic lighting does - this made the water brightness match the rasteriser.
-- Emitters: treated as omnidirectional point lights at the cell centre; colour = alpha
-  weighted average of the face texture that faces the receiver, scaled by `rt-emissive` and
-  the block's light level (larger nibble of `Blocks.Brightness`, 0..15). One emitter per pixel
-  is chosen with weight 1/d^2 (weighted reservoir sampling), visibility ray stops at the
-  emitter's cell so sprites/translucent/thin models work. Bounce rays return 0 on full
-  bright hits to avoid double counting.
+- Emitters follow the game's *fancy* lighting (`FancyLighting.c`), verified against it in a
+  dark room test (`misc/raytracing/testing`, `make_room.py`):
+  - the source cell has its block's level (0-15 per nibble); the level drops by one per block
+    of distance. The game floods block by block (Manhattan), the tracer uses straight line
+    distance x 1.25 (`emitterColour`).
+  - brightness at a level is `1 - cos(level / 15 * pi/2)` (`InitPalette`), colour
+    `Env.LampLightCol` for the lamp nibble and `Env.LavaLightCol` for the lava nibble
+    (`ENV_DEFAULT_LAVALIGHT_COLOR` is a warm white, not orange), the two screen blended.
+  - several emitters combine by screen blend (`1 - prod(1 - c)`), so a lava lake is capped at
+    the light colour instead of summing to white. Block light is multiplied by the per-face
+    shade (1 / 0.6 / 0.8 / 0.5) like the palette is.
+  - real occlusion: one emitter per pixel is chosen with probability proportional to its
+    contribution (weighted reservoir sampling); if a visibility ray to its cell is clear the
+    whole unoccluded total is returned, else 0 (unbiased estimate of contribution weighted
+    visibility, denoised like the rest of `indirect`). The ray stops at the emitter's cell so
+    sprites/translucent/thin models work.
+  - `rt-block-light` (1.0) scales the result. Bounce rays return 0 on full bright hits to avoid
+    double counting. Earlier versions used 1/d^2 falloff, which was invisible beyond two
+    blocks and read as "full bright blocks don't light anything".
 - Full bright primary hits: direct = 1, indirect = 0 (texture shown as is).
 
 ## 5. Pitfalls hit (don't repeat)
@@ -136,6 +154,17 @@ Image units: 0-5. SSBO bindings: 1 blocks, 2 entities, 3 quads, 4 emitters. UBO 
 12. **Windows GL2 backend does not link** (needs `-lopengl32`, upstream never ships it), so the
     Windows artifact is the GL1 build only.
 13. `make ... EXTRA_CFLAGS='-DCC_COMMIT_SHA="x"'` loses the quotes; CI calls gcc directly.
+14. **`Model_Render` leaves alpha testing on.** Capturing the first person player's geometry
+    by drawing it with colour writes off left `GL_ALPHA_TEST` enabled, which then discarded
+    the pause menu's translucent overlay wherever its alpha was below 0.5 (top of the screen
+    vanished). Reset every state you touch after a hidden draw (`Gfx_SetAlphaTest(false)`).
+15. **`packed` is a reserved word in GLSL** (layout qualifier); Mesa rejects it as a parameter
+    name.
+16. **`gfx-raytracing` stores the mode name** (`Off`/`Shadows`/`GI`/`Full`), not a number.
+17. **Yaw**: `Vec3_GetDirVector` gives x = sin(yaw), z = -cos(yaw): yaw 0 looks along -z,
+    90 along +x, 180 along +z (the test scene comment had it wrong).
+18. **16-bit block ids can appear after load** (`World.Blocks2` split off when a server sends
+    a block > 255): `RayTracer_OnBlockChanged` re-uploads the world as R16UI when that happens.
 
 ## 6. Testing without a GPU (what worked)
 
@@ -171,6 +200,9 @@ Not done, in rough order of value:
 - Variance guided (SVGF style) denoiser; the current temporal + a-trous is fine when still,
   visibly noisy for emitter light while moving. Firefly clamp on `indirect` would help too.
 - Separate accumulation for emitter light (it has different noise statistics from sky GI).
+- Entities are lit by the game's `Lighting.Color` at their position, so in *classic* lighting
+  mode a player next to a lamp stays dark while the traced blocks are lit; feeding the
+  traced light back to entity lighting would fix that.
 - Second bounce for caves, or an irradiance cache per coarse cell.
 - Entity reflections/tinting: entities are still rasterised, so they don't appear in water
   reflections and get the rasteriser's flat lighting.

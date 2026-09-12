@@ -19,6 +19,7 @@
 #include "Entity.h"
 #include "Model.h"
 #include "EnvRenderer.h"
+#include "EntityComponents.h"
 #include "_RayTracerShaders.h"
 
 /*########################################################################################################################*
@@ -174,6 +175,8 @@ struct RTParams {
 	float misc[4];
 	cc_int32 window[4];
 	float clouds[4];
+	float lampLightCol[4];
+	float lavaLightCol[4];
 };
 
 /* Must match BlockInfo in rt_common.glsl (std430 layout) */
@@ -210,7 +213,7 @@ static struct {
 /*  list in sync on block changes) doesn't scan every emitter in maps full of lava/lamps */
 #define RT_MAX_EMITTERS   128
 #define RT_EM_BUCKET_SHIFT 4
-#define RT_EM_RADIUS       32.0f  /* must match the cutoff in emitterLight() */
+#define RT_EM_RADIUS       16.0f  /* must match the cutoff in emitterLight() */
 struct RTEmitterBucket { cc_int32* items; int count, capacity; };
 static struct {
 	struct RTEmitterBucket* buckets;
@@ -584,11 +587,10 @@ static void RT_UploadEmitters(void) {
 		}
 		selDist[k] = dist;
 		selected[k * 4 + 0] = x; selected[k * 4 + 1] = y; selected[k * 4 + 2] = z;
-		/* w = block id, with the block's light level (0-15, larger of lamp/lava nibbles) in the upper bits */
+		/* w = block id | lamp level << 16 | lava level << 20 (Blocks.Brightness is 0b_LLLL_VVVV) */
 		{
 			BlockID b = World_GetRawBlock(index);
-			int level = max(Blocks.Brightness[b] >> 4, Blocks.Brightness[b] & 15);
-			selected[k * 4 + 3] = b | (level << 16);
+			selected[k * 4 + 3] = b | ((Blocks.Brightness[b] >> 4) << 16) | ((Blocks.Brightness[b] & 15) << 20);
 		}
 
 		if (n == RT_MAX_EMITTERS) {
@@ -935,6 +937,10 @@ static void RT_FillParams(struct RTParams* p, int flags) {
 	p->clouds[1] = (float)(Game.Time / 2048.0f * 0.6f * Env.CloudsSpeed);
 	p->clouds[2] = rt_opts.cloudShadow;
 	p->clouds[3] = (EnvRenderer_CloudsTexture() && Env.CloudsHeight >= -2000 && rt_opts.cloudShadow > 0.0f) ? 1.0f : 0.0f;
+
+	/* Colours the game's fancy lighting uses for lamp (upper nibble) and lava (lower nibble) light */
+	RT_ColToVec(p->lampLightCol, Env.LampLightCol);
+	RT_ColToVec(p->lavaLightCol, Env.LavaLightCol);
 }
 
 /*########################################################################################################################*
@@ -993,7 +999,7 @@ void RayTracer_AddEntityVertices(const struct VertexTextured* vertices, int coun
 }
 
 /* Uploads this frame's entity geometry, then resets the recording for the next frame */
-static void RT_UploadEntities(void) {
+static void RT_UploadEntities(float t) {
 	struct Entity* e;
 	int i, valid = 0;
 
@@ -1002,11 +1008,15 @@ static void RT_UploadEntities(void) {
 	if (!rt_ent.localCaptured && Entities.CurPlayer) {
 		e = &Entities.CurPlayer->Base;
 		if (e->Model) {
+			AnimatedComp_GetCurrent(e, t); /* so the shadow's arms and legs swing */
 			Gfx_SetColorWrite(false, false, false, false);
 			Gfx_SetDepthWrite(false);
 			Model_Render(e->Model, e);
 			Gfx_SetDepthWrite(true);
 			Gfx_SetColorWrite(true, true, true, true);
+			/* model drawing turns alpha testing on and leaves it to Entities_RenderModels */
+			/*  to turn off again - which isn't what called us here */
+			Gfx_SetAlphaTest(false);
 		}
 	}
 
@@ -1062,7 +1072,7 @@ cc_bool RayTracer_Active(void) {
 	return rt.worldValid;
 }
 
-void RayTracer_Render(float delta) {
+void RayTracer_Render(float delta, float t) {
 	struct RTParams params;
 	int cur, prev, flags, i, groupsX, groupsY;
 	int width  = max(1, Game.Width  * rt_opts.scale / 100);
@@ -1081,7 +1091,7 @@ void RayTracer_Render(float delta) {
 
 	cur  = rt.frame & 1;
 	prev = cur ^ 1;
-	RT_UploadEntities();
+	RT_UploadEntities(t);
 	RT_UploadEmitters();
 	_glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, rt_em.ssbo);
 	RT_FillParams(&params, flags);
@@ -1204,6 +1214,12 @@ void RayTracer_OnBlockChanged(int x, int y, int z, BlockID block) {
 	cc_uint8  narrow = (cc_uint8)block;
 	if (!rt.worldValid || !rt.initialised) return;
 
+#ifdef EXTENDED_BLOCKS
+	/* The world lazily switches to 16 bit block ids when a block >= 256 is first placed */
+	/*  (e.g. server defined blocks), so the 8 bit texture has to be replaced wholesale */
+	if (!rt.worldWide && World.Blocks != World.Blocks2) { RT_UploadWorld(); return; }
+#endif
+
 	_glActiveTexture(GL_TEXTURE0 + 1);
 	_glBindTexture(GL_TEXTURE_3D, rt.worldTex);
 	_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -1276,7 +1292,7 @@ static void OnInit(void) {
 	rt_opts.sunZ       = Options_GetFloat("rt-sun-z",      -4.0f, 4.0f, 0.20f);
 	rt_opts.sunRadius  = Options_GetFloat("rt-sun-radius",  0.0f, 0.5f, 0.04f);
 	rt_opts.ambient    = Options_GetFloat("rt-ambient",     0.0f, 1.0f, 0.25f);
-	rt_opts.emissive   = Options_GetFloat("rt-emissive",    0.0f, 16.0f, 3.0f);
+	rt_opts.emissive   = Options_GetFloat("rt-block-light", 0.0f,  4.0f, 1.0f);
 	rt_opts.giDistance = Options_GetFloat("rt-gi-distance", 4.0f, 256.0f, 48.0f);
 	rt_opts.debug      = Options_GetInt("rt-debug", 0, 16, 0);
 	rt_opts.scale      = Options_GetInt("rt-scale", 25, 100, 100);
