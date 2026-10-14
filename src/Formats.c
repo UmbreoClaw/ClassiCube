@@ -731,8 +731,8 @@ static void Cw_Callback_4(struct NbtTag* tag) {
 	}
 
 	if (IsTag(tag->parent, "EnvMapAspect")) {
-		if (IsTag(tag, "EdgeBlock"))    { Env.EdgeBlock    = NbtTag_U16(tag); return; }
-		if (IsTag(tag, "SideBlock"))    { Env.SidesBlock   = NbtTag_U16(tag); return; }
+		if (IsTag(tag, "EdgeBlock"))    { Env.EdgeBlock    = NbtTag_U16(tag) % BLOCK_COUNT; return; }
+		if (IsTag(tag, "SideBlock"))    { Env.SidesBlock   = NbtTag_U16(tag) % BLOCK_COUNT; return; }
 		if (IsTag(tag, "EdgeHeight"))   { Env.EdgeHeight   = NbtTag_I32(tag); return; }
 		if (IsTag(tag, "SidesOffset"))  { Env.SidesOffset  = NbtTag_I32(tag); return; }
 		if (IsTag(tag, "CloudsHeight")) { Env.CloudsHeight = NbtTag_I32(tag); return; }
@@ -798,7 +798,7 @@ static void Cw_Callback_5(struct NbtTag* tag) {
 
 	if (IsTag(tag->parent->parent, "BlockDefinitions") && Game_AllowCustomBlocks) {
 		if (IsTag(tag, "ID"))             { cw_curID = NbtTag_U8(tag);  return; }
-		if (IsTag(tag, "ID2"))            { cw_curID = NbtTag_U16(tag); return; }
+		if (IsTag(tag, "ID2"))            { cw_curID = NbtTag_U16(tag) % BLOCK_COUNT; return; }
 		if (IsTag(tag, "CollideType"))    { Blocks.Collide[id] = NbtTag_U8(tag); return; }
 		if (IsTag(tag, "Speed"))          { Blocks.SpeedMultiplier[id] = NbtTag_F32(tag); return; }
 		if (IsTag(tag, "TransmitsLight")) { Blocks.BlocksLight[id] = NbtTag_U8(tag) == 0; return; }

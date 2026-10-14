@@ -82,7 +82,9 @@ enum BLOCKID {
 	/* Max block ID used in original classic plus CPE blocks. */
 	BLOCK_MAX_CPE = BLOCK_STONE_BRICK,
 
-#if defined EXTENDED_BLOCKS
+#if defined EXTENDED_BLOCKS_12BIT
+	BLOCK_MAX_DEFINED = 0xFFF,
+#elif defined EXTENDED_BLOCKS
 	BLOCK_MAX_DEFINED = 0x2FF,
 #elif defined CC_BUILD_TINYMEM
 	BLOCK_MAX_DEFINED = BLOCK_MAX_CPE,

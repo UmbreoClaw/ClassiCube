@@ -723,6 +723,10 @@ typedef cc_uint8  cc_bool;
 #ifndef CC_BUILD_LOWMEM
 	#define EXTENDED_BLOCKS
 #endif
+/* 12 bit block IDs (4096 blocks) need a 16 MB face culling table, so consoles stay at 768 blocks */
+#if defined EXTENDED_BLOCKS && !defined CC_BUILD_CONSOLE && !defined CC_BUILD_NO12BITBLOCKS
+	#define EXTENDED_BLOCKS_12BIT
+#endif
 #ifndef CC_BUILD_TINYMEM
 	#define EXTENDED_TEXTURES
 #endif

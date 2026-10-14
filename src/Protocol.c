@@ -98,7 +98,12 @@ static struct CpeExt
 	notifyAction_Ext    = { "NotifyAction", 1 },
 	toggleBlockList_Ext = { "ToggleBlockList", 1 },
 	extTextures_Ext     = { "ExtendedTextures", 1 },
+#ifdef EXTENDED_BLOCKS_12BIT
+	/* Version 2 = 12 bit block IDs (BulkBlockUpdate sends upper 4 bits per block instead of 2) */
+	extBlocks_Ext       = { "ExtendedBlocks", 2 };
+#else
 	extBlocks_Ext       = { "ExtendedBlocks", 1 };
+#endif
 
 static struct CpeExt* cpe_clientExtensions[] = {
 	&clickDist_Ext, &customBlocks_Ext, &heldBlock_Ext, &emoteFix_Ext, &textHotKey_Ext, &extPlayerList_Ext,
@@ -1054,7 +1059,8 @@ static void CPE_ExtEntry(cc_uint8* data) {
 #endif
 #ifdef EXTENDED_BLOCKS
 	else if (ext == &extBlocks_Ext) {
-		if (!Game_AllowCustomBlocks) return;
+		/* ExtendedBlocks isn't sent to the server in this case, so blocks are still 1 byte */
+		if (!Game_AllowCustomBlocks) { ext->serverVersion = 0; return; }
 
 		Protocol.Sizes[OPCODE_SET_BLOCK] += 1;
 		Protocol.Sizes[OPCODE_HOLD_THIS] += 1;
@@ -1063,7 +1069,8 @@ static void CPE_ExtEntry(cc_uint8* data) {
 		Protocol.Sizes[OPCODE_UNDEFINE_BLOCK]   += 1;
 		Protocol.Sizes[OPCODE_DEFINE_BLOCK_EXT] += 1;
 		Protocol.Sizes[OPCODE_SET_INVENTORY_ORDER] += 2;
-		Protocol.Sizes[OPCODE_BULK_BLOCK_UPDATE]   += 256 / 4;
+		/* v1 packs upper 2 bits of each block, v2 packs upper 4 bits */
+		Protocol.Sizes[OPCODE_BULK_BLOCK_UPDATE]   += ext->serverVersion >= 2 ? 256 / 2 : 256 / 4;
 		Protocol.Sizes[OPCODE_SET_HOTBAR]       += 1;
 	}
 #endif
@@ -1299,6 +1306,16 @@ static void CPE_BulkBlockUpdate(cc_uint8* data) {
 	}
 	data += BULK_MAX_BLOCKS;
 
+#ifdef EXTENDED_BLOCKS_12BIT
+	if (extBlocks_Ext.serverVersion >= 2) {
+		for (i = 0; i < count; i += 2) {
+			cc_uint8 flags = data[i >> 1];
+			blocks[i + 0] |= (BlockID)((flags & 0x0F) << 8);
+			blocks[i + 1] |= (BlockID)((flags & 0xF0) << 4);
+		}
+		data += BULK_MAX_BLOCKS / 2;
+	} else
+#endif
 	if (IsSupported(extBlocks_Ext)) {
 		for (i = 0; i < count; i += 4) {
 			cc_uint8 flags = data[i >> 2];

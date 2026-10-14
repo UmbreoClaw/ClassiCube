@@ -103,7 +103,11 @@ CC_NOINLINE void World_SetDimensions(int width, int height, int length) {
 #ifdef EXTENDED_BLOCKS
 void World_SetMapUpper(BlockRaw* blocks) {
 	World.Blocks2 = blocks;
+#ifdef EXTENDED_BLOCKS_12BIT
+	World.IDMask  = 0xFFF;
+#else
 	World.IDMask  = 0x3FF;
+#endif
 }
 #endif
 
